@@ -1,8 +1,19 @@
 name: Deploy CMS to Cloud Run
 
+# Deployment is a separate, deliberate action from merging (Ways of Working
+# §6) — deliberately NOT triggered by push to main. Run manually via
+# workflow_dispatch once main is ready to ship. The verify-ci job below
+# requires ci.yml to have already passed for the commit being deployed
+# before gcloud run deploy runs.
+#
+# NOTE: the intended control here is a GitHub Environment with required
+# reviewers (a real approval gate). This repo's automation token only has
+# Contents + Pull Requests scope, not Administration, so Settings ->
+# Environments could not be configured from this session — see PR
+# description / delivery report. The verify-ci job is the best available
+# substitute given that constraint: it blocks the deploy job, but doesn't
+# require a human click the way an Environment gate would.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 env:
@@ -12,8 +23,39 @@ env:
   CLOUD_SQL_INSTANCE: writewise-468912:europe-west10:writewise-db
 
 jobs:
+  verify-ci:
+    name: Verify ci.yml passed for this commit
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Check for a successful ci.yml run on this SHA
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.sha;
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              head_sha: sha,
+              status: 'completed',
+            });
+            const ok = data.workflow_runs.find(r => r.conclusion === 'success');
+            if (!ok) {
+              core.setFailed(
+                `No successful ci.yml run found for commit ${sha}. ` +
+                `Deploys require ci.yml to pass for the exact commit being ` +
+                `deployed (Ways of Working §6 / Test Strategy §7) — push or ` +
+                `re-run ci.yml on this commit first.`
+              );
+            } else {
+              core.info(`ci.yml passed for ${sha}: ${ok.html_url}`);
+            }
+
   deploy:
     name: Deploy CMS to Production
+    needs: verify-ci
     runs-on: ubuntu-latest
 
     permissions:

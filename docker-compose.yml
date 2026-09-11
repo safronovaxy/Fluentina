@@ -1,0 +1,33 @@
+## Local development infrastructure only — never used in production.
+## Production runs on the existing shared Cloud SQL Postgres instance
+## (see Architecture Decisions ADR-1/ADR-10 on Confluence, MFS space).
+##
+## Usage:
+##   docker compose up -d db
+##   psql postgres://fluentina:fluentina_dev@localhost:5432/fluentina
+##
+## This gives every developer (including non-engineers checking out `main`
+## per the Ways of Working page) an isolated local database that can never
+## touch real guest data.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: fluentina-db-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fluentina
+      POSTGRES_USER: fluentina
+      POSTGRES_PASSWORD: fluentina_dev
+    ports:
+      - '5432:5432'
+    volumes:
+      - fluentina-db-dev-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U fluentina -d fluentina']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  fluentina-db-dev-data:
