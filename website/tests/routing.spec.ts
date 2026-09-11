@@ -6,7 +6,7 @@
  * before any JavaScript runs.
  */
 import { test, expect } from '@playwright/test';
-import { STATIC_MARKETING_ROUTES, APP_ROUTES } from './helpers/routes';
+import { STATIC_MARKETING_ROUTES } from './helpers/routes';
 
 // Only run in one project — this is pure HTTP, no browser rendering needed
 test.use({ browserName: 'chromium' });
@@ -18,15 +18,18 @@ for (const route of STATIC_MARKETING_ROUTES) {
   });
 }
 
-for (const route of APP_ROUTES) {
-  test(`T1 — GET ${route} returns 200`, async ({ request }) => {
-    const response = await request.get(route);
-    expect(response.status(), `${route} should return 200`).toBe(200);
-  });
-}
-
 test('T1 — GET /nonexistent-page returns 404', async ({ request }) => {
   const response = await request.get('/this-page-does-not-exist-xyz');
+  expect(response.status()).toBe(404);
+});
+
+// The /app mockup (Dashboard/Tasks/Progress, mock data) was deleted per
+// Architecture Decisions ADR-7 — a different, broader product concept with
+// no functional wiring, superseded by the real guest essay flow (KAN-8
+// onward, under website/src/app/(guest)/). It should now 404 like any
+// other removed route.
+test('T1 — GET /app returns 404 (deleted mockup, ADR-7)', async ({ request }) => {
+  const response = await request.get('/app');
   expect(response.status()).toBe(404);
 });
 
