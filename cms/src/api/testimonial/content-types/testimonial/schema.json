@@ -5,7 +5,7 @@
     "singularName": "testimonial",
     "pluralName": "testimonials",
     "displayName": "Testimonial",
-    "description": "User testimonials for the WriteWise website"
+    "description": "User testimonials for the Fluentina website"
   },
   "options": {
     "draftAndPublish": true

@@ -24,7 +24,7 @@ test('T12.2 — Sitemap contains all static marketing routes', async ({ request 
 
   for (const route of STATIC_MARKETING_ROUTES) {
     expect(body, `Sitemap should contain ${route}`).toContain(
-      `write-wise.com${route === '/' ? '' : route}`,
+      `fluentina.com${route === '/' ? '' : route}`,
     );
   }
 });
@@ -53,12 +53,12 @@ test('T12.6 — robots.txt references the sitemap', async ({ request }) => {
   const response = await request.get('/robots.txt');
   const body = await response.text();
   expect(body.toLowerCase()).toContain('sitemap');
-  expect(body).toContain('write-wise.com');
+  expect(body).toContain('fluentina.com');
 });
 
 test('T12.7 — /app routes are excluded from sitemap', async ({ request }) => {
   const response = await request.get('/sitemap.xml');
   const body = await response.text();
   // App routes should not be indexed
-  expect(body).not.toContain('write-wise.com/app');
+  expect(body).not.toContain('fluentina.com/app');
 });

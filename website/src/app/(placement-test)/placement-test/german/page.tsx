@@ -12,13 +12,13 @@ export const metadata: Metadata = {
   keywords:
     'German placement test, Deutsch Einstufungstest, CEFR level German, German language assessment, free German test',
   alternates: {
-    canonical: 'https://write-wise.com/placement-test/german',
+    canonical: 'https://fluentina.com/placement-test/german',
   },
   openGraph: {
-    title: 'German Language Placement Test — Free CEFR Assessment | WriteWise',
+    title: 'German Language Placement Test — Free CEFR Assessment | Fluentina',
     description:
       'Take our free AI-powered German placement test and discover your exact CEFR level (A1–C2) across grammar, vocabulary, reading and writing. Results in 20 minutes.',
-    url: 'https://write-wise.com/placement-test/german',
+    url: 'https://fluentina.com/placement-test/german',
     type: 'website',
   },
 };

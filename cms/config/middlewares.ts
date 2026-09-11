@@ -27,8 +27,8 @@ export default [
       origin: [
         'http://localhost:8081',
         'http://localhost:5173',
-        'https://write-wise.com',
-        'https://www.write-wise.com',
+        'https://fluentina.com',
+        'https://www.fluentina.com',
         'https://writewise-website-m2xkjyh6ta-oe.a.run.app',
         'https://writewise-website-918249600328.europe-west10.run.app',
         'https://*.vercel.app'

@@ -1,6 +1,6 @@
 const Mailjet = require('node-mailjet');
 
-const MAILJET_LIST_ID = 10537060; // WriteWise Newsletter list
+const MAILJET_LIST_ID = 10537060; // Fluentina Newsletter list
 
 export default {
   async addSubscriber(email: string) {

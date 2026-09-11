@@ -5,7 +5,7 @@
     "singularName": "resource",
     "pluralName": "resources",
     "displayName": "Resource",
-    "description": "Learning resources for the WriteWise website"
+    "description": "Learning resources for the Fluentina website"
   },
   "options": {
     "draftAndPublish": true

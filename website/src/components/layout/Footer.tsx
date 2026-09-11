@@ -4,7 +4,7 @@ import { BookOpen, Twitter, Linkedin, Youtube, Mail } from "lucide-react";
 const footerLinks = {
   product: [
     { name: "Features",  href: "/#features" },
-    { name: "Pricing",   href: "/pricing" },
+    // Pricing intentionally hidden from nav for Phase 1 (ADR-8) — see Header.tsx.
     { name: "Blog",      href: "/blog" },
     { name: "Resources", href: "/resources" },
   ],
@@ -28,7 +28,7 @@ const socialLinks = [
   { name: "Twitter", icon: Twitter, href: "https://twitter.com" },
   { name: "LinkedIn", icon: Linkedin, href: "https://www.linkedin.com/company/write-wise-language-improvement/" },
   { name: "YouTube", icon: Youtube, href: "https://www.youtube.com/@write-wise" },
-  { name: "Email", icon: Mail, href: "mailto:support@write-wise.com" },
+  { name: "Email", icon: Mail, href: "mailto:support@fluentina.com" },
 ];
 
 export const Footer = () => {
@@ -42,7 +42,7 @@ export const Footer = () => {
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-brand">
                 <BookOpen className="h-5 w-5 text-white" />
               </div>
-              <span className="text-xl font-bold text-gradient-brand">WriteWise</span>
+              <span className="text-xl font-bold text-gradient-brand">Fluentina</span>
             </Link>
             <p className="mt-4 max-w-xs text-sm text-muted-foreground">
               Your AI-powered language learning mentor. Master your active language and communication through writing with personalized feedback.
@@ -135,7 +135,7 @@ export const Footer = () => {
         {/* Bottom */}
         <div className="mt-12 border-t pt-8">
           <p className="text-center text-sm text-muted-foreground">
-            © {new Date().getFullYear()} WriteWise. All rights reserved.
+            © {new Date().getFullYear()} Fluentina. All rights reserved.
           </p>
         </div>
       </div>

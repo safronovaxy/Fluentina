@@ -6,7 +6,7 @@
 ## Architecture Overview
 
 ```
-write-wise.com (React SPA)
+fluentina.com (React SPA)
     │
     ├── GrowthBook React SDK  ──► assigns variant per user (stored in cookie)
     │       │                     fires tracking callback on assignment
@@ -31,7 +31,7 @@ write-wise.com (React SPA)
 These are one-time dashboard steps, no code involved.
 
 ### 1.1 Create GA4 Property
-- Go to analytics.google.com → Create property for write-wise.com
+- Go to analytics.google.com → Create property for fluentina.com
 - Property type: Web
 - Note your **Measurement ID** (format: `G-XXXXXXXXXX`)
 - In GA4 Admin → Data Streams → your stream → enable **Enhanced Measurement**
@@ -45,7 +45,7 @@ These are one-time dashboard steps, no code involved.
 
 ### 1.3 Create GrowthBook Cloud Account
 - Go to growthbook.io → Sign up (free, 3 seats)
-- Create organization: "WriteWise"
+- Create organization: "Fluentina"
 - In SDK Connections → Create new connection → Platform: React
 - Note your **Client Key** (format: `sdk-XXXXXXXXXX`) — this is public/safe
 
@@ -187,7 +187,7 @@ flag load resolves). Canonical URL unchanged — `SEO.tsx` already handles this 
 ## Phase 7 — Validate Data Pipeline
 
 After deploying, verify end-to-end:
-1. Open write-wise.com in browser with GrowthBook DevMode toolbar
+1. Open fluentina.com in browser with GrowthBook DevMode toolbar
 2. Confirm variant assignment visible in toolbar
 3. Check GA4 Realtime view → Events → see `experiment_viewed` event
 4. After 24h, check BigQuery dataset for `events_YYYYMMDD` table

@@ -5,7 +5,7 @@
     "singularName": "blog-post",
     "pluralName": "blog-posts",
     "displayName": "BlogPost",
-    "description": "Blog posts for the WriteWise website"
+    "description": "Blog posts for the Fluentina website"
   },
   "options": {
     "draftAndPublish": true

@@ -7,14 +7,14 @@ export const revalidate = 86400;
 
 export const metadata: Metadata = {
   title: 'Privacy Policy',
-  description: 'Read the WriteWise Privacy Policy to understand how we collect, use and protect your personal data.',
+  description: 'Read the Fluentina Privacy Policy to understand how we collect, use and protect your personal data.',
   alternates: {
-    canonical: 'https://write-wise.com/privacy',
+    canonical: 'https://fluentina.com/privacy',
   },
   openGraph: {
-    title: 'Privacy Policy | WriteWise',
-    description: 'Read the WriteWise Privacy Policy to understand how we collect, use and protect your personal data.',
-    url: 'https://write-wise.com/privacy',
+    title: 'Privacy Policy | Fluentina',
+    description: 'Read the Fluentina Privacy Policy to understand how we collect, use and protect your personal data.',
+    url: 'https://fluentina.com/privacy',
     type: 'website',
   },
   robots: { index: true, follow: true },
@@ -32,11 +32,11 @@ const STATIC_PRIVACY_PAGE: Page = {
 
 ## 1. Controller
 
-The controller responsible for the processing of your personal data on this website and in the WriteWise application is:
+The controller responsible for the processing of your personal data on this website and in the Fluentina application is:
 
-**WriteWise**
-write-wise.com
-contact@write-wise.com
+**Fluentina**
+fluentina.com
+contact@fluentina.com
 
 ## 2. Data We Collect
 
@@ -44,7 +44,7 @@ contact@write-wise.com
 When you register, we collect your name and email address. This data is required to create and manage your account.
 
 ### 2.2 Usage Data
-We collect data about how you interact with the WriteWise platform, including lesson progress, exercise results, and session activity. This data is used exclusively to provide and improve our service.
+We collect data about how you interact with the Fluentina platform, including lesson progress, exercise results, and session activity. This data is used exclusively to provide and improve our service.
 
 ### 2.3 Payment Data
 Payments are processed by Stripe, Inc. We do not store your full payment card details. Stripe's privacy policy applies to payment data: [stripe.com/privacy](https://stripe.com/privacy).
@@ -82,7 +82,7 @@ We do not sell your personal data to any third party.
 
 ## 6. Cookies
 
-WriteWise uses strictly necessary cookies required for authentication and security. We do not use tracking or advertising cookies.
+Fluentina uses strictly necessary cookies required for authentication and security. We do not use tracking or advertising cookies.
 
 ## 7. Your Rights
 
@@ -96,7 +96,7 @@ Under the GDPR, you have the right to:
 - **Objection** — object to processing based on legitimate interests
 - **Withdraw consent** — at any time, where processing is based on consent
 
-To exercise any of these rights, please contact us at **contact@write-wise.com**.
+To exercise any of these rights, please contact us at **contact@fluentina.com**.
 
 ## 8. Right to Lodge a Complaint
 
@@ -112,7 +112,7 @@ We may update this Privacy Policy from time to time. We will notify registered u
 
 ## 11. Contact
 
-For any privacy-related questions or requests, please contact us at **contact@write-wise.com**.
+For any privacy-related questions or requests, please contact us at **contact@fluentina.com**.
 `,
 };
 

@@ -6,21 +6,21 @@ import './globals.css';
 const GA4_ID = 'G-VSCF3D4V1F';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://write-wise.com'),
+  metadataBase: new URL('https://fluentina.com'),
   title: {
-    default: 'WriteWise — Learn German Effectively',
-    template: '%s | WriteWise',
+    default: 'Fluentina — Learn German Effectively',
+    template: '%s | Fluentina',
   },
   description:
-    'WriteWise is an AI-powered German language learning platform that helps you master writing, grammar and vocabulary at your own pace.',
+    'Fluentina is an AI-powered German language learning platform that helps you master writing, grammar and vocabulary at your own pace.',
   openGraph: {
-    siteName: 'WriteWise',
+    siteName: 'Fluentina',
     type: 'website',
     images: [{ url: '/og-image.png', width: 1200, height: 630 }],
   },
   twitter: {
     card: 'summary_large_image',
-    site: '@WriteWise',
+    site: '@Fluentina',
   },
   icons: {
     icon: [

@@ -1,11 +1,19 @@
-# WriteWise Website & CMS
+# Fluentina Website & CMS
 
-This repository contains the marketing website and content management system (CMS) for WriteWise.
+This repository contains the marketing website, the guest/Phase 1 essay-grading
+product, and the content management system (CMS) for Fluentina — an app helping
+German learners pass the written-essay portion of the Goethe B2 exam via
+AI-graded practice essays.
+
+Team process (branching, PR review, merge criteria, CI/CD) lives in
+[`CONTRIBUTING.md`](./CONTRIBUTING.md). Architecture, product, and test-strategy
+decisions live on Confluence (space **MFS**) — see the links at the bottom of
+this file.
 
 ## Repository Structure
 
 ```
-Writewise-Website/
+Fluentina/
 ├── cms/                    # Strapi CMS (Node.js)
 │   ├── config/            # Strapi configuration
 │   ├── src/               # API and content types
@@ -18,19 +26,26 @@ Writewise-Website/
 │   │       └── page/
 │   ├── Dockerfile         # Docker configuration for Cloud Run
 │   └── package.json       # Node.js dependencies
-├── website/               # Marketing website (React + Vite + TypeScript)
-│   ├── src/               # React application source
-│   │   ├── components/    # React components (shadcn/ui)
-│   │   ├── pages/         # Page components
-│   │   ├── hooks/         # Custom React hooks
-│   │   └── lib/           # Utilities
-│   ├── public/            # Static assets
-│   ├── index.html         # Entry HTML
-│   ├── vite.config.ts     # Vite configuration
-│   └── package.json       # Website dependencies
-└── .github/workflows/     # CI/CD pipelines
-    └── deploy-cms.yml     # CMS deployment workflow
+├── website/                # Marketing site + guest product (Next.js 15, App Router)
+│   ├── src/
+│   │   ├── app/            # Routes: (marketing)/*, (placement-test)/*, guest essay flow (in progress)
+│   │   ├── page-components/# Page-level React components rendered by app/ routes
+│   │   ├── components/     # Shared/UI components (shadcn/ui)
+│   │   ├── hooks/          # Custom React hooks
+│   │   └── lib/            # Utilities, Strapi client
+│   ├── tests/               # Playwright e2e specs
+│   ├── public/              # Static assets
+│   ├── next.config.ts       # Next.js configuration
+│   └── package.json         # Website dependencies
+├── docker-compose.yml      # Local-only Postgres for product dev (see CONTRIBUTING.md)
+└── .github/workflows/      # CI/CD pipelines (ci.yml, grading-regression.yml, deploy-*.yml)
 ```
+
+## Local Development
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md#local-development-setup) for the full
+setup (website, CMS, and the local Postgres used by the product backend —
+never the shared production Cloud SQL instance).
 
 ## CMS (Strapi)
 
@@ -141,7 +156,7 @@ The workflow:
 
 ## Database
 
-The CMS uses a dedicated PostgreSQL schema (`cms`) within the shared WriteWise Cloud SQL instance:
+The CMS uses a dedicated PostgreSQL schema (`cms`) within the shared Fluentina Cloud SQL instance:
 - **Instance**: `writewise-db`
 - **Database**: `writewise`
 - **Schema**: `cms`
@@ -165,11 +180,18 @@ The CMS is configured to scale to zero when not in use:
 
 ## Contributing
 
-1. Clone the repository
-2. Create a feature branch
-3. Make changes
-4. Test locally
-5. Submit pull request
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for branching, PR/review process,
+merge criteria, and local dev setup — a condensed version of the
+[Ways of Working & Delivery Model](https://safronov.atlassian.net/wiki/spaces/MFS/pages/25526274)
+Confluence page.
+
+## Reference documentation (Confluence, space MFS)
+
+- [Ways of Working & Delivery Model](https://safronov.atlassian.net/wiki/spaces/MFS/pages/25526274)
+- [Architecture Decisions](https://safronov.atlassian.net/wiki/spaces/MFS/pages/24838145)
+- [Architecture Diagrams](https://safronov.atlassian.net/wiki/spaces/MFS/pages/24805378)
+- [Test Strategy & Automation Approach](https://safronov.atlassian.net/wiki/spaces/MFS/pages/25427970)
+- [Phase 1 MVP — Revised Scope & Business Requirements](https://safronov.atlassian.net/wiki/spaces/MFS/pages/23494657)
 
 ## Support
 

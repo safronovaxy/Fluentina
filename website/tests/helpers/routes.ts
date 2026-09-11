@@ -1,5 +1,5 @@
 /**
- * Canonical list of all WriteWise routes.
+ * Canonical list of all Fluentina routes.
  * Used across multiple test files to avoid repetition.
  */
 

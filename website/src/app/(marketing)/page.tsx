@@ -11,19 +11,19 @@ import {
 export const revalidate = 3600;
 
 export const metadata: Metadata = {
-  title: 'WriteWise - AI-Powered Language Learning Platform',
+  title: 'Fluentina - AI-Powered Language Learning Platform',
   description:
-    'WriteWise helps you master German, English and other languages with AI-powered writing exercises, personalized feedback, and adaptive learning paths (A2–C1).',
+    'Fluentina helps you master German, English and other languages with AI-powered writing exercises, personalized feedback, and adaptive learning paths (A2–C1).',
   keywords:
     'German language learning, Deutsch lernen, English language learning, AI language tutor, CEFR placement test, writing practice, language learning app, multilingual AI tutor',
   alternates: {
-    canonical: 'https://write-wise.com',
+    canonical: 'https://fluentina.com',
   },
   openGraph: {
-    title: 'WriteWise - AI-Powered Language Learning Platform',
+    title: 'Fluentina - AI-Powered Language Learning Platform',
     description:
-      'WriteWise helps you master German, English and other languages with AI-powered writing exercises, personalized feedback, and adaptive learning paths (A2–C1).',
-    url: 'https://write-wise.com',
+      'Fluentina helps you master German, English and other languages with AI-powered writing exercises, personalized feedback, and adaptive learning paths (A2–C1).',
+    url: 'https://fluentina.com',
     type: 'website',
   },
 };

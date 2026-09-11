@@ -27,7 +27,7 @@ const CEFR_LABEL: Record<string, string> = {
   C2: 'Proficient',
 };
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://app.write-wise.com';
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://app.fluentina.com';
 
 // ─── Component ───────────────────────────────────────────────────
 
@@ -56,7 +56,7 @@ export function ResultsStep() {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-brand">
               <PenTool className="h-4 w-4 text-white" />
             </div>
-            <span className="text-lg font-bold text-foreground">WriteWise</span>
+            <span className="text-lg font-bold text-foreground">Fluentina</span>
           </a>
           <Badge className="bg-primary/10 text-primary border-0">Test Complete</Badge>
         </div>

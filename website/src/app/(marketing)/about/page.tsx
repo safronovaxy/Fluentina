@@ -4,17 +4,17 @@ import About from '@/page-components/About';
 export const revalidate = false;
 
 export const metadata: Metadata = {
-  title: 'About WriteWise',
+  title: 'About Fluentina',
   description:
-    'Learn about WriteWise\'s mission to make language learning personal. Discover how our AI-powered platform helps intermediate learners (A2–C1) develop real communication skills.',
+    'Learn about Fluentina\'s mission to make language learning personal. Discover how our AI-powered platform helps intermediate learners (A2–C1) develop real communication skills.',
   alternates: {
-    canonical: 'https://write-wise.com/about',
+    canonical: 'https://fluentina.com/about',
   },
   openGraph: {
-    title: 'About WriteWise - Our Mission & Story',
+    title: 'About Fluentina - Our Mission & Story',
     description:
-      'Learn about WriteWise\'s mission to make language learning personal. Discover how our AI-powered platform helps intermediate learners (A2–C1) develop real communication skills.',
-    url: 'https://write-wise.com/about',
+      'Learn about Fluentina\'s mission to make language learning personal. Discover how our AI-powered platform helps intermediate learners (A2–C1) develop real communication skills.',
+    url: 'https://fluentina.com/about',
     type: 'website',
   },
 };

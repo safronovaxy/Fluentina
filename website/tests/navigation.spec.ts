@@ -44,7 +44,7 @@ test.describe('T4 — Desktop navigation', () => {
     await expect(cta).toBeVisible();
     const href = await cta.getAttribute('href');
     expect(href).toBeTruthy();
-    expect(href).toContain('write-wise.com');
+    expect(href).toContain('fluentina.com');
   });
 
   test('T4.5 — Sign In button is visible and has href', async ({ page }) => {

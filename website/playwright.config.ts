@@ -1,20 +1,20 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Playwright configuration for WriteWise regression tests.
+ * Playwright configuration for Fluentina regression tests.
  *
  * BASE_URL can be overridden to point at either:
- *   - The live site:  BASE_URL=https://write-wise.com npx playwright test
+ *   - The live site:  BASE_URL=https://fluentina.com npx playwright test
  *   - A local build:  BASE_URL=http://localhost:3000  npx playwright test
  *
  * Default falls back to the live production URL so the baseline can be
  * captured immediately without running a local server.
  */
-const BASE_URL = process.env.BASE_URL ?? 'https://write-wise.com';
+const BASE_URL = process.env.BASE_URL ?? 'https://fluentina.com';
 
 // Cloud Armor rate-limits at 100 req/min. When testing against production
 // use 1 worker to avoid 429s. Local dev server (localhost) can use more.
-const isProduction = BASE_URL.includes('write-wise.com');
+const isProduction = BASE_URL.includes('fluentina.com');
 
 export default defineConfig({
   testDir: './tests',

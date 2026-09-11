@@ -45,8 +45,8 @@ jobs:
           cd website
           docker build \
             --build-arg NEXT_PUBLIC_STRAPI_URL=https://writewise-cms-m2xkjyh6ta-oe.a.run.app \
-            --build-arg NEXT_PUBLIC_APP_URL=https://write-wise.com \
-            --build-arg NEXT_PUBLIC_API_URL=https://app.write-wise.com \
+            --build-arg NEXT_PUBLIC_APP_URL=https://fluentina.com \
+            --build-arg NEXT_PUBLIC_API_URL=https://app.fluentina.com \
             --build-arg NEXT_PUBLIC_STRIPE_PUBLIC_KEY=${{ secrets.STRIPE_PUBLISHABLE_KEY }} \
             --build-arg NEXT_PUBLIC_GROWTHBOOK_CLIENT_KEY=${{ secrets.GROWTHBOOK_CLIENT_KEY }} \
             -t ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/writewise/${{ env.SERVICE_NAME }}:${{ github.sha }} \
@@ -98,6 +98,6 @@ jobs:
           echo "Website scales to 0 when not in use (min-instances: 0)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🔗 Next Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "1. Update DNS to point write-wise.com to Cloud Run URL" >> $GITHUB_STEP_SUMMARY
+          echo "1. Update DNS to point fluentina.com to Cloud Run URL" >> $GITHUB_STEP_SUMMARY
           echo "2. Configure custom domain in Cloud Run" >> $GITHUB_STEP_SUMMARY
           echo "3. Test all pages and functionality" >> $GITHUB_STEP_SUMMARY

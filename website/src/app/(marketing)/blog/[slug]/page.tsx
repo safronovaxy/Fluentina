@@ -25,7 +25,7 @@ export async function generateMetadata({
   try {
     const data = await strapiClient.getBlogPost(slug);
     const post = data.data[0];
-    if (!post) return { title: 'Post Not Found | WriteWise Blog' };
+    if (!post) return { title: 'Post Not Found | Fluentina Blog' };
 
     const imageUrl =
       post.featuredImage?.url ||
@@ -41,18 +41,18 @@ export async function generateMetadata({
       : undefined;
 
     return {
-      title: `${post.title} | WriteWise Blog`,
+      title: `${post.title} | Fluentina Blog`,
       description: post.seoDescription || post.excerpt,
-      alternates: { canonical: `https://write-wise.com/blog/${slug}` },
+      alternates: { canonical: `https://fluentina.com/blog/${slug}` },
       openGraph: {
-        title: `${post.title} | WriteWise Blog`,
+        title: `${post.title} | Fluentina Blog`,
         description: post.seoDescription || post.excerpt,
-        url: `https://write-wise.com/blog/${slug}`,
+        url: `https://fluentina.com/blog/${slug}`,
         type: 'article',
         publishedTime,
         authors: [post.author],
         section: post.category,
-        tags: [post.category, 'German learning', 'language learning', 'WriteWise'],
+        tags: [post.category, 'German learning', 'language learning', 'Fluentina'],
         images: [
           {
             url: imageUrl,
@@ -64,7 +64,7 @@ export async function generateMetadata({
       },
     };
   } catch {
-    return { title: 'Post Not Found | WriteWise Blog' };
+    return { title: 'Post Not Found | Fluentina Blog' };
   }
 }
 
@@ -96,7 +96,7 @@ export default async function BlogPostRoute({
   const articleSchema = generateArticleSchema({
     title: post.title,
     description: post.seoDescription || post.excerpt,
-    url: `https://write-wise.com/blog/${post.slug}`,
+    url: `https://fluentina.com/blog/${post.slug}`,
     datePublished: new Date(post.publishedDate).toISOString(),
     dateModified: post.updatedAt,
     author: post.author,

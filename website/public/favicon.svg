@@ -9,7 +9,7 @@
   <!-- Rounded square background -->
   <rect x="2" y="2" width="28" height="28" rx="6" fill="url(#brandGradient)"/>
 
-  <!-- Book/WriteWise icon -->
+  <!-- Book/Fluentina icon -->
   <path d="M10 8 L10 24 L16 20 L22 24 L22 8 L16 12 Z" fill="white" opacity="0.95"/>
   <line x1="12" y1="14" x2="14" y2="14" stroke="url(#brandGradient)" stroke-width="1.5" stroke-linecap="round"/>
   <line x1="18" y1="14" x2="20" y2="14" stroke="url(#brandGradient)" stroke-width="1.5" stroke-linecap="round"/>

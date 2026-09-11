@@ -2,7 +2,7 @@ import type { MetadataRoute } from 'next';
 import { strapiClient } from '@/lib/strapi';
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const base = 'https://write-wise.com';
+  const base = 'https://fluentina.com';
 
   const staticRoutes: MetadataRoute.Sitemap = [
     { url: base, lastModified: new Date(), changeFrequency: 'weekly', priority: 1 },

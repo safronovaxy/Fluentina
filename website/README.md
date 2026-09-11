@@ -1,6 +1,6 @@
-# WriteWise Website
+# Fluentina Website
 
-Marketing website for [WriteWise](https://write-wise.com) — an AI-powered German language learning platform.
+Marketing website for [Fluentina](https://fluentina.com) — an AI-powered German language learning platform.
 
 ## Tech Stack
 

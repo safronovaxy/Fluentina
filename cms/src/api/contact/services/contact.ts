@@ -4,7 +4,7 @@ export default {
   async sendContactEmail({ name, email, subject, message }) {
     const mailjetApiKey = process.env.MAILJET_API_KEY;
     const mailjetSecretKey = process.env.MAILJET_SECRET_KEY;
-    const supportEmail = process.env.SUPPORT_EMAIL || 'support@write-wise.com';
+    const supportEmail = process.env.SUPPORT_EMAIL || 'support@fluentina.com';
 
     if (!mailjetApiKey || !mailjetSecretKey) {
       console.error('Mailjet credentials not configured');
@@ -28,12 +28,12 @@ export default {
           {
             From: {
               Email: supportEmail,
-              Name: 'WriteWise Contact Form',
+              Name: 'Fluentina Contact Form',
             },
             To: [
               {
                 Email: supportEmail,
-                Name: 'WriteWise Support',
+                Name: 'Fluentina Support',
               },
             ],
             Subject: `[${subjectLabel}] Contact Form Submission from ${name}`,

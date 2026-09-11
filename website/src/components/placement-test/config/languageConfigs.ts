@@ -36,7 +36,7 @@ export const LANGUAGE_CONFIGS: Record<string, LanguageConfig> = {
     slug: 'german',
     flagCode: 'de',
     flagAlt: 'Germany flag',
-    seoTitle: 'Free German Placement Test — Find Your CEFR Level | WriteWise',
+    seoTitle: 'Free German Placement Test — Find Your CEFR Level | Fluentina',
     seoDescription:
       'Take our free AI-powered German placement test. Discover your exact CEFR level (A1–C2) across grammar, vocabulary, reading and writing in just 20 minutes. Get a detailed report by email.',
     seoKeywords:
@@ -86,7 +86,7 @@ export const LANGUAGE_CONFIGS: Record<string, LanguageConfig> = {
     slug: 'english',
     flagCode: 'gb',
     flagAlt: 'United Kingdom flag',
-    seoTitle: 'Free English Placement Test — Find Your CEFR Level | WriteWise',
+    seoTitle: 'Free English Placement Test — Find Your CEFR Level | Fluentina',
     seoDescription:
       'Take our free AI-powered English placement test. Discover your exact CEFR level (A1–C2) across grammar, vocabulary, reading and writing in just 20 minutes. Get a detailed report by email.',
     seoKeywords:

@@ -17,7 +17,10 @@ import { Menu, X, BookOpen, ChevronDown } from "lucide-react";
 // ── Simple nav links (no submenu) ────────────────────────────────────────────
 const simpleNavLinks = [
   { name: "Features",    href: "/#features" },
-  { name: "Pricing",     href: "/pricing" },
+  // Pricing intentionally hidden from nav for Phase 1 launch (ADR-8): the Stripe
+  // integration is display-only with no checkout, and showing a paid-tier page
+  // during the free-conversion validation window would be counterproductive.
+  // The /pricing route and its plumbing are left in place, just unlinked.
   { name: "For Tutors",  href: "/for-freelancers" },
   { name: "About",       href: "/about" },
   { name: "Blog",        href: "/blog" },
@@ -56,7 +59,7 @@ export const Header = () => {
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-brand">
             <BookOpen className="h-5 w-5 text-white" />
           </div>
-          <span className="text-xl font-bold text-gradient-brand">WriteWise</span>
+          <span className="text-xl font-bold text-gradient-brand">Fluentina</span>
         </Link>
 
         {/* Desktop Navigation */}
@@ -143,12 +146,12 @@ export const Header = () => {
         {/* Desktop CTA */}
         <div className="hidden md:flex md:items-center md:gap-3">
           <Button variant="ghost" asChild>
-            <a href="https://app.write-wise.com?mode=login" target="_blank" rel="noopener noreferrer">
+            <a href="https://app.fluentina.com?mode=login" target="_blank" rel="noopener noreferrer">
               Sign In
             </a>
           </Button>
           <Button className="bg-gradient-brand hover:opacity-90" asChild>
-            <a href="https://app.write-wise.com?mode=signup" target="_blank" rel="noopener noreferrer">
+            <a href="https://app.fluentina.com?mode=signup" target="_blank" rel="noopener noreferrer">
               Get Started Free
             </a>
           </Button>
@@ -245,12 +248,12 @@ export const Header = () => {
 
               <div className="mt-4 flex flex-col gap-3">
                 <Button variant="outline" asChild className="w-full">
-                  <a href="https://app.write-wise.com?mode=login" target="_blank" rel="noopener noreferrer">
+                  <a href="https://app.fluentina.com?mode=login" target="_blank" rel="noopener noreferrer">
                     Sign In
                   </a>
                 </Button>
                 <Button className="w-full bg-gradient-brand hover:opacity-90" asChild>
-                  <a href="https://app.write-wise.com?mode=signup" target="_blank" rel="noopener noreferrer">
+                  <a href="https://app.fluentina.com?mode=signup" target="_blank" rel="noopener noreferrer">
                     Get Started Free
                   </a>
                 </Button>
