@@ -13,7 +13,7 @@ import { users } from './schema';
 
 /** Wipes every KAN-10 table between tests. Cascades handle ordering. */
 export async function resetDatabase(): Promise<void> {
-  await db.execute(sql`TRUNCATE TABLE app.essays, app.guest_sessions, app.users RESTART IDENTITY CASCADE`);
+  await db.execute(sql`TRUNCATE TABLE fluentina.essays, fluentina.guest_sessions, fluentina.users RESTART IDENTITY CASCADE`);
 }
 
 /**

@@ -1,12 +1,12 @@
 {
-  "id": "09436452-f8b7-4ba5-b3a8-28fc541bb1bd",
+  "id": "400dc7e7-414e-47cf-8120-cc875fba1c18",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "app.essays": {
+    "fluentina.essays": {
       "name": "essays",
-      "schema": "app",
+      "schema": "fluentina",
       "columns": {
         "id": {
           "name": "id",
@@ -47,7 +47,7 @@
           "name": "essays_session_id_guest_sessions_id_fk",
           "tableFrom": "essays",
           "tableTo": "guest_sessions",
-          "schemaTo": "app",
+          "schemaTo": "fluentina",
           "columnsFrom": [
             "session_id"
           ],
@@ -61,7 +61,7 @@
           "name": "essays_user_id_users_id_fk",
           "tableFrom": "essays",
           "tableTo": "users",
-          "schemaTo": "app",
+          "schemaTo": "fluentina",
           "columnsFrom": [
             "user_id"
           ],
@@ -78,9 +78,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "app.guest_sessions": {
+    "fluentina.guest_sessions": {
       "name": "guest_sessions",
-      "schema": "app",
+      "schema": "fluentina",
       "columns": {
         "id": {
           "name": "id",
@@ -114,7 +114,7 @@
           "name": "guest_sessions_user_id_users_id_fk",
           "tableFrom": "guest_sessions",
           "tableTo": "users",
-          "schemaTo": "app",
+          "schemaTo": "fluentina",
           "columnsFrom": [
             "user_id"
           ],
@@ -131,9 +131,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "app.users": {
+    "fluentina.users": {
       "name": "users",
-      "schema": "app",
+      "schema": "fluentina",
       "columns": {
         "id": {
           "name": "id",
@@ -161,7 +161,7 @@
   },
   "enums": {},
   "schemas": {
-    "app": "app"
+    "fluentina": "fluentina"
   },
   "sequences": {},
   "roles": {},

@@ -15,8 +15,8 @@
  * KAN-10 schema: guest sessions and the essays associated with them.
  *
  * Declared through `pgSchema`, not the bare `pgTable` export, so every table
- * here is schema-qualified in Postgres (`app.guest_sessions`, `app.essays`,
- * `app.users`) rather than landing in `public` by omission — the local
+ * here is schema-qualified in Postgres (`fluentina.guest_sessions`, `fluentina.essays`,
+ * `fluentina.users`) rather than landing in `public` by omission — the local
  * database and the shared production Cloud SQL instance are already kept
  * apart at the connection-string level (see docker-compose.yml / ADR-1,
  * ADR-10); this keeps them apart at the schema level too, so a stray
@@ -38,18 +38,18 @@
 import { sql } from 'drizzle-orm';
 import { pgSchema, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
-export const appSchema = pgSchema('app');
+export const fluentinaSchema = pgSchema('fluentina');
 
 // Deliberately minimal: this story only needs a stable FK target for
 // cascading account erasure (essays.user_id, guest_sessions.user_id). Auth,
 // email, and everything else about a registered account belongs to whatever
 // story builds registration — not re-scoped in here.
-export const users = appSchema.table('users', {
+export const users = fluentinaSchema.table('users', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const guestSessions = appSchema.table('guest_sessions', {
+export const guestSessions = fluentinaSchema.table('guest_sessions', {
   // The bearer session id itself (see lib/domain/session-id.ts) — it is its
   // own primary key, not a separate surrogate id.
   id: text('id').primaryKey(),
@@ -62,7 +62,7 @@ export const guestSessions = appSchema.table('guest_sessions', {
   convertedAt: timestamp('converted_at', { withTimezone: true }),
 });
 
-export const essays = appSchema.table('essays', {
+export const essays = fluentinaSchema.table('essays', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   // Kept for the row's whole lifetime, even after conversion — it records
   // provenance and lets the ownership predicate work without a join.
