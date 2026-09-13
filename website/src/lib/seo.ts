@@ -13,11 +13,11 @@ export const generateOrganizationSchema = (name: string, url: string, logoUrl?: 
       url: logoUrl,
     },
   }),
-  sameAs: [
-    'https://twitter.com/Fluentina',
-    'https://www.linkedin.com/company/write-wise-language-improvement/',
-    'https://www.youtube.com/@write-wise',
-  ],
+  // Only accounts we actually control. sameAs tells search engines "this
+  // profile IS this organisation", so listing a handle we do not own
+  // attributes a stranger's profile to us, and listing a renamed one points
+  // at a dead page. Twitter and YouTube go back when those accounts exist.
+  sameAs: ['https://www.linkedin.com/company/write-wise-language-improvement/'],
   contactPoint: {
     '@type': 'ContactPoint',
     contactType: 'customer support',

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BookOpen, Twitter, Linkedin, Youtube, Mail } from "lucide-react";
+import { BookOpen, Linkedin, Mail } from "lucide-react";
 
 const footerLinks = {
   product: [
@@ -24,10 +24,11 @@ const footerLinks = {
   ],
 };
 
+// Only accounts that exist and that we control. The Twitter icon linked to
+// twitter.com itself rather than any profile, and the YouTube handle is not
+// an account we own. Both go back when there is something real to link to.
 const socialLinks = [
-  { name: "Twitter", icon: Twitter, href: "https://twitter.com" },
   { name: "LinkedIn", icon: Linkedin, href: "https://www.linkedin.com/company/write-wise-language-improvement/" },
-  { name: "YouTube", icon: Youtube, href: "https://www.youtube.com/@write-wise" },
   { name: "Email", icon: Mail, href: "mailto:support@fluentina.com" },
 ];
 

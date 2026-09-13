@@ -13,6 +13,10 @@ export const metadata: Metadata = {
   alternates: {
     canonical: 'https://fluentina.com/pricing',
   },
+  // Out of search for the proof-of-concept phase, matching its removal from
+  // nav (ADR-8) and from sitemap.ts. `follow` stays on so link equity still
+  // flows through the page. The route keeps working for anyone given the URL.
+  robots: { index: false, follow: true },
   openGraph: {
     title: 'Pricing — Start Free | Fluentina',
     description:

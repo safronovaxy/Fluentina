@@ -5,6 +5,9 @@
 
 export const STATIC_MARKETING_ROUTES = [
   '/',
+  // Still here on purpose: /pricing must keep serving (ADR-8 unlinks it, it
+  // does not remove it). It is deliberately NOT in the sitemap and is
+  // noindex for the POC phase — see SEARCH_EXCLUDED_ROUTES below.
   '/pricing',
   '/about',
   '/blog',
@@ -16,6 +19,14 @@ export const STATIC_MARKETING_ROUTES = [
   '/privacy',
   '/terms',
 ] as const;
+
+/**
+ * Routes that must serve, but must stay out of search for the
+ * proof-of-concept phase: unlinked from nav, absent from sitemap.xml, and
+ * carrying a noindex tag. Showing a paid-tier page during the free-conversion
+ * validation window would work against what that window is measuring.
+ */
+export const SEARCH_EXCLUDED_ROUTES = ['/pricing'] as const;
 
 // The /app mockup (APP_ROUTES) was deleted per Architecture Decisions ADR-7
 // — see routing.spec.ts for the 404 regression test. The real guest essay
