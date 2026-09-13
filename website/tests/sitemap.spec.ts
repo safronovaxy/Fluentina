@@ -5,7 +5,7 @@
  * all expected static routes plus dynamic blog/resource slugs.
  */
 import { test, expect } from '@playwright/test';
-import { STATIC_MARKETING_ROUTES } from './helpers/routes';
+import { STATIC_MARKETING_ROUTES, SEARCH_EXCLUDED_ROUTES } from './helpers/routes';
 
 test.use({ browserName: 'chromium' });
 
@@ -22,9 +22,39 @@ test('T12.2 — Sitemap contains all static marketing routes', async ({ request 
   const response = await request.get('/sitemap.xml');
   const body = await response.text();
 
-  for (const route of STATIC_MARKETING_ROUTES) {
+  const indexed = STATIC_MARKETING_ROUTES.filter(
+    (r) => !SEARCH_EXCLUDED_ROUTES.includes(r as (typeof SEARCH_EXCLUDED_ROUTES)[number]),
+  );
+  for (const route of indexed) {
     expect(body, `Sitemap should contain ${route}`).toContain(
       `fluentina.com${route === '/' ? '' : route}`,
+    );
+  }
+});
+
+test('T12.8 — search-excluded routes are absent from the sitemap but still serve', async ({
+  request,
+}) => {
+  const response = await request.get('/sitemap.xml');
+  const body = await response.text();
+
+  for (const route of SEARCH_EXCLUDED_ROUTES) {
+    expect(body, `Sitemap should NOT contain ${route}`).not.toContain(
+      `fluentina.com${route}`,
+    );
+    // The route itself must keep working — ADR-8 unlinks it, it does not
+    // remove it, and the Stripe plumbing behind it stays in place.
+    expect((await request.get(route)).status(), `${route} should still serve`).toBe(200);
+  }
+});
+
+test('T12.9 — search-excluded routes carry a noindex tag', async ({ request }) => {
+  // Absence from the sitemap is not enough on its own: a crawler that finds
+  // the URL another way would still index it without this.
+  for (const route of SEARCH_EXCLUDED_ROUTES) {
+    const html = await (await request.get(route)).text();
+    expect(html, `${route} should be noindex`).toMatch(
+      /<meta name="robots" content="[^"]*noindex/,
     );
   }
 });

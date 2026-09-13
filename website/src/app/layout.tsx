@@ -19,8 +19,10 @@ export const metadata: Metadata = {
     images: [{ url: '/og-image.png', width: 1200, height: 630 }],
   },
   twitter: {
+    // No `site` handle: @Fluentina is not an account we control, and naming it
+    // here puts someone else's profile on every shared link. The card itself
+    // still renders from the OpenGraph tags.
     card: 'summary_large_image',
-    site: '@Fluentina',
   },
   icons: {
     icon: [
