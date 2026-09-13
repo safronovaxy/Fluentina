@@ -101,7 +101,10 @@ describe('GuestFlowShell', () => {
     // capped at the unprefixed default: exactly the indented-header
     // misalignment this whole mechanism exists to prevent.
     render(
-      <GuestFlowShell currentStepId="none" contentClassName="max-w-5xl sm:max-w-7xl">
+      <GuestFlowShell
+        currentStepId="none"
+        contentClassName="max-w-5xl sm:max-w-7xl md:!max-w-4xl"
+      >
         <p>content</p>
       </GuestFlowShell>,
     );
@@ -111,6 +114,11 @@ describe('GuestFlowShell', () => {
     expect(main.className).toContain('sm:max-w-7xl');
     expect(header?.className).toContain('max-w-5xl');
     expect(header?.className).toContain('sm:max-w-7xl');
+    // Tailwind v3 writes the important marker AFTER the variant, so this
+    // shape slipped through when `!` was stripped before the variant split:
+    // the content column widened and the header did not.
+    expect(main.className).toContain('md:!max-w-4xl');
+    expect(header?.className).toContain('md:!max-w-4xl');
   });
 
   it('leaves the header padding alone when contentClassName overrides padding', () => {

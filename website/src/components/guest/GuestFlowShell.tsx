@@ -14,19 +14,26 @@ const DEFAULT_CONTENT_WIDTH_CLASS = 'max-w-3xl';
  * gutter shouldn't also strip the header's own padding.
  *
  * A token counts as a width override once variants and the `!important`
- * marker are stripped — `sm:max-w-5xl` and `!max-w-5xl` are both `max-w-*`
- * once you discard the `sm:` prefix and the `!`. A raw `token.startsWith`
- * test missed both: `token.replace(/^!/, '').split(':').pop()` reduces
- * either to the bare utility before the prefix check. The FULL original
+ * marker are stripped — `sm:max-w-5xl`, `!max-w-5xl` and `sm:!max-w-5xl` are
+ * all `max-w-*` once you discard the `sm:` prefix and the `!`. Order matters:
+ * Tailwind v3 writes `!` AFTER the variant, so the variant must be split off
+ * first. The FULL original
  * token (variant/`!` included) is still what gets passed to `cn` below —
  * tailwind-merge resolves variant-scoped classes independently of their
  * unscoped counterpart, the same way the browser applies them, so stripping
  * here would silently change which breakpoint the header responds at.
+ *
+ * Only `max-w-*` utilities are tracked. An arbitrary property such as
+ * `[max-width:60rem]`, or a container-based width, reaches the content column
+ * and not the header — use a `max-w-*` utility if you need them to agree.
  */
 function resolveContentWidthClassName(contentClassName?: string): string {
   const widthOverrides = contentClassName
     ?.split(/\s+/)
-    .filter((token) => token.replace(/^!/, '').split(':').pop()?.startsWith('max-w-'))
+    // Variant first, then `!`: Tailwind v3 writes the important marker after
+    // the variant (sm:!max-w-5xl), so stripping `!` first leaves `!max-w-5xl`
+    // after the split and the token is dropped. This order handles both.
+    .filter((token) => token.split(':').pop()?.replace(/^!/, '').startsWith('max-w-'))
     .join(' ');
   return cn(DEFAULT_CONTENT_WIDTH_CLASS, widthOverrides);
 }
@@ -143,6 +150,9 @@ export function GuestFlowShell<TStep extends GuestFlowStep = CanonicalGuestFlowS
               href={backHref}
               className="flex shrink-0 items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
               aria-label={backLabel ?? 'Back'}
+              // The label is not rendered, so a sighted pointer user has no
+              // other way to discover where this goes.
+              title={backLabel ?? 'Back'}
             >
               <ArrowLeft className="h-4 w-4" aria-hidden />
             </Link>
