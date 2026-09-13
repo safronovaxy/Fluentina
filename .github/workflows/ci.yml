@@ -81,6 +81,24 @@ jobs:
         working-directory: website
         run: npm run typecheck
 
+      # The data-layer tests query a real Postgres, so the schema has to exist
+      # before they run. KAN-10 added the first migration; without this step the
+      # suite fails with "schema does not exist" rather than on anything about
+      # the code.
+      - name: Apply database migrations
+        working-directory: website
+        run: npm run db:migrate
+
+      # Fails the build when someone edits the schema and does not generate the
+      # matching migration. Without it the two drift, CI stays green because the
+      # tests run against whatever the migrations produced, and the divergence
+      # is found in production.
+      - name: Migrations match the schema
+        working-directory: website
+        run: |
+          npx drizzle-kit generate
+          git diff --exit-code drizzle
+
       - name: Unit & integration tests
         working-directory: website
         # Vitest — includes the security/ownership/consent/rate-limit
