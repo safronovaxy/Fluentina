@@ -46,8 +46,15 @@ cms/license.txt
 coverage/
 .nyc_output/
 
-# Website (Vite/React)
+# Website (Next.js)
 website/node_modules/
+website/.next/
+website/out/
+website/next-env.d.ts
+website/tsconfig.tsbuildinfo
+website/playwright-report/
+website/test-results/
+# Left from the Vite era; harmless to keep ignoring.
 website/dist/
 website/.env.local
 website/.env.development.local

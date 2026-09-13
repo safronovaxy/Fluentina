@@ -24,18 +24,22 @@ test('T12.2 — Sitemap contains all static marketing routes', async ({ request 
 
   for (const route of STATIC_MARKETING_ROUTES) {
     expect(body, `Sitemap should contain ${route}`).toContain(
-      `write-wise.com${route === '/' ? '' : route}`,
+      `fluentina.com${route === '/' ? '' : route}`,
     );
   }
 });
 
-test('T12.3 — Sitemap contains at least one blog post URL', async ({ request }) => {
+// @cms — needs a reachable Strapi with published posts. CI runs with no CMS
+// (see ci.yml), so this is excluded there and runs against a live site.
+test('T12.3 — @cms Sitemap contains at least one blog post URL', async ({ request }) => {
   const response = await request.get('/sitemap.xml');
   const body = await response.text();
-  expect(body).toMatch(/write-wise\.com\/blog\/[^<"]+/);
+  expect(body).toMatch(/fluentina\.com\/blog\/[^<"]+/);
 });
 
-test('T12.4 — Sitemap URL count is >= 14 (11 static + dynamic)', async ({ request }) => {
+// @cms — the >= 14 floor assumes CMS-backed blog and video URLs on top of the
+// 12 hardcoded static routes. Without a CMS the sitemap has exactly 12.
+test('T12.4 — @cms Sitemap URL count is >= 14 (12 static + dynamic)', async ({ request }) => {
   const response = await request.get('/sitemap.xml');
   const body = await response.text();
   const urls = (body.match(/<loc>/g) ?? []).length;
@@ -53,12 +57,16 @@ test('T12.6 — robots.txt references the sitemap', async ({ request }) => {
   const response = await request.get('/robots.txt');
   const body = await response.text();
   expect(body.toLowerCase()).toContain('sitemap');
-  expect(body).toContain('write-wise.com');
+  expect(body).toContain('fluentina.com');
 });
 
-test('T12.7 — /app routes are excluded from sitemap', async ({ request }) => {
-  const response = await request.get('/sitemap.xml');
+// The old assertion here checked the sitemap never mentions /app. With the
+// mockup deleted there is no code path that could emit it, so it certified
+// nothing. The live control is robots.txt, which nothing was checking.
+test('T12.7 — robots.txt still disallows /app/ and /api/', async ({ request }) => {
+  const response = await request.get('/robots.txt');
+  expect(response.status()).toBe(200);
   const body = await response.text();
-  // App routes should not be indexed
-  expect(body).not.toContain('write-wise.com/app');
+  expect(body).toContain('/app/');
+  expect(body).toContain('/api/');
 });

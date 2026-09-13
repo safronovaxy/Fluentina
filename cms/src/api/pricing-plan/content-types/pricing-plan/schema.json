@@ -5,7 +5,7 @@
     "singularName": "pricing-plan",
     "pluralName": "pricing-plans",
     "displayName": "PricingPlan",
-    "description": "Subscription pricing plans for WriteWise"
+    "description": "Subscription pricing plans for Fluentina"
   },
   "options": {
     "draftAndPublish": true

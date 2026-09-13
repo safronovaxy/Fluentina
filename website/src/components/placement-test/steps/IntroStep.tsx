@@ -73,7 +73,7 @@ function TestHeader({ language }: { language: string | null }) {
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-brand">
             <PenTool className="h-4 w-4 text-white" />
           </div>
-          <span className="text-lg font-bold text-foreground">WriteWise</span>
+          <span className="text-lg font-bold text-foreground">Fluentina</span>
         </a>
         <Badge variant="outline" className="text-xs">Free Assessment</Badge>
       </div>
@@ -352,7 +352,7 @@ function CombinedIntroView() {
                           </FormControl>
                           <div className="space-y-1 leading-none">
                             <FormLabel className="cursor-pointer text-sm">
-                              I consent to WriteWise contacting me about language learning services.
+                              I consent to Fluentina contacting me about language learning services.
                             </FormLabel>
                             <p className="text-xs text-muted-foreground">
                               We respect your privacy. Unsubscribe at any time.

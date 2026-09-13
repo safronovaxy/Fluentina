@@ -5,14 +5,14 @@ export const revalidate = false;
 
 export const metadata: Metadata = {
   title: 'Contact Us',
-  description: 'Get in touch with WriteWise. We\'d love to hear from you about your language learning journey.',
+  description: 'Get in touch with Fluentina. We\'d love to hear from you about your language learning journey.',
   alternates: {
-    canonical: 'https://write-wise.com/contact',
+    canonical: 'https://fluentina.com/contact',
   },
   openGraph: {
-    title: 'Contact Us | WriteWise',
-    description: 'Get in touch with WriteWise. We\'d love to hear from you about your language learning journey.',
-    url: 'https://write-wise.com/contact',
+    title: 'Contact Us | Fluentina',
+    description: 'Get in touch with Fluentina. We\'d love to hear from you about your language learning journey.',
+    url: 'https://fluentina.com/contact',
     type: 'website',
   },
 };

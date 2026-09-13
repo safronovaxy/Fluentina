@@ -1,0 +1,71 @@
+name: AI Grading Golden-Set Regression
+
+# PLACEHOLDER — this workflow validates nothing today. The GradingProvider
+# abstraction, prompt template and golden essay set don't exist in the repo
+# yet (KAN-4/KAN-16), so the job below finds no test:grading-regression
+# script, prints a notice and passes. A green run here is NOT evidence that
+# grading output is sound.
+#
+# Once that script exists it becomes the real golden essay-set +
+# structural-invariant harness against the live Mistral/Claude provider
+# (Test Strategy §3).
+#
+# Trigger scope is deliberately left undecided until then. The original
+# round-2 direction (Test Strategy §7, 2026-09-11) was to run it on every PR
+# and every push to main rather than on a schedule or behind a path filter,
+# on the reasoning that the deploy cadence (~10 pre-launch, 2-3/week after)
+# makes every-run at least as good at catching upstream model drift as a
+# weekly cron. Irina deferred the question on 2026-09-13: while the job is a
+# no-op the choice costs nothing either way, and it only starts to matter —
+# live API spend and added wall-clock on every review — once the harness is
+# real. Decide it then, and update CONTRIBUTING.md to match.
+#
+# workflow_call: invoked as a required job from ci.yml on every run.
+# workflow_dispatch: lets anyone run it on demand outside that flow.
+
+on:
+  workflow_call:
+    secrets:
+      MISTRAL_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  golden-set-regression:
+    name: PLACEHOLDER — golden-set harness not built yet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Run golden-set regression against real provider
+        working-directory: website
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Parse the manifest rather than grepping `npm run` output: the old
+          # form took grep's exit status with npm's stderr discarded, so a
+          # broken checkout or malformed package.json fell through to the
+          # friendly "not built yet" notice and went green. It was also a
+          # substring match, so test:grading-regression-baseline satisfied it.
+          if node -e "process.exit(require('./package.json').scripts?.['test:grading-regression'] ? 0 : 1)"; then
+            npm run test:grading-regression
+          else
+            echo "::notice title=Golden-set harness not built yet::The GradingProvider abstraction, prompt template, and golden essay set (KAN-4/KAN-16, Architecture Decisions ADR-4/ADR-5) don't exist in the repo yet, so there's nothing to run against the real provider."
+            echo "::notice::This job becomes a real, deployment-gating check the moment an npm script named 'test:grading-regression' exists in website/package.json implementing Test Strategy §3.1-3.4 (structural invariants + directional golden-set assertions + baseline-diff tolerance)."
+          fi

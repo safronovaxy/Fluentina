@@ -1,6 +1,6 @@
-# Custom Domain Setup - write-wise.com
+# Custom Domain Setup - fluentina.com
 
-This guide will help you configure `write-wise.com` to point to your deployed WriteWise website.
+This guide will help you configure `fluentina.com` to point to your deployed Fluentina website.
 
 ## Overview
 
@@ -19,16 +19,16 @@ Since your services are deployed in the `europe-west10` region (which doesn't su
 Internet
     ↓
 DNS Records (all point to same IP):
-    ├─ write-wise.com → 34.160.140.247
-    ├─ www.write-wise.com → 34.160.140.247
-    └─ cms.write-wise.com → 34.160.140.247
+    ├─ fluentina.com → 34.160.140.247
+    ├─ www.fluentina.com → 34.160.140.247
+    └─ cms.fluentina.com → 34.160.140.247
     ↓
 Google Cloud Load Balancer (34.160.140.247)
     ├─ SSL Certificate (auto-managed, covers all 3 domains)
     ├─ URL Routing:
-    │   ├─ write-wise.com → Website Backend
-    │   ├─ www.write-wise.com → Website Backend
-    │   └─ cms.write-wise.com → CMS Backend
+    │   ├─ fluentina.com → Website Backend
+    │   ├─ www.fluentina.com → Website Backend
+    │   └─ cms.fluentina.com → CMS Backend
     ↓
 Cloud Run Services (europe-west10)
     ├─ writewise-website (marketing site)
@@ -49,7 +49,7 @@ Before Cloud Run can use your custom domain, you need to verify you own it.
 
 1. Go to [Google Search Console](https://search.google.com/search-console)
 2. Click "Add Property"
-3. Enter `write-wise.com`
+3. Enter `fluentina.com`
 4. Choose verification method:
    - **DNS TXT Record** (recommended): Add a TXT record to your DNS
    - **HTML File**: Upload a file to your website root
@@ -60,7 +60,7 @@ Before Cloud Run can use your custom domain, you need to verify you own it.
 
 1. Go to [Google Cloud Domains Verification](https://console.cloud.google.com/apis/credentials/domainverification?project=writewise-468912)
 2. Click "Add Domain"
-3. Enter `write-wise.com`
+3. Enter `fluentina.com`
 4. Follow the verification instructions (usually adding a TXT record to DNS)
 5. Click "Verify"
 
@@ -90,12 +90,20 @@ Since the `europe-west10` region doesn't support direct domain mapping, I've set
    - `writewise-website-backend` → Serves website traffic
    - `writewise-cms-backend` → Serves CMS traffic
 4. **SSL Certificate:** `writewise-ssl-cert-v2`
-   - Domains: `write-wise.com`, `www.write-wise.com`, `cms.write-wise.com`
-   - Status: Provisioning (will be ACTIVE after DNS is configured)
+   - Domains actually covered: `write-wise.com`, `www.write-wise.com`, `cms.write-wise.com`
+   - Status: ACTIVE for those names
+   - ⚠️ **A Google-managed certificate's domain list is fixed at creation and
+     cannot be extended.** This certificate does not cover the `fluentina.com`
+     names and cannot be made to. Renaming the resource would not help either,
+     and ADR-6 keeps the `writewise-` resource names as they are regardless.
+     Before DNS cutover you must provision a **new** managed certificate for
+     `fluentina.com`, `www.fluentina.com` and `cms.fluentina.com`, attach it to
+     the same target HTTPS proxy, and wait for it to reach ACTIVE. Pointing DNS
+     first means every request fails the TLS handshake with a name mismatch.
 5. **URL Routing:**
-   - `write-wise.com` → Website backend
-   - `www.write-wise.com` → Website backend
-   - `cms.write-wise.com` → CMS backend
+   - `fluentina.com` → Website backend
+   - `www.fluentina.com` → Website backend
+   - `cms.fluentina.com` → CMS backend
 6. **HTTPS Load Balancer:**
    - Entry point: `34.160.140.247:443`
    - Automatic SSL termination
@@ -119,7 +127,7 @@ You need to add A records that point your domains to the load balancer's static 
 
 Add these **THREE** A records to your domain registrar:
 
-#### 1. Root Domain (write-wise.com)
+#### 1. Root Domain (fluentina.com)
 
 ```
 Name: @
@@ -128,7 +136,7 @@ Value: 34.160.140.247
 TTL: 300
 ```
 
-#### 2. WWW Subdomain (www.write-wise.com)
+#### 2. WWW Subdomain (www.fluentina.com)
 
 ```
 Name: www
@@ -137,7 +145,7 @@ Value: 34.160.140.247
 TTL: 300
 ```
 
-#### 3. CMS Subdomain (cms.write-wise.com)
+#### 3. CMS Subdomain (cms.fluentina.com)
 
 ```
 Name: cms
@@ -152,7 +160,7 @@ TTL: 300
 
 ## Step 4: Add DNS Records to Your Domain Registrar - **DO THIS NOW**
 
-### Where is write-wise.com registered?
+### Where is fluentina.com registered?
 
 Go to your domain registrar's DNS management page:
 
@@ -194,9 +202,9 @@ Go to your domain registrar's DNS management page:
 5. **Save changes**
 
 **Important Notes:**
-- Use `@` or leave the name blank for the root domain (write-wise.com)
-- Use `www` for the www subdomain (www.write-wise.com)
-- Use `cms` for the CMS subdomain (cms.write-wise.com)
+- Use `@` or leave the name blank for the root domain (fluentina.com)
+- Use `www` for the www subdomain (www.fluentina.com)
+- Use `cms` for the CMS subdomain (cms.fluentina.com)
 - **If using Cloudflare:** Set proxy to "DNS only" (gray cloud icon) - the load balancer handles HTTPS
 - Start with TTL 300 (5 minutes) so you can quickly fix any issues
 
@@ -216,9 +224,9 @@ gcloud compute ssl-certificates describe writewise-ssl-cert-v2 \
 You should see:
 ```
 ACTIVE
-cms.write-wise.com: ACTIVE
-write-wise.com: ACTIVE
-www.write-wise.com: ACTIVE
+cms.fluentina.com: ACTIVE
+fluentina.com: ACTIVE
+www.fluentina.com: ACTIVE
 ```
 
 **Current Status:** `PROVISIONING` (will become `ACTIVE` after DNS is configured)
@@ -238,7 +246,7 @@ Once the custom domain is active, update the CMS CORS to allow the new domain:
 Already configured with:
 ```typescript
 origin: [
-  'https://write-wise.com',  // ✅ Already added
+  'https://fluentina.com',  // ✅ Already added
   'https://writewise-website-m2xkjyh6ta-oe.a.run.app',
   // ...
 ]
@@ -270,9 +278,9 @@ After DNS propagation (can take 5 minutes to 48 hours):
 - [ ] DNS records added to registrar (@, www, cms)
 - [ ] DNS propagation complete
 - [ ] SSL certificate status: ACTIVE
-- [ ] https://write-wise.com loads the website
-- [ ] https://www.write-wise.com loads the website
-- [ ] https://cms.write-wise.com/admin loads the CMS admin
+- [ ] https://fluentina.com loads the website
+- [ ] https://www.fluentina.com loads the website
+- [ ] https://cms.fluentina.com/admin loads the CMS admin
 - [ ] Pricing page loads correctly on custom domain
 - [ ] Contact form works on custom domain
 
@@ -285,8 +293,8 @@ After DNS propagation (can take 5 minutes to 48 hours):
 
 ### DNS not propagating
 - Wait longer (DNS can take up to 48 hours)
-- Check DNS with: `dig write-wise.com`
-- Check DNS with: `nslookup write-wise.com`
+- Check DNS with: `dig fluentina.com`
+- Check DNS with: `nslookup fluentina.com`
 - Try different DNS resolver (8.8.8.8)
 
 ### SSL certificate not issuing
@@ -301,14 +309,14 @@ After DNS propagation (can take 5 minutes to 48 hours):
 - Try incognito/private browsing
 
 ### CORS errors after switching to custom domain
-- CORS is already configured for write-wise.com
+- CORS is already configured for fluentina.com
 - Try hard refresh
 - Check browser console for specific errors
 
 ## DNS Propagation Check
 
 Check if DNS has propagated globally:
-- [DNS Checker](https://dnschecker.org/) - Enter `write-wise.com`
+- [DNS Checker](https://dnschecker.org/) - Enter `fluentina.com`
 - [What's My DNS](https://www.whatsmydns.net/) - Check globally
 
 ## Current Status
@@ -338,19 +346,19 @@ Check if DNS has propagated globally:
 
 **Go to Step 4 above** and add these **THREE** DNS records to your domain registrar:
 
-1. **Root domain (write-wise.com):**
+1. **Root domain (fluentina.com):**
    - Type: A
    - Name: @ (or blank)
    - Value: `34.160.140.247`
    - TTL: 300
 
-2. **WWW subdomain (www.write-wise.com):**
+2. **WWW subdomain (www.fluentina.com):**
    - Type: A
    - Name: www
    - Value: `34.160.140.247`
    - TTL: 300
 
-3. **CMS subdomain (cms.write-wise.com):**
+3. **CMS subdomain (cms.fluentina.com):**
    - Type: A
    - Name: cms
    - Value: `34.160.140.247`
@@ -366,9 +374,9 @@ Check if DNS has propagated globally:
    - Check status: Step 5 above
 
 3. **Test your domains:**
-   - https://write-wise.com → Website
-   - https://www.write-wise.com → Website (same)
-   - https://cms.write-wise.com → CMS Admin
+   - https://fluentina.com → Website
+   - https://www.fluentina.com → Website (same)
+   - https://cms.fluentina.com → CMS Admin
    - Test pricing page, contact form, etc.
 
 **Right now:** Go add the DNS records! This is the only remaining manual step.

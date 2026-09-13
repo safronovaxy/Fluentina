@@ -71,7 +71,7 @@ for (const route of META_PAGES) {
   test(`T2 — ${route} has canonical link`, async ({ request }) => {
     const response = await request.get(route);
     const html = await response.text();
-    expect(html).toMatch(/link[^>]+rel="canonical"[^>]+href="https:\/\/write-wise\.com/);
+    expect(html).toMatch(/link[^>]+rel="canonical"[^>]+href="https:\/\/fluentina\.com/);
   });
 }
 
@@ -127,12 +127,8 @@ test('T2 — /blog/[slug] has Article JSON-LD', async ({ request }) => {
   expect(html).toMatch(/"@type"\s*:\s*"Article"/);
 });
 
-// ── T2.6  /app routes should NOT expose server data ──────────────────────────
-
-test('T2 — /app does not pre-render Strapi data (client-only)', async ({ request }) => {
-  const response = await request.get('/app');
-  const html = await response.text();
-  // The page should render a shell but not contain Strapi API response bodies
-  // (dashboard data is loaded client-side from mock/API after hydration)
-  expect(html).not.toMatch(/"documentId"\s*:/); // Strapi v5 response shape
-});
+// T2.6 previously asserted the deleted /app mockup didn't leak Strapi data
+// client-side. That specific risk died with the mockup (ADR-7): it guarded a
+// client-only shell accidentally pre-rendering CMS payloads, and no such shell
+// exists any more. routing.spec.ts asserts the routes now 404, which is a
+// different risk class and deliberately not a replacement for this check.

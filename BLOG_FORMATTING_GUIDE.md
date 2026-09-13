@@ -1,4 +1,4 @@
-# WriteWise Blog Formatting Guide
+# Fluentina Blog Formatting Guide
 
 This guide explains all the Markdown formatting features available when creating blog posts in the Strapi CMS. The CMS uses **GitHub Flavored Markdown (GFM)**, which is automatically converted to styled HTML on the website.
 
@@ -53,7 +53,7 @@ Use headers to organize your content hierarchically. The number of `#` symbols d
 Use for emphasis on important terms, product names, or key concepts:
 
 ```markdown
-**WriteWise** helps you learn faster
+**Fluentina** helps you learn faster
 __Important concept__ to remember
 ```
 
@@ -191,7 +191,7 @@ Upload images through the Strapi media library first, then reference them:
 
 **Example with good alt text:**
 ```markdown
-![WriteWise dashboard showing progress chart and recent tasks](/uploads/dashboard-screenshot.jpg)
+![Fluentina dashboard showing progress chart and recent tasks](/uploads/dashboard-screenshot.jpg)
 ```
 
 ### Code
@@ -256,7 +256,7 @@ Use for:
 
 **Multi-line blockquotes:**
 ```markdown
-> WriteWise adapts to your learning style and pace.
+> Fluentina adapts to your learning style and pace.
 > It's like having a personal language tutor available 24/7,
 > providing instant feedback on your writing.
 ```
@@ -364,7 +364,7 @@ Use \- to show a hyphen (not a bullet)
 
 ### Writing Tips
 1. **Front-load important info** - Key points in first paragraph
-2. **Use active voice** - "WriteWise provides feedback" not "Feedback is provided"
+2. **Use active voice** - "Fluentina provides feedback" not "Feedback is provided"
 3. **Break up text** - Use lists, images, blockquotes for visual variety
 4. **Add value** - Every paragraph should teach something or move the story forward
 

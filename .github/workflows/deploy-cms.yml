@@ -1,8 +1,19 @@
 name: Deploy CMS to Cloud Run
 
+# Deployment is a separate, deliberate action from merging (Ways of Working
+# §6) — deliberately NOT triggered by push to main. Run manually via
+# workflow_dispatch once main is ready to ship. The verify-ci job below
+# requires ci.yml to have already passed for the commit being deployed
+# before gcloud run deploy runs.
+#
+# NOTE: the intended control here is a GitHub Environment with required
+# reviewers (a real approval gate). This repo's automation token only has
+# Contents + Pull Requests scope, not Administration, so Settings ->
+# Environments could not be configured from this session — see PR
+# description / delivery report. The verify-ci job is the best available
+# substitute given that constraint: it blocks the deploy job, but doesn't
+# require a human click the way an Environment gate would.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 env:
@@ -12,8 +23,64 @@ env:
   CLOUD_SQL_INSTANCE: writewise-468912:europe-west10:writewise-db
 
 jobs:
+  verify-ci:
+    name: Verify this is main and ci.yml passed for this commit
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Check for a successful ci.yml run on this SHA
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Fail loudly rather than skipping. A skipped job skips `deploy`
+            // too, so the hole was closed either way, but the operator saw a
+            // run with two skipped jobs and no reason — and "assuming
+            // something deployed" is the exact failure CLAUDE.md warns about.
+            if (context.ref !== 'refs/heads/main') {
+              core.setFailed(
+                `Deploys are only permitted from refs/heads/main; got ${context.ref}. ` +
+                `Merge to main first, then dispatch against main.`
+              );
+              return;
+            }
+
+            const sha = context.sha;
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              head_sha: sha,
+              status: 'completed',
+            });
+            // A pull_request run reports the PR branch tip as head_sha, so a
+            // SHA match alone does not mean CI passed for this commit ON main.
+            // Require a run on main — push, or a manual dispatch against main,
+            // which runs main's workflow against main's tip and needs write
+            // access anyway. Excluding dispatch left no working recovery when
+            // a push run was cancelled.
+            const ok = data.workflow_runs.find(
+              r => r.conclusion === 'success' &&
+                   (r.event === 'push' || r.event === 'workflow_dispatch') &&
+                   r.head_branch === 'main'
+            );
+            if (!ok) {
+              const seen = data.workflow_runs
+                .map(r => `${r.event}/${r.head_branch}: ${r.conclusion}`)
+                .join(', ') || 'none';
+              core.setFailed(
+                `No successful ci.yml run on main found for commit ${sha}. ` +
+                `Deploys require ci.yml to pass for the exact commit being ` +
+                `deployed (Ways of Working §6 / Test Strategy §7). ` +
+                `Runs seen for this SHA: ${seen}.`
+              );
+            } else {
+              core.info(`ci.yml passed on main for ${sha}: ${ok.html_url}`);
+            }
+
   deploy:
     name: Deploy CMS to Production
+    needs: verify-ci
     runs-on: ubuntu-latest
 
     permissions:
@@ -63,7 +130,7 @@ jobs:
             --memory 512Mi \
             --timeout 300 \
             --port 1337 \
-            --set-env-vars "NODE_ENV=production,DATABASE_CLIENT=postgres,DATABASE_NAME=writewise,DATABASE_USERNAME=writewise,DATABASE_SCHEMA=cms,DATABASE_HOST=/cloudsql/${{ env.CLOUD_SQL_INSTANCE }},DATABASE_PORT=5432,HOST=0.0.0.0,APP_KEYS=${{ secrets.STRAPI_APP_KEYS }},API_TOKEN_SALT=${{ secrets.STRAPI_API_TOKEN_SALT }},ADMIN_JWT_SECRET=${{ secrets.STRAPI_ADMIN_JWT_SECRET }},TRANSFER_TOKEN_SALT=${{ secrets.STRAPI_TRANSFER_TOKEN_SALT }},JWT_SECRET=${{ secrets.STRAPI_JWT_SECRET }},STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }},MAILJET_API_KEY=${{ secrets.MAILJET_API_KEY }},MAILJET_SECRET_KEY=${{ secrets.MAILJET_SECRET_KEY }},SUPPORT_EMAIL=support@write-wise.com,GCS_BUCKET_NAME=writewise-cms-media,MAILJET_PLACEMENT_TEST_LIST_ID=10537779,WRITEWISE_APP_URL=https://app.write-wise.com" \
+            --set-env-vars "NODE_ENV=production,DATABASE_CLIENT=postgres,DATABASE_NAME=writewise,DATABASE_USERNAME=writewise,DATABASE_SCHEMA=cms,DATABASE_HOST=/cloudsql/${{ env.CLOUD_SQL_INSTANCE }},DATABASE_PORT=5432,HOST=0.0.0.0,APP_KEYS=${{ secrets.STRAPI_APP_KEYS }},API_TOKEN_SALT=${{ secrets.STRAPI_API_TOKEN_SALT }},ADMIN_JWT_SECRET=${{ secrets.STRAPI_ADMIN_JWT_SECRET }},TRANSFER_TOKEN_SALT=${{ secrets.STRAPI_TRANSFER_TOKEN_SALT }},JWT_SECRET=${{ secrets.STRAPI_JWT_SECRET }},STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }},MAILJET_API_KEY=${{ secrets.MAILJET_API_KEY }},MAILJET_SECRET_KEY=${{ secrets.MAILJET_SECRET_KEY }},SUPPORT_EMAIL=support@fluentina.com,GCS_BUCKET_NAME=writewise-cms-media,MAILJET_PLACEMENT_TEST_LIST_ID=10537779,WRITEWISE_APP_URL=https://app.fluentina.com" \
             --set-secrets "DATABASE_PASSWORD=db-password:latest" \
             --set-secrets "/secrets/gcs-service-account=strapi-gcs-service-account:latest" \
             --add-cloudsql-instances ${{ env.CLOUD_SQL_INSTANCE }}
@@ -79,7 +146,12 @@ jobs:
       - name: Test deployment
         run: |
           sleep 15
-          curl -f ${{ steps.deploy.outputs.url }}/_health || echo "Health check failed (expected - endpoint might not exist yet)"
+          # The `|| echo` swallowed the exit code and the success line printed
+          # unconditionally, so a Strapi revision that never became healthy
+          # produced a fully green run titled "CMS Deployment Successful".
+          # Strapi's admin route answers on any working instance; _health does
+          # not exist in v5, which is what the old comment was tolerating.
+          curl -f --retry 5 --retry-delay 5 --retry-connrefused "${{ steps.deploy.outputs.url }}/admin"
           echo "✅ CMS deployment successful!"
 
       - name: Create deployment summary

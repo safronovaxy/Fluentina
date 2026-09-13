@@ -89,9 +89,9 @@ const Resources = ({ initialResourcesData, initialFaqData }: ResourcesProps = {}
   return (
     <>
       <SEO
-        title="Learning Resources - WriteWise"
-        description="Video tutorials, guides, tools, and FAQs to help you get the most out of WriteWise. Everything you need to accelerate your language learning journey."
-        keywords="language learning resources, WriteWise tutorials, language learning guides, writing practice tips, WriteWise FAQ"
+        title="Learning Resources - Fluentina"
+        description="Video tutorials, guides, tools, and FAQs to help you get the most out of Fluentina. Everything you need to accelerate your language learning journey."
+        keywords="language learning resources, Fluentina tutorials, language learning guides, writing practice tips, Fluentina FAQ"
       />
       {/* Hero */}
       <section className="bg-gradient-brand-subtle py-16">
@@ -101,7 +101,7 @@ const Resources = ({ initialResourcesData, initialFaqData }: ResourcesProps = {}
               Learning <span className="text-gradient-brand">Resources</span>
             </h1>
             <p className="text-lg text-muted-foreground">
-              Video tutorials, guides, and FAQs to help you get the most out of WriteWise.
+              Video tutorials, guides, and FAQs to help you get the most out of Fluentina.
             </p>
           </div>
         </div>
@@ -375,7 +375,7 @@ const Resources = ({ initialResourcesData, initialFaqData }: ResourcesProps = {}
                         Can't find what you're looking for?
                       </p>
                       <Button variant="outline" asChild>
-                        <a href="mailto:support@write-wise.com">
+                        <a href="mailto:support@fluentina.com">
                           Contact Support
                           <ExternalLink className="ml-2 h-4 w-4" />
                         </a>
@@ -397,10 +397,10 @@ const Resources = ({ initialResourcesData, initialFaqData }: ResourcesProps = {}
             Ready to Start Learning?
           </h2>
           <p className="mx-auto mb-8 max-w-xl text-white/80">
-            Join thousands of learners improving their language skills with WriteWise.
+            Join thousands of learners improving their language skills with Fluentina.
           </p>
           <Button size="lg" variant="secondary" asChild>
-            <a href="https://app.write-wise.com?mode=signup" target="_blank" rel="noopener noreferrer">
+            <a href="https://app.fluentina.com?mode=signup" target="_blank" rel="noopener noreferrer">
               Get Started Free
               <ArrowRight className="ml-2 h-5 w-5" />
             </a>

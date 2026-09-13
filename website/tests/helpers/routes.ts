@@ -1,5 +1,5 @@
 /**
- * Canonical list of all WriteWise routes.
+ * Canonical list of all Fluentina routes.
  * Used across multiple test files to avoid repetition.
  */
 
@@ -17,11 +17,9 @@ export const STATIC_MARKETING_ROUTES = [
   '/terms',
 ] as const;
 
-export const APP_ROUTES = [
-  '/app',
-  '/app/tasks',
-  '/app/progress',
-] as const;
+// The /app mockup (APP_ROUTES) was deleted per Architecture Decisions ADR-7
+// — see routing.spec.ts for the 404 regression test. The real guest essay
+// flow lives under website/src/app/(guest)/, starting with KAN-8.
 
 /** Redirects: [source, expectedDestination (partial match)] */
 export const REDIRECT_RULES: Array<{ from: string; to: string; status: 301 | 308 }> = [
@@ -37,7 +35,9 @@ export const REDIRECT_RULES: Array<{ from: string; to: string; status: 301 | 308
 
 /** Pages that must have real server-rendered content (not an empty #root div) */
 export const SSR_CONTENT_CHECKS: Array<{ route: string; mustContain: RegExp }> = [
-  { route: '/',                      mustContain: /writewise|learn german|language/i },
+  // Must be specific to the new brand: the old alternation also matched the
+  // pre-rebrand homepage, so it could not detect a half-finished rebrand.
+  { route: '/',                      mustContain: /fluentina/i },
   { route: '/pricing',               mustContain: /plan|price|€|\$/i },
   { route: '/about',                 mustContain: /about|mission|team/i },
   { route: '/blog',                  mustContain: /blog|article|post/i },

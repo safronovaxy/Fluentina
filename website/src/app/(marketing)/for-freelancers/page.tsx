@@ -5,19 +5,19 @@ import { generateReviewSchema } from '@/lib/seo';
 export const revalidate = false;
 
 export const metadata: Metadata = {
-  title: 'WriteWise for Freelance Language Tutors — Save Time, Grow Your Business',
+  title: 'Fluentina for Freelance Language Tutors — Save Time, Grow Your Business',
   description:
-    'WriteWise helps freelance language tutors cut prep and review time by up to 70%, track student performance with real data, and take on more students without burning out.',
+    'Fluentina helps freelance language tutors cut prep and review time by up to 70%, track student performance with real data, and take on more students without burning out.',
   keywords:
     'freelance language tutor, AI language teaching tool, student progress tracking, CEFR exercises, language tutor software',
   alternates: {
-    canonical: 'https://write-wise.com/for-freelancers',
+    canonical: 'https://fluentina.com/for-freelancers',
   },
   openGraph: {
-    title: 'WriteWise for Freelance Language Tutors',
+    title: 'Fluentina for Freelance Language Tutors',
     description:
-      'WriteWise helps freelance language tutors cut prep and review time by up to 70%, track student performance with real data, and take on more students without burning out.',
-    url: 'https://write-wise.com/for-freelancers',
+      'Fluentina helps freelance language tutors cut prep and review time by up to 70%, track student performance with real data, and take on more students without burning out.',
+    url: 'https://fluentina.com/for-freelancers',
     type: 'website',
   },
 };

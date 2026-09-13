@@ -1,10 +1,10 @@
-# WriteWise Security Configuration
+# Fluentina Security Configuration
 
-This document describes the comprehensive security measures implemented to protect the WriteWise CMS and website.
+This document describes the comprehensive security measures implemented to protect the Fluentina CMS and website.
 
 ## Overview
 
-Your CMS is publicly accessible at `cms.write-wise.com`, which is standard practice but requires robust security. We've implemented **defense in depth** with multiple layers of protection:
+Your CMS is publicly accessible at `cms.fluentina.com`, which is standard practice but requires robust security. We've implemented **defense in depth** with multiple layers of protection:
 
 1. **Application-Level Rate Limiting** (Strapi middleware)
 2. **Infrastructure-Level Protection** (Google Cloud Armor WAF)
@@ -132,6 +132,10 @@ Action: Block request (HTTP 403)
 - `www.write-wise.com`
 - `cms.write-wise.com`
 
+> ⚠️ The `fluentina.com` names are **not** on this certificate. A Google-managed
+> certificate's domain list is immutable, so a second certificate has to be
+> provisioned and reach ACTIVE before DNS cutover. See `CUSTOM_DOMAIN_SETUP.md`.
+
 **Features:**
 - Automatic renewal by Google
 - TLS 1.2+ only (secure protocols)
@@ -168,7 +172,7 @@ Action: Block request (HTTP 403)
 
 **Check your password:**
 ```bash
-# Log into Strapi admin at: https://cms.write-wise.com/admin
+# Log into Strapi admin at: https://cms.fluentina.com/admin
 # Settings → Users → Edit each user → Change password
 ```
 
@@ -225,7 +229,7 @@ whitelist: (ctx) => {
 The Strapi rate limiting provides headers in responses:
 
 ```bash
-curl -I https://cms.write-wise.com/admin
+curl -I https://cms.fluentina.com/admin
 
 # Response includes:
 Rate-Limit-Total: 10
@@ -252,7 +256,7 @@ gcloud logging read "resource.type=http_load_balancer AND jsonPayload.enforcedSe
 ```bash
 for i in {1..15}; do
   echo "Request $i"
-  curl -I https://cms.write-wise.com/admin 2>&1 | grep -E "(HTTP|Rate-Limit)"
+  curl -I https://cms.fluentina.com/admin 2>&1 | grep -E "(HTTP|Rate-Limit)"
   sleep 1
 done
 ```
@@ -311,10 +315,10 @@ gcloud logging read "resource.type=http_load_balancer AND jsonPayload.enforcedSe
 **Debug:**
 ```bash
 # Test connectivity
-curl -I https://cms.write-wise.com/admin
+curl -I https://cms.fluentina.com/admin
 
 # Check rate limit headers
-curl -v https://cms.write-wise.com/admin 2>&1 | grep Rate-Limit
+curl -v https://cms.fluentina.com/admin 2>&1 | grep Rate-Limit
 ```
 
 ## Security Incident Response
@@ -352,7 +356,7 @@ gcloud compute security-policies rules create 100 \
 - HTTPS encryption
 - Strapi authentication
 
-✅ **You're safe to use `cms.write-wise.com` publicly**
+✅ **You're safe to use `cms.fluentina.com` publicly**
 
 ⚠️ **Remember to:**
 - Use strong admin passwords

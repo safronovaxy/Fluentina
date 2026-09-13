@@ -433,7 +433,7 @@ export interface AdminUser extends Struct.CollectionTypeSchema {
 export interface ApiBlogPostBlogPost extends Struct.CollectionTypeSchema {
   collectionName: 'blog_posts';
   info: {
-    description: 'Blog posts for the WriteWise website';
+    description: 'Blog posts for the Fluentina website';
     displayName: 'BlogPost';
     pluralName: 'blog-posts';
     singularName: 'blog-post';
@@ -498,7 +498,7 @@ export interface ApiBlogPostBlogPost extends Struct.CollectionTypeSchema {
 export interface ApiFeatureFeature extends Struct.CollectionTypeSchema {
   collectionName: 'features';
   info: {
-    description: 'Features displayed on the WriteWise website';
+    description: 'Features displayed on the Fluentina website';
     displayName: 'Feature';
     pluralName: 'features';
     singularName: 'feature';
@@ -548,7 +548,7 @@ export interface ApiFeatureFeature extends Struct.CollectionTypeSchema {
 export interface ApiPagePage extends Struct.CollectionTypeSchema {
   collectionName: 'pages';
   info: {
-    description: 'Static pages for the WriteWise website';
+    description: 'Static pages for the Fluentina website';
     displayName: 'Page';
     pluralName: 'pages';
     singularName: 'page';
@@ -588,7 +588,7 @@ export interface ApiPagePage extends Struct.CollectionTypeSchema {
 export interface ApiPricingPlanPricingPlan extends Struct.CollectionTypeSchema {
   collectionName: 'pricing_plans';
   info: {
-    description: 'Subscription pricing plans for WriteWise';
+    description: 'Subscription pricing plans for Fluentina';
     displayName: 'PricingPlan';
     pluralName: 'pricing-plans';
     singularName: 'pricing-plan';
@@ -667,7 +667,7 @@ export interface ApiPricingPlanPricingPlan extends Struct.CollectionTypeSchema {
 export interface ApiResourceResource extends Struct.CollectionTypeSchema {
   collectionName: 'resources';
   info: {
-    description: 'Learning resources for the WriteWise website';
+    description: 'Learning resources for the Fluentina website';
     displayName: 'Resource';
     pluralName: 'resources';
     singularName: 'resource';
@@ -719,7 +719,7 @@ export interface ApiResourceResource extends Struct.CollectionTypeSchema {
 export interface ApiTestimonialTestimonial extends Struct.CollectionTypeSchema {
   collectionName: 'testimonials';
   info: {
-    description: 'User testimonials for the WriteWise website';
+    description: 'User testimonials for the Fluentina website';
     displayName: 'Testimonial';
     pluralName: 'testimonials';
     singularName: 'testimonial';

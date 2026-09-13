@@ -27,7 +27,11 @@ const CEFR_LABEL: Record<string, string> = {
   C2: 'Proficient',
 };
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://app.write-wise.com';
+// NEXT_PUBLIC_APP_URL is the marketing host (deploy-website.yml sets it to
+// https://fluentina.com); the app lives at NEXT_PUBLIC_API_URL. Using the
+// former sent "start free trial" to the marketing homepage, which ignores the
+// signup query params entirely.
+const APP_URL = process.env.NEXT_PUBLIC_API_URL || 'https://app.fluentina.com';
 
 // ─── Component ───────────────────────────────────────────────────
 
@@ -56,7 +60,7 @@ export function ResultsStep() {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-brand">
               <PenTool className="h-4 w-4 text-white" />
             </div>
-            <span className="text-lg font-bold text-foreground">WriteWise</span>
+            <span className="text-lg font-bold text-foreground">Fluentina</span>
           </a>
           <Badge className="bg-primary/10 text-primary border-0">Test Complete</Badge>
         </div>

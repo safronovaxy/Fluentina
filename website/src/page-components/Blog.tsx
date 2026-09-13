@@ -76,7 +76,7 @@ const Blog = ({ initialData }: BlogProps = {}) => {
         throw new Error(data?.error?.message || 'Failed to subscribe');
       }
 
-      toast.success(data.message || "You're subscribed! Welcome to the WriteWise newsletter.");
+      toast.success(data.message || "You're subscribed! Welcome to the Fluentina newsletter.");
       setNewsletterEmail("");
     } catch (error) {
       console.error('Newsletter error:', error);
@@ -89,7 +89,7 @@ const Blog = ({ initialData }: BlogProps = {}) => {
   return (
     <>
       <SEO
-        title="WriteWise Blog - Language Learning Tips & AI Insights"
+        title="Fluentina Blog - Language Learning Tips & AI Insights"
         description="Expert articles on language learning, AI technology, and effective communication. Tips for intermediate learners (A2-C1)."
         keywords="language learning blog, AI language learning, writing tips, CEFR"
         ogType="website"
@@ -99,7 +99,7 @@ const Blog = ({ initialData }: BlogProps = {}) => {
         <div className="container mx-auto px-4">
           <div className="mx-auto max-w-3xl text-center">
             <h1 className="mb-4 text-4xl font-bold text-foreground md:text-5xl">
-              WriteWise <span className="text-gradient-brand">Blog</span>
+              Fluentina <span className="text-gradient-brand">Blog</span>
             </h1>
             <p className="text-lg text-muted-foreground">
               Insights, tips, and research on language learning, AI technology, and effective communication.

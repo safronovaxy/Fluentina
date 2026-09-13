@@ -77,7 +77,7 @@ export default {
   },
 
   /**
-   * Proxies the test generation request to the WriteWise app service.
+   * Proxies the test generation request to the Fluentina app service.
    * Tests are pre-generated and stored in DB; this returns one from the pool.
    */
   async generateTest({
@@ -107,7 +107,7 @@ export default {
   },
 
   /**
-   * Proxies the evaluation request to the WriteWise app service.
+   * Proxies the evaluation request to the Fluentina app service.
    * Uses testId (from the generated PlacementTest.id) instead of the full test object.
    */
   async evaluateTest({

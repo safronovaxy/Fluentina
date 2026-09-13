@@ -76,7 +76,7 @@ const sampleTestimonials = [
     name: 'Sarah Mitchell',
     role: 'Marketing Manager',
     company: 'Tech Solutions Inc.',
-    content: 'WriteWise has been a game-changer for my German learning journey. The instant feedback helps me understand my mistakes immediately, and I can see real progress in my writing skills.',
+    content: 'Fluentina has been a game-changer for my German learning journey. The instant feedback helps me understand my mistakes immediately, and I can see real progress in my writing skills.',
     rating: 5,
     featured: true,
   },
@@ -137,7 +137,7 @@ Consistency is key. Even 10 minutes of daily practice makes a difference.
 Reading exposes you to different writing styles and vocabulary.
 
 ## 3. Get Feedback
-Don't practice in isolation. Use tools like WriteWise for instant feedback.
+Don't practice in isolation. Use tools like Fluentina for instant feedback.
 
 ## 4. Focus on Clarity
 Clear communication is more important than complex vocabulary.
@@ -228,11 +228,11 @@ const samplePricingPlans = [
 
 const samplePages = [
   {
-    title: 'About WriteWise',
+    title: 'About Fluentina',
     slug: 'about',
-    content: `# About WriteWise
+    content: `# About Fluentina
 
-WriteWise is an AI-powered language learning platform that helps you improve your writing skills through personalized practice and instant feedback.
+Fluentina is an AI-powered language learning platform that helps you improve your writing skills through personalized practice and instant feedback.
 
 ## Our Mission
 We believe that everyone should have access to quality language education, regardless of their location or budget.
@@ -244,8 +244,8 @@ We believe that everyone should have access to quality language education, regar
 4. Track your progress
 
 Join thousands of learners improving their writing skills every day.`,
-    seoTitle: 'About WriteWise - AI-Powered Language Learning',
-    seoDescription: 'Learn about WriteWise, the AI platform helping thousands improve their writing skills.',
+    seoTitle: 'About Fluentina - AI-Powered Language Learning',
+    seoDescription: 'Learn about Fluentina, the AI platform helping thousands improve their writing skills.',
   },
 ];
 

@@ -36,7 +36,7 @@ const DEFAULT_HERO: HeroContent = {
   headlineHighlight: "AI Mentor",
   badge: "AI-Powered Real Learning Experience",
   subheading:
-    "WriteWise helps intermediate learners (A2-C1) improve their active language skills through personalized writing exercises, real-time feedback, and adaptive learning paths.",
+    "Fluentina helps intermediate learners (A2-C1) improve their active language skills through personalized writing exercises, real-time feedback, and adaptive learning paths.",
   primaryCta: "Start Learning Free",
 };
 
@@ -109,7 +109,7 @@ const Index = ({ initialFeaturesData, initialTestimonialsData }: IndexProps = {}
             <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
               <Button size="lg" className="bg-gradient-brand px-8 hover:opacity-90" asChild>
                 <a
-                  href="https://app.write-wise.com?mode=signup"
+                  href="https://app.fluentina.com?mode=signup"
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={() => trackEvent('cta', 'click', `hero_primary|${hero.primaryCta}`)}
@@ -204,7 +204,7 @@ const Index = ({ initialFeaturesData, initialTestimonialsData }: IndexProps = {}
         <div className="container mx-auto px-4">
           <div className="mx-auto mb-16 max-w-2xl text-center">
             <h2 className="mb-4 text-3xl font-bold text-foreground md:text-4xl">
-              How <span className="text-gradient-brand">WriteWise</span> Works
+              How <span className="text-gradient-brand">Fluentina</span> Works
             </h2>
             <p className="text-lg text-muted-foreground">
               Start your language learning journey in four simple steps.
@@ -298,7 +298,7 @@ const Index = ({ initialFeaturesData, initialTestimonialsData }: IndexProps = {}
               Join other learners worldwide and start your journey to fluency today. No credit card required.
             </p>
             <Button size="lg" variant="secondary" className="px-8" asChild>
-              <a href="https://app.write-wise.com?mode=signup" target="_blank" rel="noopener noreferrer">
+              <a href="https://app.fluentina.com?mode=signup" target="_blank" rel="noopener noreferrer">
                 Get Started Free
                 <ArrowRight className="ml-2 h-5 w-5" />
               </a>

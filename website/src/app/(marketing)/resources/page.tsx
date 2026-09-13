@@ -6,18 +6,18 @@ import { generateFAQSchema } from '@/lib/seo';
 export const revalidate = 3600;
 
 export const metadata: Metadata = {
-  title: 'Learning Resources — Videos, Guides & Tools | WriteWise',
+  title: 'Learning Resources — Videos, Guides & Tools | Fluentina',
   description:
-    'Free German learning resources: video tutorials, guides, tools, and FAQs to accelerate your language learning journey with WriteWise.',
-  keywords: 'German learning resources, WriteWise tutorials, language learning guides, writing practice tips, WriteWise FAQ',
+    'Free German learning resources: video tutorials, guides, tools, and FAQs to accelerate your language learning journey with Fluentina.',
+  keywords: 'German learning resources, Fluentina tutorials, language learning guides, writing practice tips, Fluentina FAQ',
   alternates: {
-    canonical: 'https://write-wise.com/resources',
+    canonical: 'https://fluentina.com/resources',
   },
   openGraph: {
-    title: 'Learning Resources — Videos, Guides & Tools | WriteWise',
+    title: 'Learning Resources — Videos, Guides & Tools | Fluentina',
     description:
       'Free German learning resources: video tutorials, guides, tools, and FAQs.',
-    url: 'https://write-wise.com/resources',
+    url: 'https://fluentina.com/resources',
     type: 'website',
   },
 };

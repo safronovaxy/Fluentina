@@ -25,8 +25,16 @@ export default [
     config: {
       enabled: true,
       origin: [
+        'http://localhost:3000',
         'http://localhost:8081',
         'http://localhost:5173',
+        'https://fluentina.com',
+        'https://www.fluentina.com',
+        // Kept until the old domain is retired. Merge and deploy are
+        // decoupled, so the CMS can ship this before DNS cutover — dropping
+        // these would break the contact form and placement test for anyone
+        // still on write-wise.com, with a console CORS error and no server
+        // record of the attempt.
         'https://write-wise.com',
         'https://www.write-wise.com',
         'https://writewise-website-m2xkjyh6ta-oe.a.run.app',

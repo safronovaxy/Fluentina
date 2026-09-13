@@ -7,14 +7,14 @@ export const revalidate = 86400;
 
 export const metadata: Metadata = {
   title: 'Terms of Service',
-  description: 'Read the WriteWise Terms of Service to understand the terms and conditions for using our platform.',
+  description: 'Read the Fluentina Terms of Service to understand the terms and conditions for using our platform.',
   alternates: {
-    canonical: 'https://write-wise.com/terms',
+    canonical: 'https://fluentina.com/terms',
   },
   openGraph: {
-    title: 'Terms of Service | WriteWise',
-    description: 'Read the WriteWise Terms of Service to understand the terms and conditions for using our platform.',
-    url: 'https://write-wise.com/terms',
+    title: 'Terms of Service | Fluentina',
+    description: 'Read the Fluentina Terms of Service to understand the terms and conditions for using our platform.',
+    url: 'https://fluentina.com/terms',
     type: 'website',
   },
   robots: { index: true, follow: true },
@@ -32,20 +32,20 @@ const STATIC_TERMS_PAGE: Page = {
 
 ## 1. Acceptance of Terms
 
-By accessing or using WriteWise ("the Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree, please do not use the Service.
+By accessing or using Fluentina ("the Service"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree, please do not use the Service.
 
 ## 2. Description of Service
 
-WriteWise is an AI-powered German language learning platform that provides writing exercises, feedback, and progress tracking. We offer both free and paid subscription plans.
+Fluentina is an AI-powered German language learning platform that provides writing exercises, feedback, and progress tracking. We offer both free and paid subscription plans.
 
 ## 3. Account Registration
 
-To access the full Service, you must create an account by providing a valid email address and a secure password. You are responsible for maintaining the confidentiality of your credentials and for all activity that occurs under your account. Notify us immediately at **contact@write-wise.com** if you suspect unauthorised use of your account.
+To access the full Service, you must create an account by providing a valid email address and a secure password. You are responsible for maintaining the confidentiality of your credentials and for all activity that occurs under your account. Notify us immediately at **contact@fluentina.com** if you suspect unauthorised use of your account.
 
 ## 4. Subscriptions and Payments
 
 ### 4.1 Free and Paid Plans
-WriteWise offers a free tier with limited features and paid subscription plans with full access. Plan details and pricing are described on our [Pricing page](/pricing).
+Fluentina offers a free tier with limited features and paid subscription plans with full access. Plan details and pricing are described on our [Pricing page](/pricing).
 
 ### 4.2 Billing
 Paid subscriptions are billed in advance on a monthly or annual basis. Payments are processed securely by Stripe. By subscribing, you authorise Stripe to charge your payment method on the applicable billing cycle.
@@ -69,9 +69,9 @@ You agree not to:
 
 ## 6. Intellectual Property
 
-All content, software, and materials on WriteWise — including exercises, AI feedback, and UI — are owned by WriteWise or its licensors and are protected by copyright and intellectual property laws. You may not reproduce, distribute, or create derivative works without our express written permission.
+All content, software, and materials on Fluentina — including exercises, AI feedback, and UI — are owned by Fluentina or its licensors and are protected by copyright and intellectual property laws. You may not reproduce, distribute, or create derivative works without our express written permission.
 
-Your submitted content (e.g. writing exercises) remains yours. By submitting it, you grant WriteWise a limited licence to use it solely for providing and improving the Service.
+Your submitted content (e.g. writing exercises) remains yours. By submitting it, you grant Fluentina a limited licence to use it solely for providing and improving the Service.
 
 ## 7. Privacy
 
@@ -83,7 +83,7 @@ The Service is provided "as is" and "as available" without warranties of any kin
 
 ## 9. Limitation of Liability
 
-To the maximum extent permitted by applicable law, WriteWise shall not be liable for any indirect, incidental, special, or consequential damages arising out of or in connection with your use of the Service, even if advised of the possibility of such damages. Our total liability to you for any claim shall not exceed the amount you paid us in the 12 months preceding the claim.
+To the maximum extent permitted by applicable law, Fluentina shall not be liable for any indirect, incidental, special, or consequential damages arising out of or in connection with your use of the Service, even if advised of the possibility of such damages. Our total liability to you for any claim shall not exceed the amount you paid us in the 12 months preceding the claim.
 
 ## 10. Termination
 
@@ -99,7 +99,7 @@ We may update these Terms from time to time. We will notify you of material chan
 
 ## 13. Contact
 
-For questions about these Terms, please contact us at **contact@write-wise.com**.
+For questions about these Terms, please contact us at **contact@fluentina.com**.
 `,
 };
 

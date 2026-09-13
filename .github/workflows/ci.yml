@@ -1,0 +1,190 @@
+name: CI
+
+# Fast suite gating every PR and every push to main (Ways of Working §6,
+# Test Strategy §7): install -> lint -> typecheck -> unit/integration tests
+# (against an ephemeral Postgres) -> build -> funnel e2e (mocked grading
+# provider) -> a golden-set regression job that is a PLACEHOLDER and
+# validates nothing yet (see grading-regression.yml).
+# deploy-website.yml / deploy-cms.yml require a successful run of this
+# workflow for the commit being deployed before they'll run.
+
+on:
+  pull_request:
+    # Stacked branches are the working pattern here, so PRs that target another
+    # feature branch must run CI too — `branches: [main]` alone would skip them.
+    branches: [main, 'chore/**', 'feature/**']
+    # No paths filter: deploy workflows and CI config are as worth gating as
+    # app code, and a PR editing the file that contains the verify-ci gate
+    # previously ran no CI at all.
+  push:
+    branches: [main]
+    # No paths filter here either, and for a sharper reason: deploys require a
+    # successful ci.yml run for the exact SHA being deployed. A docs-only
+    # commit that matched no path produced no run, so main became undeployable
+    # until someone manually dispatched CI.
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Only cancel superseded PR runs. On main, two merges in quick succession
+  # would cancel the first — conclusion `cancelled`, not `success` — and that
+  # commit could then never be deployed, even after the fact.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: checkout persists this token into .git/config, and the job
+# then runs npm lifecycle scripts from the PR branch.
+permissions:
+  contents: read
+
+jobs:
+  website:
+    name: Website — lint, typecheck, test, build, e2e
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: fluentina
+          POSTGRES_USER: fluentina
+          POSTGRES_PASSWORD: fluentina_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fluentina -d fluentina"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://fluentina:fluentina_ci@localhost:5432/fluentina
+      CI: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Lint
+        working-directory: website
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: website
+        run: npm run typecheck
+
+      - name: Unit & integration tests
+        working-directory: website
+        # Vitest — includes the security/ownership/consent/rate-limit
+        # integration suite (Test Strategy §4) once those stories land, run
+        # against the Postgres service container above, never a shared DB.
+        run: npm run test
+
+      - name: Build
+        working-directory: website
+        env:
+          NEXT_PUBLIC_STRAPI_URL: http://localhost:1337
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          NEXT_PUBLIC_API_URL: http://localhost:3000
+          NEXT_PUBLIC_STRIPE_PUBLIC_KEY: pk_test_ci_placeholder
+          NEXT_PUBLIC_GROWTHBOOK_CLIENT_KEY: ''
+        run: npm run build
+
+      - name: Install Playwright browsers
+        working-directory: website
+        # Desktop + mobile Chromium only in CI (Test Strategy §5) — WebKit
+        # stays available locally via `npm run test:e2e` but isn't required
+        # to gate every PR.
+        run: npx playwright install --with-deps chromium
+
+      - name: Start built app
+        working-directory: website
+        env:
+          # Must be on the SERVER, not just the test runner: once KAN-14 lands,
+          # grading is a server-side fetch that Playwright cannot intercept.
+          MOCK_GRADING_PROVIDER: '1'
+        run: |
+          npm run start -- -p 3000 &
+          echo $! > /tmp/next-server.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000 > /dev/null; then
+              echo "App is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App did not become ready in time" >&2
+          exit 1
+
+      # Named for what it actually runs: the marketing regression suite. There
+      # is no funnel yet (KAN-13 onward), and MOCK_GRADING_PROVIDER has no
+      # consumer in the repo today.
+      #
+      # @cms specs are excluded: they need a reachable Strapi with published
+      # content, and no CMS runs in this job. Without this the suite is red on
+      # day one for reasons unrelated to any PR, which is how a pipeline gets
+      # deleted or marked continue-on-error. They still run against a live site
+      # via `npm run test:e2e:live`.
+      - name: E2E (Playwright, no CMS)
+        working-directory: website
+        env:
+          BASE_URL: http://localhost:3000
+          MOCK_GRADING_PROVIDER: '1'
+          # This job owns the server lifecycle (Start/Stop steps above), so
+          # Playwright must not also try to start one — see playwright.config.ts.
+          PLAYWRIGHT_EXTERNAL_SERVER: '1'
+        run: npx playwright test --project=chromium-desktop --project=chromium-mobile --grep-invert "@cms"
+
+      - name: Stop built app
+        if: always()
+        run: kill "$(cat /tmp/next-server.pid)" 2>/dev/null || true
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: website/playwright-report/
+          retention-days: 7
+
+  cms:
+    name: CMS — install & build smoke check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: cms/package-lock.json
+
+      - name: Install dependencies
+        working-directory: cms
+        run: npm ci
+
+      - name: Build
+        working-directory: cms
+        run: npm run build
+
+  grading-regression:
+    # The check name is the only thing a reviewer sees. "AI grading golden-set
+    # regression" going green reads as "grading was validated"; nothing is
+    # called. Say so where it shows.
+    name: AI grading golden-set regression (PLACEHOLDER — validates nothing yet)
+    needs: [website]
+    uses: ./.github/workflows/grading-regression.yml
+    # Explicit, not `secrets: inherit`. Inherit exposed GCP_SA_KEY_BASE64,
+    # STRIPE_SECRET_KEY and the STRAPI_* signing secrets to a called workflow
+    # on every PR run, pre-merge.
+    secrets:
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

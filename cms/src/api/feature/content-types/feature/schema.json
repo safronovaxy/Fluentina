@@ -5,7 +5,7 @@
     "singularName": "feature",
     "pluralName": "features",
     "displayName": "Feature",
-    "description": "Features displayed on the WriteWise website"
+    "description": "Features displayed on the Fluentina website"
   },
   "options": {
     "draftAndPublish": true

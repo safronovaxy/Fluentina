@@ -26,21 +26,21 @@ export async function generateMetadata({
   try {
     const data = await strapiClient.getResource(slug);
     const resource = data.data[0];
-    if (!resource) return { title: 'Video Not Found | WriteWise Resources' };
+    if (!resource) return { title: 'Video Not Found | Fluentina Resources' };
 
     return {
-      title: `${resource.title} | WriteWise Resources`,
+      title: `${resource.title} | Fluentina Resources`,
       description: resource.description,
-      alternates: { canonical: `https://write-wise.com/resources/videos/${slug}` },
+      alternates: { canonical: `https://fluentina.com/resources/videos/${slug}` },
       openGraph: {
-        title: `${resource.title} | WriteWise Resources`,
+        title: `${resource.title} | Fluentina Resources`,
         description: resource.description,
-        url: `https://write-wise.com/resources/videos/${slug}`,
+        url: `https://fluentina.com/resources/videos/${slug}`,
         type: 'website',
       },
     };
   } catch {
-    return { title: 'Video Not Found | WriteWise Resources' };
+    return { title: 'Video Not Found | Fluentina Resources' };
   }
 }
 

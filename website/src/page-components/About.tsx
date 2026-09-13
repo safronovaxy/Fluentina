@@ -51,7 +51,7 @@ const team = [
 ];
 
 const milestones = [
-  { year: "2024", event: "WriteWise founded with a mission to democratize language learning" },
+  { year: "2024", event: "Fluentina founded with a mission to democratize language learning" },
   { year: "2025", event: "Launched beta with 1,000 early adopters" },
   { year: "2026", event: "Scaling up" }
 ];
@@ -68,7 +68,7 @@ const About = () => {
               <span className="text-gradient-brand">Personal</span>
             </h1>
             <p className="text-lg text-muted-foreground md:text-xl">
-              We believe everyone deserves a personal language mentor. WriteWise combines
+              We believe everyone deserves a personal language mentor. Fluentina combines
               the best of AI technology with proven pedagogical methods to create truly
               personalized learning experiences.
             </p>
@@ -87,7 +87,7 @@ const About = () => {
                 </h2>
                 <div className="space-y-4 text-muted-foreground">
                   <p>
-                    WriteWise was born from a simple observation: despite countless language
+                    Fluentina was born from a simple observation: despite countless language
                     learning apps, most learners plateau after reaching intermediate level.
                     Traditional apps focus on vocabulary and basic grammar, but struggle to
                     help learners develop real communication skills.
@@ -98,7 +98,7 @@ const About = () => {
                     private tutoring.
                   </p>
                   <p>
-                    Today, WriteWise helps learners worldwide improve their
+                    Today, Fluentina helps learners worldwide improve their
                     writing, speaking, and overall communication skills in their target
                     language. We're just getting started.
                   </p>
@@ -151,12 +151,12 @@ const About = () => {
             Get in Touch
           </h2>
           <p className="mx-auto mb-8 max-w-xl text-white/80">
-            Have questions about WriteWise? Want to explore partnerships? We'd love to hear from you.
+            Have questions about Fluentina? Want to explore partnerships? We'd love to hear from you.
           </p>
           <div className="mb-8 flex flex-col items-center justify-center gap-6 sm:flex-row">
             <div className="flex items-center gap-2 text-white">
               <Mail className="h-5 w-5" />
-              support@write-wise.com
+              support@fluentina.com
             </div>
             <div className="flex items-center gap-2 text-white">
               <MapPin className="h-5 w-5" />
@@ -164,7 +164,7 @@ const About = () => {
             </div>
           </div>
           <Button size="lg" variant="secondary" asChild>
-            <a href="mailto:support@write-wise.com">
+            <a href="mailto:support@fluentina.com">
               Contact Us
               <ArrowRight className="ml-2 h-5 w-5" />
             </a>

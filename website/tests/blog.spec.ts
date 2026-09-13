@@ -5,9 +5,10 @@
  * post content rendering, and 404 for unknown slugs.
  */
 import { test, expect } from '@playwright/test';
+import { isCritical } from './helpers/console-errors';
 
 test.describe('T6 — Blog listing', () => {
-  test('T6.1 — Blog listing loads with posts', async ({ page }) => {
+  test('T6.1 — @cms Blog listing loads with posts', async ({ page }) => {
     await page.goto('/blog');
     // Should show at least one article/post card
     const cards = page.locator('article, [class*="card"], [class*="post"]');
@@ -25,12 +26,18 @@ test.describe('T6 — Blog listing', () => {
 
   test('T6.3 — Category filter buttons are visible', async ({ page }) => {
     await page.goto('/blog');
-    // "All" button is rendered by the client component once hydrated
+    // "All" button is rendered by the client component once hydrated. It does
+    // not depend on CMS content — the category list always starts with "All" —
+    // but when the CMS is unreachable the client query retries with backoff,
+    // so hydration settles late and unpredictably. Raising the timeout alone
+    // left it flaky under parallel load; waiting for the network to go quiet
+    // makes it deterministic instead of racing a fixed deadline.
+    await page.waitForLoadState('networkidle');
     const allButton = page.getByRole('button', { name: /^all$/i });
-    await expect(allButton).toBeVisible({ timeout: 8000 });
+    await expect(allButton).toBeVisible({ timeout: 20_000 });
   });
 
-  test('T6.4 — Clicking "All" shows posts', async ({ page }) => {
+  test('T6.4 — @cms Clicking "All" shows posts', async ({ page }) => {
     await page.goto('/blog');
     // Wait for React to hydrate and render blog posts first
     const cards = page.locator('article, a[href^="/blog/"]');
@@ -43,7 +50,7 @@ test.describe('T6 — Blog listing', () => {
     await expect(cards.first()).toBeVisible();
   });
 
-  test('T6.5 — Clicking a post card navigates to post page', async ({ page }) => {
+  test('T6.5 — @cms Clicking a post card navigates to post page', async ({ page }) => {
     await page.goto('/blog');
     await page.waitForLoadState('networkidle');
     // Find first link to a blog post
@@ -106,9 +113,10 @@ test.describe('T6 — Blog post', () => {
     });
     await page.goto(`/blog/${firstSlug}`);
     await page.waitForLoadState('networkidle');
-    const critical = errors.filter(e =>
-      !e.includes('favicon') && !e.includes('extension')
-    );
+    // Shared filter, not a local copy: this runs on test:e2e:live, where a
+    // narrower list lacks the analytics and network entries and goes
+    // spuriously red.
+    const critical = errors.filter(isCritical);
     expect(critical).toHaveLength(0);
   });
 });

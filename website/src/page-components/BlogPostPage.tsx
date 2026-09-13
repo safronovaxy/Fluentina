@@ -69,7 +69,7 @@ const BlogPostPage = ({ post, relatedPosts }: Props) => {
               alt={post.featuredImage?.alternativeText || post.title}
               className="h-auto w-full object-cover"
               data-pin-description={post.excerpt || post.title}
-              data-pin-url={`https://write-wise.com/blog/${post.slug}`}
+              data-pin-url={`https://fluentina.com/blog/${post.slug}`}
               data-pin-media={imageUrl}
             />
           </div>
@@ -157,11 +157,11 @@ const BlogPostPage = ({ post, relatedPosts }: Props) => {
             Ready to Improve Your Writing?
           </h2>
           <p className="mx-auto mb-8 max-w-xl text-white/80">
-            Join thousands of learners using WriteWise to master language skills.
+            Join thousands of learners using Fluentina to master language skills.
           </p>
           <Button size="lg" variant="secondary" asChild>
             <a
-              href="https://app.write-wise.com?mode=signup"
+              href="https://app.fluentina.com?mode=signup"
               target="_blank"
               rel="noopener noreferrer"
             >

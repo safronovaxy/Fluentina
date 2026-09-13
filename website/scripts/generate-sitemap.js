@@ -17,7 +17,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const STRAPI_URL =
   process.env.VITE_STRAPI_URL ||
   'https://writewise-cms-m2xkjyh6ta-oe.a.run.app';
-const SITE_URL = 'https://write-wise.com';
+const SITE_URL = 'https://fluentina.com';
 const today = new Date().toISOString().split('T')[0];
 
 const staticPages = [

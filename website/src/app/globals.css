@@ -1,4 +1,4 @@
-/* WriteWise Design System
+/* Fluentina Design System
  * Previously split across globals.css + index.css with a CSS @import chain.
  * Consolidated here so the browser receives a single CSS resource — the old
  * @import caused a cascaded blocking request (parent CSS fetched → parsed →

@@ -48,7 +48,7 @@ export default {
   /**
    * POST /api/placement-test/generate
    *
-   * Proxies test generation to the WriteWise app service.
+   * Proxies test generation to the Fluentina app service.
    */
   async generate(ctx) {
     try {
@@ -73,7 +73,7 @@ export default {
   /**
    * POST /api/placement-test/evaluate
    *
-   * Proxies evaluation to the WriteWise app service,
+   * Proxies evaluation to the Fluentina app service,
    * then sends the detailed report email to the learner.
    */
   async evaluate(ctx) {

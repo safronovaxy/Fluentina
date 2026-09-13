@@ -277,7 +277,7 @@ const TutorApplyForm = () => {
               </FormControl>
               <div className="leading-snug">
                 <FormLabel className="font-normal cursor-pointer">
-                  I agree to be contacted by the WriteWise team regarding my
+                  I agree to be contacted by the Fluentina team regarding my
                   application to the freelance tutor programme.
                 </FormLabel>
                 <FormMessage />
@@ -343,7 +343,7 @@ const benefits = [
     icon: MessageSquare,
     title: "AI-Assisted Review",
     description:
-      "WriteWise pre-reviews student submissions with detailed feedback. You validate and add personal touches — in a fraction of the time.",
+      "Fluentina pre-reviews student submissions with detailed feedback. You validate and add personal touches — in a fraction of the time.",
   },
   {
     icon: Users,
@@ -449,7 +449,7 @@ const Freelancers = () => {
               <span className="text-gradient-brand">Freelance Language Tutoring</span>
             </h1>
             <p className="mx-auto mb-8 max-w-2xl text-lg text-muted-foreground md:text-xl">
-              WriteWise handles exercise discovery and submission review so you spend less time on
+              Fluentina handles exercise discovery and submission review so you spend less time on
               admin and more time on what you love — and on growing your student roster.
             </p>
             <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
@@ -480,7 +480,7 @@ const Freelancers = () => {
               Sound <span className="text-gradient-brand">Familiar?</span>
             </h2>
             <p className="text-lg text-muted-foreground">
-              Every freelance tutor hits these walls. WriteWise is built to break through them.
+              Every freelance tutor hits these walls. Fluentina is built to break through them.
             </p>
           </div>
           <div className="grid gap-8 md:grid-cols-3">
@@ -508,7 +508,7 @@ const Freelancers = () => {
               <span className="text-gradient-brand">Teach Smarter</span>
             </h2>
             <p className="text-lg text-muted-foreground">
-              WriteWise becomes the silent assistant that never takes a day off.
+              Fluentina becomes the silent assistant that never takes a day off.
             </p>
           </div>
           <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-3">
@@ -535,7 +535,7 @@ const Freelancers = () => {
         <div className="container mx-auto px-4">
           <div className="mx-auto mb-16 max-w-2xl text-center">
             <h2 className="mb-4 text-3xl font-bold text-foreground md:text-4xl">
-              How <span className="text-gradient-brand">WriteWise</span> Works for Tutors
+              How <span className="text-gradient-brand">Fluentina</span> Works for Tutors
             </h2>
             <p className="text-lg text-muted-foreground">
               From setup to your first reviewed submission — in under an hour.
@@ -658,7 +658,7 @@ const Freelancers = () => {
                 <span className="text-gradient-brand">Grow Your Business?</span>
               </h2>
               <p className="text-lg text-muted-foreground">
-                Apply for the WriteWise beta for freelance tutors. Three months free — your feedback
+                Apply for the Fluentina beta for freelance tutors. Three months free — your feedback
                 shapes the product.
               </p>
             </div>

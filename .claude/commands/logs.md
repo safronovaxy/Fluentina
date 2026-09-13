@@ -1,4 +1,4 @@
-Fetch and display recent Cloud Run logs for a WriteWise service.
+Fetch and display recent Cloud Run logs for a Fluentina service.
 
 The argument $ARGUMENTS should be "cms", "website", or left empty (defaults to cms).
 

@@ -36,7 +36,7 @@ Here's some ~~strikethrough text~~.
 
 ## Links and Images
 
-Here's a [link to WriteWise](https://write-wise.com).
+Here's a [link to Fluentina](https://fluentina.com).
 
 Here's an internal [link to blog](/blog).
 

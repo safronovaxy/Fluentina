@@ -5,7 +5,7 @@
     "singularName": "page",
     "pluralName": "pages",
     "displayName": "Page",
-    "description": "Static pages for the WriteWise website"
+    "description": "Static pages for the Fluentina website"
   },
   "options": {
     "draftAndPublish": true

@@ -54,7 +54,7 @@ const BlogPost = () => {
       {isLoading ? (
         <>
           <SEO
-            title="Loading... - WriteWise Blog"
+            title="Loading... - Fluentina Blog"
             description="Loading blog post..."
           />
           {/* Loading State */}
@@ -83,15 +83,15 @@ const BlogPost = () => {
       ) : post ? (
         <>
           <SEO
-            title={`${post.title} - WriteWise Blog`}
+            title={`${post.title} - Fluentina Blog`}
             description={post.seoDescription || post.excerpt}
-            keywords={`language learning, ${post.category}, WriteWise blog`}
+            keywords={`language learning, ${post.category}, Fluentina blog`}
             ogType="article"
             ogImage={imageUrl}
             structuredData={generateArticleSchema({
               title: post.title,
               description: post.seoDescription || post.excerpt,
-              url: `https://write-wise.com/blog/${post.slug}`,
+              url: `https://fluentina.com/blog/${post.slug}`,
               datePublished: new Date(post.publishedDate).toISOString(),
               dateModified: post.updatedAt,
               author: post.author,
@@ -230,10 +230,10 @@ const BlogPost = () => {
                 Ready to Improve Your Writing?
               </h2>
               <p className="mx-auto mb-8 max-w-xl text-white/80">
-                Join thousands of learners using WriteWise to master language skills.
+                Join thousands of learners using Fluentina to master language skills.
               </p>
               <Button size="lg" variant="secondary" asChild>
-                <a href="https://app.write-wise.com?mode=signup" target="_blank" rel="noopener noreferrer">
+                <a href="https://app.fluentina.com?mode=signup" target="_blank" rel="noopener noreferrer">
                   Start Learning Free
                 </a>
               </Button>

@@ -9,6 +9,6 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ['/app/', '/api/'],
       },
     ],
-    sitemap: 'https://write-wise.com/sitemap.xml',
+    sitemap: 'https://fluentina.com/sitemap.xml',
   };
 }

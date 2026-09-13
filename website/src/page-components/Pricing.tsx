@@ -70,7 +70,7 @@ const Pricing = ({ initialPricingData, initialFaqData }: PricingProps = {}) => {
       description: plan.description,
       features: plan.features,
       cta: cta,
-      ctaLink: plan.metadata?.ctaLink || "https://app.write-wise.com?mode=signup",
+      ctaLink: plan.metadata?.ctaLink || "https://app.fluentina.com?mode=signup",
       popular: plan.highlighted || false,
       isContactSales: false,
     };
@@ -89,7 +89,7 @@ const Pricing = ({ initialPricingData, initialFaqData }: PricingProps = {}) => {
       "Dedicated consultation & support",
     ],
     cta: "Contact Sales",
-    ctaLink: "mailto:sales@writewise.com",
+    ctaLink: "mailto:sales@fluentina.com",
     popular: false,
     isContactSales: true,
   };
@@ -100,9 +100,9 @@ const Pricing = ({ initialPricingData, initialFaqData }: PricingProps = {}) => {
   return (
     <>
       <SEO
-        title="Pricing - WriteWise Language Learning Plans"
+        title="Pricing - Fluentina Language Learning Plans"
         description="Choose from Free, Pro ($19/mo), or Premium ($49/mo) plans. AI-powered language learning with personalized feedback. Start free, upgrade anytime."
-        keywords="WriteWise pricing, language learning subscription, AI tutor cost"
+        keywords="Fluentina pricing, language learning subscription, AI tutor cost"
         structuredData={faqSchema}
       />
       {/* Hero */}
@@ -241,7 +241,7 @@ const Pricing = ({ initialPricingData, initialFaqData }: PricingProps = {}) => {
             Our team is here to help you find the perfect plan for your learning journey.
           </p>
           <Button variant="outline" size="lg" asChild>
-            <a href="mailto:support@write-wise.com">Contact Support</a>
+            <a href="mailto:support@fluentina.com">Contact Support</a>
           </Button>
         </div>
       </section>

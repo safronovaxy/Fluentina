@@ -1,11 +1,11 @@
-# WriteWise Website — Claude Code Guide
+# Fluentina Website — Claude Code Guide
 
 ## Project Overview
 
-Marketing website + headless CMS for WriteWise (German language learning SaaS).
-- **Domain**: write-wise.com | cms.write-wise.com | app.write-wise.com
+Marketing website + headless CMS for Fluentina (German language learning SaaS).
+- **Domain**: fluentina.com | cms.fluentina.com | app.fluentina.com
 - **GCP Project**: writewise-468912 | Region: europe-west10
-- **GitHub**: https://github.com/AlexVSafronov/Writewise-Website
+- **GitHub**: https://github.com/safronovaxy/Fluentina
 
 ## Structure
 
@@ -22,9 +22,12 @@ Marketing website + headless CMS for WriteWise (German language learning SaaS).
 
 ### Website
 ```bash
-cd website && npm run dev        # Dev server (localhost:5173)
+cd website && npm run dev        # Dev server (localhost:3000, Next.js)
 cd website && npm run build      # Production build
-cd website && npm run test       # Vitest tests
+cd website && npm run lint       # ESLint
+cd website && npm run typecheck  # tsc --noEmit
+cd website && npm run test       # Vitest unit/integration tests
+cd website && npm run test:e2e   # Playwright e2e
 ```
 
 ### CMS
@@ -33,23 +36,39 @@ cd cms && npm run develop        # Dev server with SQLite (localhost:1337/admin)
 cd cms && npm run build          # Production build
 ```
 
-### Deployment (CI/CD via GitHub Actions)
+### Local Postgres (product backend, guest essay flow)
 ```bash
-git push origin main             # Auto-deploys changed service
-gh run list --limit 5            # Check deployment status
-gh run view <run-id>             # Watch a specific run
+docker compose up -d db          # Postgres 16 on localhost:55432 (repo root)
+```
+Local-only, isolated from the shared production Cloud SQL instance — see
+`CONTRIBUTING.md` and Architecture Decisions ADR-1/ADR-10 on Confluence.
+
+### Deployment (CI/CD via GitHub Actions)
+
+> ⚠️ **Merging does not deploy.** Pushing or merging to `main` runs `ci.yml`
+> and nothing else. `main` is kept always-releasable; shipping it is a separate,
+> deliberate action (Ways of Working §6). This changed in the CI/CD rework —
+> it used to auto-deploy on every push, and a lot of older notes still say so.
+
+```bash
+git push origin main                        # Runs ci.yml only. Does NOT deploy.
+gh workflow run deploy-website.yml --ref main   # Deploy the website, deliberately
+gh workflow run deploy-cms.yml --ref main       # Deploy the CMS, deliberately
+gh run list --limit 5                       # Check run status
+gh run view <run-id>                        # Watch a specific run
 ```
 
-> ⚠️ **NEVER run `gh workflow run` after a `git push origin main`.**
-> Both workflows trigger automatically on every push to `main`.
-> Running `gh workflow run` on top of an already-triggered push causes a **concurrent
-> double deployment** which races on the same Cloud Run revision and **fails**.
-> Only use `gh workflow run` when you need to re-deploy **without** a new commit
-> (e.g. to pick up a Secret Manager change), and only when no push-triggered run
-> is already in progress.
->
-> ℹ️ **Never monitor GitHub Actions runs.** After pushing, stop — the user monitors
-> deployment status themselves and will report the outcome if action is needed.
+`gh workflow run` is now the **only** way to deploy — both deploy workflows are
+`workflow_dispatch` only. There is no push trigger left to race against, so the
+old "never run it after a push" warning no longer applies.
+
+Each deploy workflow starts with a `verify-ci` job that refuses to deploy a
+commit unless `ci.yml` has already recorded a successful run for that exact SHA.
+A commit that never passed CI cannot be shipped, whoever triggers it.
+
+> ℹ️ **Never monitor GitHub Actions runs.** After triggering a deploy, stop — the
+> user monitors deployment status themselves and will report the outcome if action
+> is needed.
 
 ### Logs & Monitoring
 ```bash
@@ -64,10 +83,9 @@ gcloud logging read "resource.type=cloud_run_revision AND resource.labels.servic
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 18, Vite 5, TypeScript, Tailwind CSS 3, shadcn/ui (Radix) |
+| Frontend | Next.js 15 (App Router), React 18, TypeScript, Tailwind CSS 3, shadcn/ui (Radix) |
 | Forms | React Hook Form + Zod |
 | Data fetching | TanStack React Query |
-| Routing | React Router DOM v6 |
 | CMS | Strapi v5 |
 | Database | PostgreSQL (Cloud SQL) — schema: `cms` |
 | Storage | Google Cloud Storage (strapi-provider-upload-google-cloud-storage) |
@@ -84,7 +102,9 @@ gcloud logging read "resource.type=cloud_run_revision AND resource.labels.servic
 - `writewise-cms`: 0-2 instances, 1 CPU, 512Mi, port 1337
 
 **Load Balancer:** Static IP `34.160.140.247`
-**SSL:** `writewise-ssl-cert-v2` (auto-renewal, covers all 3 domains)
+**SSL:** `writewise-ssl-cert-v2` (auto-renewal, covers the three `write-wise.com`
+names only — a managed cert's domain list is immutable, so `fluentina.com` needs
+a **new** certificate provisioned before DNS cutover; see `CUSTOM_DOMAIN_SETUP.md`)
 
 **Secrets (all in Google Secret Manager):**
 - `db-password`, `app-keys`, `api-token-salt`, `admin-jwt-secret`, `transfer-token-salt`, `jwt-secret`
@@ -104,18 +124,22 @@ gcloud logging read "resource.type=cloud_run_revision AND resource.labels.servic
 | Rate limiting middleware | `cms/src/middlewares/rate-limit.ts` |
 | GCS storage plugin | `cms/config/plugins.ts` |
 | Database config | `cms/config/database.ts` |
-| Vite config | `website/vite.config.ts` |
-| Website entry | `website/index.html` |
-| Pricing page | `website/src/pages/app/Pricing.tsx` |
-| Contact page | `website/src/pages/app/Contact.tsx` |
+| Next.js config | `website/next.config.ts` |
+| Pricing page (unlinked from nav — ADR-8) | `website/src/page-components/Pricing.tsx` |
+| Contact page | `website/src/page-components/Contact.tsx` |
+| Local dev Postgres | `docker-compose.yml` (repo root) |
 
 ## Website Build-Time Env Vars (Vite)
 
-These are baked in at build time (set in GitHub Secrets):
-- `VITE_STRAPI_URL` — CMS Cloud Run URL
-- `VITE_APP_URL` — https://write-wise.com
-- `VITE_API_URL` — https://app.write-wise.com
-- `VITE_STRIPE_PUBLIC_KEY`
+These are baked in at build time (Docker build args in `deploy-website.yml`,
+set from GitHub Secrets):
+- `NEXT_PUBLIC_STRAPI_URL` — CMS Cloud Run URL
+- `NEXT_PUBLIC_APP_URL` — https://fluentina.com
+- `NEXT_PUBLIC_API_URL` — https://app.fluentina.com
+- `NEXT_PUBLIC_STRIPE_PUBLIC_KEY`
+- `NEXT_PUBLIC_GROWTHBOOK_CLIENT_KEY`
+
+See `website/.env.example` for local development.
 
 ## Security Architecture
 
@@ -132,7 +156,7 @@ These are baked in at build time (set in GitHub Secrets):
 
 **CORS whitelist** (cms/config/middlewares.ts):
 - localhost:8081, localhost:5173
-- https://write-wise.com, https://www.write-wise.com
+- https://fluentina.com, https://www.fluentina.com
 - Cloud Run service URLs
 
 ## Blog Content
@@ -165,4 +189,4 @@ Images: Upload to Strapi media library → GCS → reference URL in markdown.
 - Run `npm install` at root (no root package.json — run inside `cms/` or `website/`)
 - Modify `dist/` directly (build output, gitignored)
 - Use `node_modules/` paths for anything
-- Run `gh workflow run deploy-*.yml` immediately after a `git push origin main` — the push already triggers both workflows; a manual trigger on top causes a concurrent double deployment that fails (see Deployment section above)
+- Assume a merge to `main` deployed anything — it does not, and has not since the CI/CD rework. Deploys are manual `workflow_dispatch` only (see Deployment section above)

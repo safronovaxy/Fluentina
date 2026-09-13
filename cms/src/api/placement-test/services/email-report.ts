@@ -16,7 +16,7 @@ export async function sendPlacementTestReport({
 }) {
   const mailjetApiKey = process.env.MAILJET_API_KEY;
   const mailjetSecretKey = process.env.MAILJET_SECRET_KEY;
-  const senderEmail = process.env.SUPPORT_EMAIL || 'hello@write-wise.com';
+  const senderEmail = process.env.SUPPORT_EMAIL || 'hello@fluentina.com';
 
   if (!mailjetApiKey || !mailjetSecretKey) {
     console.error('Mailjet credentials not configured — skipping report email');
@@ -72,7 +72,7 @@ export async function sendPlacementTestReport({
     .map((a: string) => `<li style="margin-bottom:6px; color:#d97706;">⚠️ ${a}</li>`)
     .join('');
 
-  const appUrl = process.env.WRITEWISE_APP_URL || 'https://app.write-wise.com';
+  const appUrl = process.env.WRITEWISE_APP_URL || 'https://app.fluentina.com';
   const signupUrl = `${appUrl}?mode=signup&level=${results.cefrLevel}&lang=${encodeURIComponent(language)}`;
 
   const htmlBody = `
@@ -81,14 +81,14 @@ export async function sendPlacementTestReport({
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Your WriteWise Language Assessment Results</title>
+  <title>Your Fluentina Language Assessment Results</title>
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#f9fafb; margin:0; padding:0;">
   <div style="max-width:600px; margin:0 auto; background:#ffffff; border-radius:12px; overflow:hidden; margin-top:24px; margin-bottom:24px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
 
     <!-- Header -->
     <div style="background: linear-gradient(135deg, #7c3aed 0%, #3b82f6 100%); padding: 40px 32px; text-align: center;">
-      <h1 style="color:white; margin:0; font-size:28px; font-weight:700;">WriteWise</h1>
+      <h1 style="color:white; margin:0; font-size:28px; font-weight:700;">Fluentina</h1>
       <p style="color:rgba(255,255,255,0.85); margin:8px 0 0; font-size:16px;">Language Assessment Report</p>
     </div>
 
@@ -177,7 +177,7 @@ export async function sendPlacementTestReport({
       <div style="background: linear-gradient(135deg, #7c3aed10 0%, #3b82f610 100%); border-radius:12px; padding:28px;">
         <h3 style="font-size:18px; color:#111827; margin:0 0 8px;">Ready to level up your ${language}?</h3>
         <p style="font-size:14px; color:#6b7280; margin:0 0 20px;">
-          Start your free WriteWise trial and get personalized AI-powered writing exercises tailored to your ${results.cefrLevel} level.
+          Start your free Fluentina trial and get personalized AI-powered writing exercises tailored to your ${results.cefrLevel} level.
         </p>
         <a href="${signupUrl}" style="display:inline-block; background: linear-gradient(135deg, #7c3aed 0%, #3b82f6 100%); color:white; text-decoration:none; padding:14px 32px; border-radius:8px; font-size:16px; font-weight:600;">
           Start Free Trial →
@@ -188,10 +188,10 @@ export async function sendPlacementTestReport({
     <!-- Footer -->
     <div style="background:#f3f4f6; padding:20px 32px; text-align:center;">
       <p style="font-size:13px; color:#9ca3af; margin:0;">
-        © 2025 WriteWise · <a href="https://write-wise.com" style="color:#7c3aed; text-decoration:none;">write-wise.com</a>
+        © 2025 Fluentina · <a href="https://fluentina.com" style="color:#7c3aed; text-decoration:none;">fluentina.com</a>
       </p>
       <p style="font-size:12px; color:#9ca3af; margin:8px 0 0;">
-        You received this email because you took the WriteWise placement test.
+        You received this email because you took the Fluentina placement test.
       </p>
     </div>
 
@@ -202,7 +202,7 @@ export async function sendPlacementTestReport({
   const textBody = `
 Hi ${firstName},
 
-Your WriteWise ${language} Assessment Results are ready!
+Your Fluentina ${language} Assessment Results are ready!
 
 CEFR Level: ${results.cefrLevel}
 Overall Score: ${results.overallScore}/100
@@ -223,7 +223,7 @@ ${results.recommendations}
 
 Start your free trial at: ${signupUrl}
 
-WriteWise — write-wise.com
+Fluentina — fluentina.com
   `.trim();
 
   await mailjet.post('send', { version: 'v3.1' }).request({
@@ -231,10 +231,10 @@ WriteWise — write-wise.com
       {
         From: {
           Email: senderEmail,
-          Name: 'WriteWise Language Assessment',
+          Name: 'Fluentina Language Assessment',
         },
         To: [{ Email: email, Name: firstName }],
-        Subject: `Your ${language} Level: ${results.cefrLevel} — WriteWise Assessment Results`,
+        Subject: `Your ${language} Level: ${results.cefrLevel} — Fluentina Assessment Results`,
         TextPart: textBody,
         HTMLPart: htmlBody,
       },
