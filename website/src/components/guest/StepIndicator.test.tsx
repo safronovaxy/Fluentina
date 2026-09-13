@@ -132,11 +132,19 @@ describe('StepIndicator', () => {
       // instead (see StepIndicator.typecheck.tsx).
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const nonLiteralSteps = [{ id: 'alpha', label: 'Alpha' }];
-      render(<StepIndicator steps={nonLiteralSteps} currentStepId="prompt" />);
+      const { container } = render(
+        <StepIndicator steps={nonLiteralSteps} currentStepId="prompt" />,
+      );
 
       expect(warn).toHaveBeenCalledOnce();
       expect(warn.mock.calls[0][0]).toContain('prompt');
-      expect(screen.queryByRole('listitem', { name: /Prompt/ })).toBeNull();
+      // Assert the absence of the STATE, not of an unrelated label: the
+      // supplied list only has an "alpha" step, so `queryByRole('listitem',
+      // { name: /Prompt/ })` being null is trivially true under any
+      // implementation, including a "be forgiving, highlight step 1 on no
+      // match" one — which is the wrong behaviour this warning exists to
+      // flag, and which this assertion would have missed entirely.
+      expect(container.querySelector('[aria-current="step"]')).toBeNull();
       warn.mockRestore();
     });
 
@@ -146,6 +154,21 @@ describe('StepIndicator', () => {
       render(<StepIndicator steps={CUSTOM_STEPS} currentStepId="alpha" />);
       expect(warn).not.toHaveBeenCalled();
       warn.mockRestore();
+    });
+
+    it('does not warn in production even when currentStepId matches nothing', () => {
+      // Deleting the `process.env.NODE_ENV !== 'production' &&` guard left
+      // 21/21 green before this test existed — nothing exercised the
+      // production branch in either direction. This is the "still silent in
+      // prod" half; the case above is the "still warns in dev" half.
+      vi.stubEnv('NODE_ENV', 'production');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const nonLiteralSteps = [{ id: 'alpha', label: 'Alpha' }];
+      render(<StepIndicator steps={nonLiteralSteps} currentStepId="prompt" />);
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+      vi.unstubAllEnvs();
     });
   });
 });

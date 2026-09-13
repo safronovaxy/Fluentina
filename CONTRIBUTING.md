@@ -78,6 +78,15 @@ always releasable but does not itself deploy to production.
   excludes them by tag and they run against a live site via
   `npm run test:e2e:live`. Without that exclusion the suite is red on every PR
   for reasons unrelated to the change under review.
+- `website/src/**/*.typecheck.tsx` files (introduced in KAN-27) are a third
+  test category alongside Vitest and Playwright, with `tsc --noEmit` — the
+  `typecheck` step above — as their only runner: they render nothing and
+  assert nothing at runtime, only `@ts-expect-error` lines that fail the
+  build if a generic type stops rejecting what it should. Neither Vitest's
+  `include` glob nor Playwright's `testDir` picks them up on purpose. Anyone
+  narrowing `tsconfig.json`'s `include`, or excluding this pattern from it,
+  should know that is the only thing exercising these files at all — nothing
+  else in the pipeline would catch the regression or even go red.
 - `grading-regression.yml` is a **placeholder today — it does not validate
   anything.** It runs on every PR as part of `ci.yml`, finds no
   `test:grading-regression` script, prints a notice saying so, and passes.

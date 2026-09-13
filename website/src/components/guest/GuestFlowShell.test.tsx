@@ -92,6 +92,27 @@ describe('GuestFlowShell', () => {
     expect(header?.className).not.toContain('max-w-3xl');
   });
 
+  it('carries a variant-prefixed contentClassName width override to the header too', () => {
+    // The width helper used to test tokens with a raw `startsWith('max-w-')`,
+    // which fails on anything variant-prefixed or !important-marked —
+    // sm:max-w-5xl, lg:max-w-7xl, !max-w-5xl all reach `main` via
+    // contentClassName (asserted below) but never reached the header, so a
+    // screen that only widens from a breakpoint got a header that stayed
+    // capped at the unprefixed default: exactly the indented-header
+    // misalignment this whole mechanism exists to prevent.
+    render(
+      <GuestFlowShell currentStepId="none" contentClassName="max-w-5xl sm:max-w-7xl">
+        <p>content</p>
+      </GuestFlowShell>,
+    );
+    const main = screen.getByRole('main');
+    const header = screen.getByRole('link', { name: 'Fluentina home' }).parentElement;
+    expect(main.className).toContain('max-w-5xl');
+    expect(main.className).toContain('sm:max-w-7xl');
+    expect(header?.className).toContain('max-w-5xl');
+    expect(header?.className).toContain('sm:max-w-7xl');
+  });
+
   it('leaves the header padding alone when contentClassName overrides padding', () => {
     // Only the width should carry over — a page passing px-0 for its content
     // gutter shouldn't silently strip the header's own padding too, since
@@ -115,6 +136,16 @@ describe('GuestFlowShell', () => {
       </GuestFlowShell>,
     );
     expect(screen.queryByRole('link', { name: 'Back' })).toBeNull();
+
+    // Structural, not just "no link with that name": a permanently-rendered
+    // empty spacer div in the back link's place would also satisfy the
+    // assertion above while still reserving layout space. The header row's
+    // only children should be the brand link and the step list — nothing
+    // else, in either position.
+    const headerRow = screen.getByRole('link', { name: 'Fluentina home' }).parentElement;
+    expect(headerRow?.children).toHaveLength(2);
+    expect(headerRow?.firstElementChild).toHaveAttribute('aria-label', 'Fluentina home');
+    expect(headerRow?.lastElementChild).toHaveAttribute('aria-label', 'Guest essay flow progress');
   });
 
   it('renders a back link before the step indicator when backHref is given', () => {
@@ -132,6 +163,12 @@ describe('GuestFlowShell', () => {
     expect(
       back.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+
+    // Icon-only at every width (KAN-27 fix): the label is carried by
+    // aria-label, never rendered as visible text — a visible "Back to
+    // prompts" span would eat into the step list's width budget again, the
+    // exact truncation bug this shape avoids. See GuestFlowShell.tsx.
+    expect(back).not.toHaveTextContent('Back to prompts');
   });
 
   it('falls back to a default accessible label when backLabel is omitted', () => {

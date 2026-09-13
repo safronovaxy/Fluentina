@@ -29,6 +29,35 @@ export type { GuestFlowStep, GuestFlowStepId };
  * GUEST_FLOW_STEPS itself does); a plain mutable array widens `id` to
  * `string` and the generic can't recover what TypeScript already discarded.
  * The runtime warning below covers that remaining gap.
+ *
+ * "Keeps its literal id types" is narrower than "derived with `as const`",
+ * and that gap is not caught by anything here:
+ *
+ *   <StepIndicator steps={GUEST_FLOW_STEPS.slice(0, 3)} currentStepId="register" />
+ *
+ * compiles and highlights nothing, because `.slice` on the const array's
+ * type still returns a union of the FULL element type, `register` included
+ * — TypeScript has no way to know the slice dropped it. By contrast
+ *
+ *   <StepIndicator steps={GUEST_FLOW_STEPS.filter((s) => s.id !== 'register')} currentStepId="register" />
+ *
+ * IS a compile error, because a `.filter` callback of that shape is inferred
+ * as a type predicate excluding 'register', so `TStep['id']` narrows
+ * correctly. Slicing a subset of the canonical list and expecting the
+ * excluded ids to be rejected does not work; filtering with a matching type
+ * guard does. Neither the runtime warning below helps here, since
+ * `currentStepId` genuinely doesn't match any id in the sliced list — that
+ * is exactly the "no step highlights" case it's meant to catch, and does,
+ * just silently in production without a dev warning being the only signal
+ * something is wrong (see the caveat above for why the warning itself is
+ * dev-only).
+ *
+ * `steps={[]}` is also worth calling out: TStep then infers as `never` (no
+ * element to infer a type from), so `currentStepId` collapses to `'none'`
+ * alone — passing a real step id to a `steps={[]}` call is a compile error,
+ * which was not true before this generic (currentStepId was independently
+ * typed against the canonical list regardless of `steps`). See
+ * StepIndicator.typecheck.tsx for the compiling/non-compiling pair.
  */
 export interface StepIndicatorProps<TStep extends GuestFlowStep = CanonicalGuestFlowStep> {
   /** Defaults to GUEST_FLOW_STEPS. Pass [] on screens with no progress bar. */

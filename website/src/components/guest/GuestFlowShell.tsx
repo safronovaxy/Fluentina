@@ -13,15 +13,20 @@ const DEFAULT_CONTENT_WIDTH_CLASS = 'max-w-3xl';
  * inheriting unrelated overrides — a page passing `px-0` for its content
  * gutter shouldn't also strip the header's own padding.
  *
- * Only the max-w-* tokens from contentClassName are considered; tailwind-
- * merge then resolves them against the default the same way `cn` already
- * does for `main`, so a conflicting width still replaces rather than stacks
- * (pinned by the existing contentClassName test).
+ * A token counts as a width override once variants and the `!important`
+ * marker are stripped — `sm:max-w-5xl` and `!max-w-5xl` are both `max-w-*`
+ * once you discard the `sm:` prefix and the `!`. A raw `token.startsWith`
+ * test missed both: `token.replace(/^!/, '').split(':').pop()` reduces
+ * either to the bare utility before the prefix check. The FULL original
+ * token (variant/`!` included) is still what gets passed to `cn` below —
+ * tailwind-merge resolves variant-scoped classes independently of their
+ * unscoped counterpart, the same way the browser applies them, so stripping
+ * here would silently change which breakpoint the header responds at.
  */
 function resolveContentWidthClassName(contentClassName?: string): string {
   const widthOverrides = contentClassName
     ?.split(/\s+/)
-    .filter((token) => token.startsWith('max-w-'))
+    .filter((token) => token.replace(/^!/, '').split(':').pop()?.startsWith('max-w-'))
     .join(' ');
   return cn(DEFAULT_CONTENT_WIDTH_CLASS, widthOverrides);
 }
@@ -42,7 +47,10 @@ export interface GuestFlowShellProps<TStep extends GuestFlowStep = CanonicalGues
    *
    * A `max-w-*` override here also carries over to the header container
    * (KAN-27), so the two stay visually aligned; other utilities (padding,
-   * etc.) apply to the content column only.
+   * etc.) apply to the content column only. This includes variant-prefixed
+   * and `!important` widths (`sm:max-w-5xl`, `!max-w-5xl`) — a screen that
+   * only widens from a given breakpoint still gets a header that tracks it
+   * at that same breakpoint, not one that stays at the unprefixed default.
    */
   contentClassName?: string;
   /**
@@ -50,9 +58,20 @@ export interface GuestFlowShellProps<TStep extends GuestFlowStep = CanonicalGues
    * indicator (KAN-27). Omit on screens with nothing to go back to, e.g. the
    * landing page — the header renders exactly as before, with no reserved
    * space and no layout shift.
+   *
+   * App-relative paths only (e.g. `/practice/prompt`) — this renders as a
+   * plain `next/link` `href` with no validation, so an absolute URL would be
+   * followed as given. Nothing in this story derives `backHref` from
+   * user-controlled input, but a future story that reads it from a query
+   * param must sanitise it first; this prop is not the place for that guard.
    */
   backHref?: string;
-  /** Accessible name and (from `sm` up) visible label for the back link. Defaults to "Back". */
+  /**
+   * Accessible name for the back link (KAN-27). The link itself is
+   * icon-only at every width — see the header markup below for why — so
+   * this never renders as visible text, only as the link's aria-label.
+   * Defaults to "Back".
+   */
   backLabel?: string;
 }
 
@@ -109,13 +128,23 @@ export function GuestFlowShell<TStep extends GuestFlowStep = CanonicalGuestFlowS
             <span className="hidden sm:inline">Fluentina</span>
           </Link>
           {backHref && (
+            // Icon-only at every width, not "hidden sm:inline" text like the
+            // brand link (KAN-27 fix): the header row is capped at the same
+            // max-w-3xl as `main` (flow-steps.ts explains why widening it is
+            // not an option), so a second shrink-0 text label plus its gap
+            // takes space straight off the step list. Measured on the built
+            // page: with a visible "Back to prompts" label, "Prompt",
+            // "Preview" and "Register" all truncated from 768px up. An
+            // icon-only link's footprint doesn't grow with backLabel, so the
+            // list's budget can't shrink because of it. The accessible name
+            // still comes through as aria-label. p-1.5 pads the 16px icon
+            // out to a 28px tap target — WCAG 2.2's 24x24 minimum.
             <Link
               href={backHref}
-              className="flex shrink-0 items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+              className="flex shrink-0 items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
               aria-label={backLabel ?? 'Back'}
             >
               <ArrowLeft className="h-4 w-4" aria-hidden />
-              <span className="hidden sm:inline">{backLabel ?? 'Back'}</span>
             </Link>
           )}
           <StepIndicator steps={steps} currentStepId={currentStepId} />
