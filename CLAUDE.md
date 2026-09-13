@@ -38,7 +38,7 @@ cd cms && npm run build          # Production build
 
 ### Local Postgres (product backend, guest essay flow)
 ```bash
-docker compose up -d db          # Postgres 16 on localhost:5432 (repo root)
+docker compose up -d db          # Postgres 16 on localhost:55432 (repo root)
 ```
 Local-only, isolated from the shared production Cloud SQL instance — see
 `CONTRIBUTING.md` and Architecture Decisions ADR-1/ADR-10 on Confluence.

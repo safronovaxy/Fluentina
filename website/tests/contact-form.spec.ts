@@ -6,6 +6,7 @@
  * error-handling test verifies the form shows an error gracefully.
  */
 import { test, expect } from '@playwright/test';
+import { isCritical } from './helpers/console-errors';
 
 test.describe('T5 — Contact form', () => {
   test.beforeEach(async ({ page }) => {
@@ -55,7 +56,9 @@ test.describe('T5 — Contact form', () => {
     } else if (await combobox.count() > 0) {
       await combobox.click();
       const items = page.locator('[role="option"]');
-      await expect(items).toHaveCount(await items.count());
+      // Was `toHaveCount(await items.count())` — a value asserted against
+      // itself, which held for any count including zero.
+      await expect(items.first()).toBeVisible();
       expect(await items.count()).toBeGreaterThanOrEqual(3);
     }
   });
@@ -67,12 +70,7 @@ test.describe('T5 — Contact form', () => {
     });
     await page.goto('/contact');
     await page.waitForLoadState('domcontentloaded');
-    // Filter out known non-critical errors (e.g. browser extension noise)
-    const critical = errors.filter(e =>
-      !e.includes('favicon') &&
-      !e.includes('extension') &&
-      !e.includes('ERR_BLOCKED')
-    );
+    const critical = errors.filter(isCritical);
     expect(critical).toHaveLength(0);
   });
 });

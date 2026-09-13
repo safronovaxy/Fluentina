@@ -7,6 +7,12 @@
  * on a CI runner fail the test for reasons unrelated to the page) and too
  * easy to let drift from this one.
  */
+// The suite runs against production too (npm run test:e2e:live), where these
+// errors are real. Anything origin-specific belongs below, not here.
+const isLocalRun = !/^https?:\/\/(www\.)?(fluentina|write-wise)\.com/.test(
+  process.env.BASE_URL ?? 'http://localhost:3000',
+);
+
 export const IGNORED_PATTERNS = [
   /favicon/i,
   /ERR_BLOCKED_BY_CLIENT/i,   // ad blockers in CI
@@ -14,12 +20,23 @@ export const IGNORED_PATTERNS = [
   /net::ERR_/i,               // network errors for 3rd party scripts (GA4 etc in CI)
   /Failed to load resource.*googletagmanager/i,
   /Failed to load resource.*growthbook/i,
-  // CookieYes refuses to run on an unregistered origin and throws a page
-  // error saying so. It fires on every page when the suite runs against
-  // localhost or any preview host, and says nothing about our code.
-  /cookieyes/i,
 ];
 
+/**
+ * Ignored only on non-production origins.
+ *
+ * CookieYes refuses to run on an origin not registered to the account and
+ * throws a page error saying so, which fires on every page when the suite runs
+ * against localhost. On production that same error is the only signal that the
+ * consent banner is not rendering — and DNS cutover to a new domain is exactly
+ * the event that makes a production origin unregistered. Swallowing it there
+ * would mean GDPR consent silently absent with a green suite.
+ */
+const LOCAL_ONLY_PATTERNS = [/cookieyes/i];
+
 export function isCritical(text: string): boolean {
-  return !IGNORED_PATTERNS.some((pattern) => pattern.test(text));
+  const patterns = isLocalRun
+    ? [...IGNORED_PATTERNS, ...LOCAL_ONLY_PATTERNS]
+    : IGNORED_PATTERNS;
+  return !patterns.some((pattern) => pattern.test(text));
 }
