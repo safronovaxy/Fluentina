@@ -6,7 +6,7 @@ import {
   type CanonicalGuestFlowStep,
   type GuestFlowStep,
   type GuestFlowStepId,
-} from './flow-steps';
+} from '../flow-steps';
 
 export type { GuestFlowStep, GuestFlowStepId };
 

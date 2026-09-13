@@ -3,7 +3,7 @@ import { ArrowLeft, PenTool } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { StepIndicator } from './StepIndicator';
 import { LocaleSwitcher } from './LocaleSwitcher';
-import { type CanonicalGuestFlowStep, type GuestFlowStep } from './flow-steps';
+import { type CanonicalGuestFlowStep, type GuestFlowStep } from '../flow-steps';
 import { cn } from '@/lib/utils';
 
 /** The shell's own default content width, shared by the header and main. */

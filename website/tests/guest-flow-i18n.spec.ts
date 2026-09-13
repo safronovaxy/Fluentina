@@ -12,14 +12,34 @@
  * exactly as it was; this file only adds assertions for the surface that
  * changed.
  */
-import { test, expect } from '@playwright/test';
-import { isCritical } from './helpers/console-errors';
+import { test, expect, type Page } from '@playwright/test';
+
+/**
+ * BLOCKING regression this guards: `IntlProvider`/`request.ts` used to
+ * rethrow *every* `IntlError`, including next-intl's own non-fatal
+ * `ENVIRONMENT_FALLBACK` advisory, which fires on the first server-rendered
+ * translation in any process with no configured `timeZone` — i.e. the
+ * first guest request to a freshly started, scale-to-zero server process.
+ * Playwright's own test server had already warmed up by the time these
+ * specs ran, and React recovers a crashed server render client-side, so the
+ * existing suite passed 12/12 against a server that returned a bare 500 to
+ * `curl` on its first request — this whole class of bug was structurally
+ * invisible to a browser-level assertion that only checks the rendered DOM.
+ * `page.goto()`'s response is the wire-level status; asserting it directly,
+ * for both locales, is what makes a regression here fail a test again
+ * instead of quietly passing because React papered over the crash.
+ */
+async function gotoOk(page: Page, path: string) {
+  const response = await page.goto(path);
+  expect(response?.ok(), `${path} should respond 200, got ${response?.status()}`).toBe(true);
+  return response;
+}
 
 test.describe('KAN-9 — guest flow renders in both locales', () => {
   test('English at /practice (no locale prefix — the default locale stays where it already was)', async ({
     page,
   }) => {
-    await page.goto('/practice');
+    await gotoOk(page, '/practice');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
       'Practice a B2-style essay',
     );
@@ -27,7 +47,7 @@ test.describe('KAN-9 — guest flow renders in both locales', () => {
   });
 
   test('German at /de/practice — same screen, translated chrome', async ({ page }) => {
-    await page.goto('/de/practice');
+    await gotoOk(page, '/de/practice');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Übe einen B2-Aufsatz');
     await expect(page.getByRole('button', { name: 'Jetzt üben' })).toBeVisible();
 
@@ -40,10 +60,23 @@ test.describe('KAN-9 — guest flow renders in both locales', () => {
     await expect(page.getByRole('listitem', { name: 'Schritt 1 von 5: Thema' })).toBeAttached();
   });
 
+  test('the German screen\'s server-rendered subtree actually carries lang="de"', async ({
+    page,
+  }) => {
+    // Unit-tested (GuestFlowShell renders `<div lang={locale}>`), but that
+    // only proves the component's own logic — nothing at the unit level
+    // proves the real server-rendered document agrees. Asserted on the
+    // live DOM, not a snapshot, so a locale that resolves correctly for
+    // *text* but not for this attribute (e.g. a hardcoded "en" default
+    // slipping back in) would be caught here.
+    await gotoOk(page, '/de/practice');
+    await expect(page.locator('[lang="de"]')).toBeAttached();
+  });
+
   test('the locale switcher actually changes the rendered language', async ({ page }) => {
     // The acceptance criterion this pins: switching locale changes what's
     // rendered, exercised as a real click + navigation, not a prop change.
-    await page.goto('/practice');
+    await gotoOk(page, '/practice');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
       'Practice a B2-style essay',
     );
@@ -64,12 +97,22 @@ test.describe('KAN-9 — guest flow renders in both locales', () => {
     );
   });
 
-  test('German guest flow is noindex too, same as English (KAN-8)', async ({ page }) => {
-    // The (guest) layout's noindex metadata now sits below [locale] — this is
-    // the regression guard that moving it there didn't quietly scope it to
-    // only the default locale.
-    await page.goto('/de/practice');
-    await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', /noindex/);
+  // Noindex-for-German and zero-console-errors-for-German are covered by
+  // the parameterised describe block in tests/guest-flow.spec.ts (KAN-9:
+  // that file now loops its whole KAN-8 suite over both locale fixtures),
+  // rather than duplicated here as a second, hand-maintained copy of the
+  // same two assertions.
+
+  test('/en/practice (the prefixed default-locale path) redirects to /practice, not a second canonical URL', async ({
+    request,
+  }) => {
+    // routing.ts's own claim, otherwise unasserted: "the two never both
+    // serve as duplicate content." maxRedirects: 0 so Playwright doesn't
+    // follow it and hide the actual status/target being asserted here.
+    const response = await request.get('/en/practice', { maxRedirects: 0 });
+    expect([307, 308]).toContain(response.status());
+    expect(response.headers()['location']).toContain('/practice');
+    expect(response.headers()['location']).not.toContain('/en/practice');
   });
 
   test('/de/practice is absent from the sitemap, same as /practice (scope: guest flow stays unindexed, in every locale)', async ({
@@ -77,22 +120,36 @@ test.describe('KAN-9 — guest flow renders in both locales', () => {
   }) => {
     const response = await request.get('/sitemap.xml');
     const body = await response.text();
-    expect(body).not.toContain('/practice');
-    expect(body).not.toContain('/de/practice');
+    // Exact <loc> pathnames, not raw substring containment: "/practice" is
+    // a substring of "/de/practice", so `body.not.toContain('/practice')`
+    // passing made a second `not.toContain('/de/practice')` check
+    // impossible to fail — of course a string that doesn't appear at all
+    // doesn't appear with a "/de" prefix either. Comparing exact parsed
+    // pathnames makes the two genuinely independent checks.
+    const pathnames = [...body.matchAll(/<loc>(.*?)<\/loc>/g)].map(
+      (m) => new URL(m[1]).pathname,
+    );
+    expect(pathnames).not.toContain('/practice');
+    expect(pathnames).not.toContain('/de/practice');
   });
+});
 
-  test('zero console errors on the German screen', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (err) => {
-      if (isCritical(err.message)) errors.push(err.message);
-    });
-    page.on('console', (msg) => {
-      if (msg.type() === 'error' && isCritical(msg.text())) errors.push(msg.text());
-    });
+test.describe('KAN-9 — browser locale detection (consider item)', () => {
+  // routing.ts's `localeDetection: true` (next-intl's default, now stated
+  // explicitly) means a request for the unprefixed *default*-locale URL
+  // still gets negotiated against the browser's `Accept-Language` header.
+  // This is flagged to Irina as a product question — should a browser
+  // preference override a URL that already unambiguously names a locale? —
+  // and deliberately left as-is here; this test only makes the current,
+  // already-shipping behaviour visible and pinned rather than an unstated
+  // side effect someone has to rediscover by reading next-intl's source.
+  test.use({ locale: 'de-DE' });
 
-    await page.goto('/de/practice');
-    await page.waitForLoadState('networkidle');
-
-    expect(errors, `Console errors on /de/practice:\n${errors.join('\n')}`).toHaveLength(0);
+  test('a German-browser guest requesting /practice is redirected to /de/practice', async ({
+    page,
+  }) => {
+    await page.goto('/practice');
+    await expect(page).toHaveURL(/\/de\/practice$/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Übe einen B2-Aufsatz');
   });
 });

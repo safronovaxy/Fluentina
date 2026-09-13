@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import { renderWithIntl } from '@/test/renderWithIntl';
 import { StepIndicator } from './StepIndicator';
-import { GUEST_FLOW_STEPS } from './flow-steps';
+import { GUEST_FLOW_STEPS } from '../flow-steps';
 
 /**
  * Note on scope: jsdom has no layout and no media queries, so nothing here
@@ -235,6 +235,21 @@ describe('StepIndicator — KAN-9 i18n', () => {
     // onError/getMessageFallback wiring in IntlProvider, next-intl's default
     // behaviour is to log via console.error and silently render the literal
     // string "chrome.guest.progressLabel" in its place.
+    //
+    // Matches the specific message, not a bare `toThrow()`: a bare
+    // `toThrow()` passes on ANY thrown error, including an unrelated render
+    // error that has nothing to do with the missing key this test
+    // constructs — it would still pass if the fail-loud wiring were deleted
+    // outright, as long as something else in the tree happened to throw.
+    //
+    // Asserts on the *key path*, not the exact wording: `onIntlError` (see
+    // src/i18n/errorPolicy.ts) rethrows next-intl's own `IntlError` as-is
+    // rather than replacing it with a hand-written string, since it's
+    // already both accurate and more informative (it names the locale
+    // too). `intlMessageFallback`'s own "Missing translation for ..."
+    // wording is independently tested (errorPolicy.test.ts) — it is not
+    // reachable here because `onError` always runs first, for the same
+    // error, and throws before `getMessageFallback` is ever called.
     const messagesMissingProgressLabel = {
       chrome: { guest: { steps: { prompt: 'Prompt' } } },
     };
@@ -242,6 +257,6 @@ describe('StepIndicator — KAN-9 i18n', () => {
       renderWithIntl(<StepIndicator currentStepId="none" />, {
         messages: messagesMissingProgressLabel,
       }),
-    ).toThrow();
+    ).toThrow(/chrome\.guest\.progressLabel/);
   });
 });

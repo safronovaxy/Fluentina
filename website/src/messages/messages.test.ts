@@ -17,6 +17,23 @@ function flattenKeys(obj: unknown, prefix = ''): string[] {
   );
 }
 
+function getMessage(messages: unknown, key: string): unknown {
+  return key.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], messages);
+}
+
+/**
+ * Top-level ICU placeholder names in a message value — e.g. `index`,
+ * `total`, `label` and `completed` out of `chrome.guest.stepAriaLabel`'s
+ * `"{label}{completed, select, yes {, completed} other {}}"`. Deliberately
+ * only matches `{` immediately followed by a word character: the `{` that
+ * opens an ICU `select`/`plural` case body (e.g. the `{` in `yes {, completed}`)
+ * is always followed by a literal or another `{`, never a bare identifier
+ * character, so it's never mistaken for a placeholder declaration.
+ */
+function extractPlaceholderTokens(value: string): string[] {
+  return [...value.matchAll(/\{(\w+)/g)].map((m) => m[1]).sort();
+}
+
 describe('message catalogues stay in sync (KAN-9)', () => {
   it('en.json and de.json declare exactly the same keys', () => {
     const enKeys = flattenKeys(en).sort();
@@ -27,9 +44,26 @@ describe('message catalogues stay in sync (KAN-9)', () => {
   it('no message value is an empty string (an untranslated key left as a placeholder)', () => {
     for (const [locale, messages] of [['en', en], ['de', de]] as const) {
       for (const key of flattenKeys(messages)) {
-        const value = key.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], messages);
+        const value = getMessage(messages, key);
         expect(typeof value === 'string' && value.trim().length > 0, `${locale}: "${key}"`).toBe(true);
       }
+    }
+  });
+
+  it('en.json and de.json use the same interpolation placeholders per key', () => {
+    // Key parity (above) only proves the two catalogues have the same
+    // shape, not that a translated value still interpolates the same
+    // values. A German value that dropped `{total}` from stepAriaLabel, say
+    // — a typo, not a missing key — would pass every other test here and
+    // silently render "Step 1 of : Thema" instead of failing loudly, since
+    // a message with fewer placeholders than expected isn't a next-intl
+    // error at all, just a value substituted for nothing.
+    for (const key of flattenKeys(en)) {
+      const enValue = getMessage(en, key) as string;
+      const deValue = getMessage(de, key) as string;
+      expect(extractPlaceholderTokens(deValue), `"${key}" (de)`).toEqual(
+        extractPlaceholderTokens(enValue),
+      );
     }
   });
 });

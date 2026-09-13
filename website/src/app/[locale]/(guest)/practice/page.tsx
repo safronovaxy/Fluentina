@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
 import { PenTool, Clock, ShieldCheck } from 'lucide-react';
-import { getTranslations } from 'next-intl/server';
+import { getTranslations, setRequestLocale } from 'next-intl/server';
 import { Button } from '@/components/ui/button';
-import { GuestFlowShell } from '@/components/guest/GuestFlowShell';
+import { GuestFlowShell } from '@/components/guest/chrome/GuestFlowShell';
 import { GUEST_FLOW_STEPS } from '@/components/guest/flow-steps';
 
 export async function generateMetadata({
@@ -11,14 +11,19 @@ export async function generateMetadata({
   params: Promise<{ locale: string }>;
 }): Promise<Metadata> {
   const { locale } = await params;
+  setRequestLocale(locale);
   const t = await getTranslations({ locale, namespace: 'chrome.guest.landing' });
 
   return {
     title: t('metaTitle'),
     description: t('metaDescription'),
-    // Inherited from (guest)/layout.tsx; restated here because this page is
-    // the one most likely to be linked externally before the flow works.
-    robots: { index: false, follow: false },
+    // Deliberately NOT restated here — (guest)/layout.tsx is the single
+    // source for this segment's noindex, and page metadata overrides layout
+    // metadata field by field. A review found that restating an identical
+    // `robots` block here meant deleting the layout's export entirely still
+    // left both noindex tests green, so the segment-level guard — the one
+    // whose whole purpose is protecting a future screen whose author
+    // forgets to think about indexing — had no coverage at all.
   };
 }
 
@@ -37,8 +42,23 @@ export async function generateMetadata({
  * intentionally disabled until the first of those (after KAN-10's guest
  * session/data foundation) exists to link to, rather than pointing at a
  * dead or fake route.
+ *
+ * `setRequestLocale(locale)` — a review found this missing was the reason
+ * neither locale was actually prerendered: `[locale]/layout.tsx` calling it
+ * is not enough on its own, since next-intl's static-rendering support
+ * requires every Server Component actually on the render path to call it,
+ * not just an ancestor layout. Without it here, this page fell through to
+ * reading the locale from request headers, which bails the whole route to
+ * fully dynamic rendering — verified on a clean build (no prerender-
+ * manifest entry for either locale, empty locale output directories).
  */
-export default async function GuestPracticeLandingPage() {
+export default async function GuestPracticeLandingPage({
+  params,
+}: {
+  params: Promise<{ locale: string }>;
+}) {
+  const { locale } = await params;
+  setRequestLocale(locale);
   const t = await getTranslations('chrome.guest.landing');
 
   return (

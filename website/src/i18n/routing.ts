@@ -16,11 +16,26 @@ import { defineRouting } from 'next-intl/routing';
  * next-intl's middleware still enforces one canonical URL per locale: a
  * request for the prefixed default-locale path (`/en/practice`) redirects to
  * the unprefixed one, so the two never both serve as duplicate content.
+ *
+ * `localeDetection: true` (next-intl's default — stated explicitly here,
+ * not left implicit) means the middleware also negotiates from the
+ * request's `Accept-Language` header (and a `NEXT_LOCALE` cookie once one
+ * has been set, e.g. by the locale switcher): a German-browser guest
+ * requesting the *unprefixed* default-locale URL (`/practice`) is
+ * redirected to `/de/practice`, same as a French-browser guest would be if
+ * `fr` existed. That is a real product question — is a browser's language
+ * preference allowed to override a URL that already unambiguously names a
+ * locale? — not one this story is answering; it's flagged separately. This
+ * comment and the test pinning it (tests/guest-flow-i18n.spec.ts) exist so
+ * the current, default behaviour is visible and intentional-looking rather
+ * than an unstated side effect someone has to rediscover by reading
+ * next-intl's source.
  */
 export const routing = defineRouting({
   locales: ['en', 'de'],
   defaultLocale: 'en',
   localePrefix: 'as-needed',
+  localeDetection: true,
 });
 
 export type AppLocale = (typeof routing.locales)[number];
