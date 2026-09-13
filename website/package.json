@@ -102,5 +102,8 @@
     "edge >= 93",
     "not IE 11",
     "not op_mini all"
-  ]
+  ],
+  "optionalDependencies": {
+    "@rollup/rollup-linux-x64-gnu": "^4.24.0"
+  }
 }
