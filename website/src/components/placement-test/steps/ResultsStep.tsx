@@ -27,7 +27,11 @@ const CEFR_LABEL: Record<string, string> = {
   C2: 'Proficient',
 };
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://app.fluentina.com';
+// NEXT_PUBLIC_APP_URL is the marketing host (deploy-website.yml sets it to
+// https://fluentina.com); the app lives at NEXT_PUBLIC_API_URL. Using the
+// former sent "start free trial" to the marketing homepage, which ignores the
+// signup query params entirely.
+const APP_URL = process.env.NEXT_PUBLIC_API_URL || 'https://app.fluentina.com';
 
 // ─── Component ───────────────────────────────────────────────────
 

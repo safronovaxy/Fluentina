@@ -102,7 +102,9 @@ gcloud logging read "resource.type=cloud_run_revision AND resource.labels.servic
 - `writewise-cms`: 0-2 instances, 1 CPU, 512Mi, port 1337
 
 **Load Balancer:** Static IP `34.160.140.247`
-**SSL:** `writewise-ssl-cert-v2` (auto-renewal, covers all 3 domains)
+**SSL:** `writewise-ssl-cert-v2` (auto-renewal, covers the three `write-wise.com`
+names only — a managed cert's domain list is immutable, so `fluentina.com` needs
+a **new** certificate provisioned before DNS cutover; see `CUSTOM_DOMAIN_SETUP.md`)
 
 **Secrets (all in Google Secret Manager):**
 - `db-password`, `app-keys`, `api-token-salt`, `admin-jwt-secret`, `transfer-token-salt`, `jwt-secret`

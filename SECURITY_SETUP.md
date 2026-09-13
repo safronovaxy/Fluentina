@@ -128,9 +128,13 @@ Action: Block request (HTTP 403)
 **SSL Certificate:** `writewise-ssl-cert-v2`
 
 **Domains covered:**
-- `fluentina.com`
-- `www.fluentina.com`
-- `cms.fluentina.com`
+- `write-wise.com`
+- `www.write-wise.com`
+- `cms.write-wise.com`
+
+> ⚠️ The `fluentina.com` names are **not** on this certificate. A Google-managed
+> certificate's domain list is immutable, so a second certificate has to be
+> provisioned and reach ACTIVE before DNS cutover. See `CUSTOM_DOMAIN_SETUP.md`.
 
 **Features:**
 - Automatic renewal by Google

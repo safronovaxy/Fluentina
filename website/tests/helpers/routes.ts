@@ -35,7 +35,9 @@ export const REDIRECT_RULES: Array<{ from: string; to: string; status: 301 | 308
 
 /** Pages that must have real server-rendered content (not an empty #root div) */
 export const SSR_CONTENT_CHECKS: Array<{ route: string; mustContain: RegExp }> = [
-  { route: '/',                      mustContain: /fluentina|learn german|language/i },
+  // Must be specific to the new brand: the old alternation also matched the
+  // pre-rebrand homepage, so it could not detect a half-finished rebrand.
+  { route: '/',                      mustContain: /fluentina/i },
   { route: '/pricing',               mustContain: /plan|price|€|\$/i },
   { route: '/about',                 mustContain: /about|mission|team/i },
   { route: '/blog',                  mustContain: /blog|article|post/i },
