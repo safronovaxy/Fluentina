@@ -7,6 +7,11 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('T4 — Desktop navigation', () => {
+  // The header nav collapses into the hamburger on narrow viewports, so these
+  // assertions only mean anything at a desktop width. Without this they ran on
+  // chromium-mobile too and failed there — which nobody had seen, because the
+  // suite had never been executed.
+  test.use({ viewport: { width: 1280, height: 720 } });
   test('T4.1 — Logo links to homepage', async ({ page }) => {
     await page.goto('/about');
     await page.locator('header a[href="/"]').first().click();
@@ -76,16 +81,18 @@ test.describe('T4 — Mobile navigation', () => {
     await page.goto('/');
     const hamburger = page.locator('button[aria-label="Toggle menu"]');
     await hamburger.click();
-    // At least one nav link should be visible after opening
+    // Scoped to the header: a page-wide query matches the footer's About
+    // link, which is always visible, so this passed whether or not the
+    // hamburger did anything.
     await expect(
-      page.getByRole('link', { name: /^about$/i }).first()
+      page.locator('header').getByRole('link', { name: /^about$/i })
     ).toBeVisible();
   });
 
   test('T4.8 — Mobile menu closes when the toggle is clicked again', async ({ page }) => {
     await page.goto('/');
     const hamburger = page.locator('button[aria-label="Toggle menu"]');
-    const aboutLink = page.getByRole('link', { name: /^about$/i }).first();
+    const aboutLink = page.locator('header').getByRole('link', { name: /^about$/i });
 
     // Open: the nav link becomes visible.
     await hamburger.click();
@@ -102,7 +109,7 @@ test.describe('T4 — Mobile navigation', () => {
     await page.goto('/');
     const hamburger = page.locator('button[aria-label="Toggle menu"]');
     await hamburger.click();
-    const aboutLink = page.getByRole('link', { name: /^about$/i }).first();
+    const aboutLink = page.locator('header').getByRole('link', { name: /^about$/i });
     await expect(aboutLink).toBeVisible();
     await aboutLink.click();
     await expect(page).toHaveURL('/about');

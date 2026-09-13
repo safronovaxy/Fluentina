@@ -10,19 +10,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { STATIC_MARKETING_ROUTES } from './helpers/routes';
-
-const IGNORED_PATTERNS = [
-  /favicon/i,
-  /ERR_BLOCKED_BY_CLIENT/i,   // ad blockers in CI
-  /extension:\/\//i,          // browser extension noise
-  /net::ERR_/i,               // network errors for 3rd party scripts (GA4 etc in CI)
-  /Failed to load resource.*googletagmanager/i,
-  /Failed to load resource.*growthbook/i,
-];
-
-function isCritical(text: string): boolean {
-  return !IGNORED_PATTERNS.some(pattern => pattern.test(text));
-}
+import { isCritical } from './helpers/console-errors';
 
 for (const route of STATIC_MARKETING_ROUTES) {
   test(`T10 — ${route} has zero console errors`, async ({ page }) => {
