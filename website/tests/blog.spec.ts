@@ -25,9 +25,13 @@ test.describe('T6 — Blog listing', () => {
 
   test('T6.3 — Category filter buttons are visible', async ({ page }) => {
     await page.goto('/blog');
-    // "All" button is rendered by the client component once hydrated
+    // "All" button is rendered by the client component once hydrated. It does
+    // not depend on CMS content — the category list always starts with "All" —
+    // but hydration is markedly slower when the CMS is unreachable, because the
+    // client query retries with backoff before settling. At 8s this was flaky
+    // under parallel load: green in isolation, red in a full run.
     const allButton = page.getByRole('button', { name: /^all$/i });
-    await expect(allButton).toBeVisible({ timeout: 8000 });
+    await expect(allButton).toBeVisible({ timeout: 20_000 });
   });
 
   test('T6.4 — @cms Clicking "All" shows posts', async ({ page }) => {

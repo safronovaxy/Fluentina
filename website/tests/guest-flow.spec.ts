@@ -1,18 +1,23 @@
 /**
  * KAN-8 — Guest flow responsive foundation
  *
- * Runs across the configured Playwright projects (chromium-desktop,
- * chromium-mobile — see playwright.config.ts), which is what actually
- * proves AC1/AC2 ("renders and functions correctly on mobile web and
- * desktop web browsers... no native app; web-only, responsive layout"):
- * no manual viewport juggling needed, the project matrix already covers it.
+ * Runs across chromium-desktop (1280px) and chromium-mobile (Pixel 5, 393px).
  *
- * Only the landing page has real content today (the rest of the guest
- * flow — KAN-13 onward — nests under this same GuestFlowShell); this spec
- * is the seam future funnel specs (Test Strategy §5) extend rather than
- * duplicate.
+ * Running on two projects is not by itself proof of responsiveness: an
+ * earlier version of this spec made only viewport-independent assertions, so
+ * the mobile run proved the page loaded at a narrow width and nothing more.
+ * Deleting a breakpoint class — leaving five unlabelled dots on desktop, or
+ * five truncated labels on a phone — passed the whole suite. The
+ * viewport-differential test below is the one that actually fails for that.
+ *
+ * Only the landing page has real content today (the rest of the guest flow,
+ * KAN-13 onward, nests under this same GuestFlowShell); this spec is the seam
+ * future funnel specs (Test Strategy §5) extend rather than duplicate.
  */
 import { test, expect } from '@playwright/test';
+import { isCritical } from './helpers/console-errors';
+
+const isMobileProject = () => test.info().project.name === 'chromium-mobile';
 
 test.describe('KAN-8 — /practice guest flow landing', () => {
   test('loads with no horizontal overflow at the current viewport', async ({ page }) => {
@@ -26,11 +31,45 @@ test.describe('KAN-8 — /practice guest flow landing', () => {
     expect(scrollWidth, 'page should not scroll horizontally').toBeLessThanOrEqual(clientWidth);
   });
 
+  test('step labels are shown on desktop and collapsed to dots on mobile', async ({ page }) => {
+    await page.goto('/practice');
+
+    const firstLabel = page.getByText('Choose prompt', { exact: true });
+    const dots = page.getByRole('listitem');
+
+    // The numbered dots are present at every width — that is the whole point
+    // of the collapse, and is what makes the mobile header usable.
+    await expect(dots).toHaveCount(5);
+
+    if (isMobileProject()) {
+      await expect(firstLabel).toBeHidden();
+    } else {
+      await expect(firstLabel).toBeVisible();
+    }
+  });
+
+  test('every step is announced with a name, at both sizes', async ({ page }) => {
+    // The visible label is display:none on mobile, which removes it from the
+    // accessibility tree entirely. Without an explicit name a screen-reader
+    // user hears "list, 5 items — 1, 2, 3, 4, 5", and a completed step, whose
+    // only content is an aria-hidden check icon, announces as empty.
+    await page.goto('/practice');
+    await expect(
+      page.getByRole('listitem', { name: 'Step 1 of 5: Choose prompt' }),
+    ).toBeAttached();
+    await expect(
+      page.getByRole('listitem', { name: 'Step 5 of 5: Register' }),
+    ).toBeAttached();
+  });
+
   test('renders the step progress and the primary CTA', async ({ page }) => {
     await page.goto('/practice');
 
-    await expect(page.getByRole('list', { name: /guest essay flow progress/i })).toBeVisible();
-    await expect(page.getByRole('listitem')).toHaveCount(5);
+    const progress = page.getByRole('list', { name: /guest essay flow progress/i });
+    await expect(progress).toBeVisible();
+    // Scoped to the progress list rather than page-wide, so this keeps meaning
+    // the same thing once a screen adds any other list.
+    await expect(progress.getByRole('listitem')).toHaveCount(5);
 
     const cta = page.getByRole('button', { name: /start practicing/i });
     await expect(cta).toBeVisible();
@@ -47,13 +86,22 @@ test.describe('KAN-8 — /practice guest flow landing', () => {
 
   test('zero console errors', async ({ page }) => {
     const errors: string[] = [];
-    page.on('pageerror', (err) => errors.push(err.message));
+    // Filter pageerror too, not just console: a third-party script throwing on
+    // an unregistered origin arrives here, not as a console message.
+    page.on('pageerror', (err) => {
+      if (isCritical(err.message)) errors.push(err.message);
+    });
     page.on('console', (msg) => {
-      if (msg.type() === 'error') errors.push(msg.text());
+      if (msg.type() === 'error' && isCritical(msg.text())) errors.push(msg.text());
     });
 
     await page.goto('/practice');
-    await page.waitForLoadState('domcontentloaded');
+    // networkidle, not domcontentloaded: goto already waits for load, and
+    // domcontentloaded fired before that, so the old assertion ran at roughly
+    // the load event — before React hydrates. A hydration mismatch logs its
+    // console.error after that point, so this test passed on precisely the
+    // failure it exists to catch.
+    await page.waitForLoadState('networkidle');
 
     expect(errors, `Console errors on /practice:\n${errors.join('\n')}`).toHaveLength(0);
   });

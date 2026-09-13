@@ -1,56 +1,85 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { StepIndicator, type GuestFlowStep } from './StepIndicator';
+import { StepIndicator } from './StepIndicator';
+import { GUEST_FLOW_STEPS } from './flow-steps';
 
-const STEPS: GuestFlowStep[] = [
-  { id: 'a', label: 'Step A' },
-  { id: 'b', label: 'Step B' },
-  { id: 'c', label: 'Step C' },
-];
-
+/**
+ * Note on scope: jsdom has no layout and no media queries, so nothing here
+ * can prove responsive behaviour. Asserting that a className string contains
+ * "md:inline" only proves the literal is still in the source — it would pass
+ * with Tailwind misconfigured, with the rule overridden, or with the layout
+ * visibly broken. The viewport-differential assertions live in
+ * tests/guest-flow.spec.ts, which runs in a real browser at two widths.
+ *
+ * What this file is for: the state machine, and the accessible names, which
+ * are what every later guest-flow screen inherits.
+ */
 describe('StepIndicator', () => {
-  it('renders one list item per step, labelled for assistive tech', () => {
-    render(<StepIndicator steps={STEPS} currentStepIndex={1} />);
-    const list = screen.getByRole('list', { name: /guest essay flow progress/i });
-    expect(list).toBeInTheDocument();
-    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+  it('renders one item per step', () => {
+    render(<StepIndicator currentStepId="none" />);
+    expect(screen.getAllByRole('listitem')).toHaveLength(GUEST_FLOW_STEPS.length);
   });
 
-  it('marks exactly the current step with aria-current="step"', () => {
-    render(<StepIndicator steps={STEPS} currentStepIndex={1} />);
+  it('pins the canonical step order (Confluence MFS-24805378 user flow)', () => {
+    // Compared against literals, not against GUEST_FLOW_STEPS: deriving the
+    // expectation from the same constant that produced the render meant
+    // dropping a step from the flow still passed.
+    render(<StepIndicator currentStepId="none" />);
+    expect(
+      screen.getAllByRole('listitem').map((li) => li.getAttribute('aria-label')),
+    ).toEqual([
+      'Step 1 of 5: Choose prompt',
+      'Step 2 of 5: Write essay',
+      'Step 3 of 5: Submit',
+      'Step 4 of 5: Preview score',
+      'Step 5 of 5: Register',
+    ]);
+  });
+
+  it('marks exactly the current step with aria-current', () => {
+    render(<StepIndicator currentStepId="write" />);
+    const current = screen.getAllByRole('listitem').filter(
+      (li) => li.getAttribute('aria-current') === 'step',
+    );
+    expect(current).toHaveLength(1);
+    expect(current[0]).toHaveAttribute('aria-label', 'Step 2 of 5: Write essay, current step');
+  });
+
+  it('distinguishes complete, current and upcoming steps in text', () => {
+    // The old version only ever rendered with the last step current, so no
+    // fixture contained an upcoming step at all, and completion was conveyed
+    // by icon and colour with nothing readable to assert.
+    render(<StepIndicator currentStepId="submit" />);
+    const labels = screen.getAllByRole('listitem').map((li) => li.getAttribute('aria-label'));
+    expect(labels[0]).toContain(', completed');
+    expect(labels[1]).toContain(', completed');
+    expect(labels[2]).toContain(', current step');
+    expect(labels[3]).not.toMatch(/completed|current/);
+    expect(labels[4]).not.toMatch(/completed|current/);
+  });
+
+  it('shows every step as upcoming before the flow starts', () => {
+    render(<StepIndicator currentStepId="none" />);
     const items = screen.getAllByRole('listitem');
-    expect(items[0]).not.toHaveAttribute('aria-current');
-    expect(items[1]).toHaveAttribute('aria-current', 'step');
-    expect(items[2]).not.toHaveAttribute('aria-current');
-  });
-
-  it('renders a check icon (aria-hidden) for completed steps, a number for the rest', () => {
-    render(<StepIndicator steps={STEPS} currentStepIndex={2} />);
-    const items = screen.getAllByRole('listitem');
-    // Step A and B are before the current step (index 2) -> complete -> checkmark svg, no visible digit
-    expect(items[0].querySelector('svg')).toBeInTheDocument();
-    expect(items[1].querySelector('svg')).toBeInTheDocument();
-    // Step C is the current step -> shows its 1-based number, not a checkmark
-    expect(items[2]).toHaveTextContent('3');
-    expect(items[2].querySelector('svg')).not.toBeInTheDocument();
-  });
-
-  it('marks no step as current or complete when currentStepIndex is -1 (not started)', () => {
-    render(<StepIndicator steps={STEPS} currentStepIndex={-1} />);
-    for (const item of screen.getAllByRole('listitem')) {
-      expect(item).not.toHaveAttribute('aria-current');
-      expect(item.querySelector('svg')).not.toBeInTheDocument();
+    expect(items.some((li) => li.getAttribute('aria-current') === 'step')).toBe(false);
+    for (const li of items) {
+      expect(li.getAttribute('aria-label')).not.toMatch(/completed|current/);
     }
   });
 
-  it('always renders the text label in the DOM (shown from sm: up via CSS, not JS)', () => {
-    // Responsive behaviour here is CSS-only (Tailwind `hidden sm:inline`), not a
-    // JS-measured breakpoint switch — jsdom doesn't evaluate media queries, so
-    // what we can and should assert is that the label markup exists and carries
-    // the expected responsive utility classes, at every viewport.
-    render(<StepIndicator steps={STEPS} currentStepIndex={0} />);
-    const label = screen.getByText('Step A');
-    expect(label.className).toContain('hidden');
-    expect(label.className).toContain('sm:inline');
+  it('numbers upcoming steps rather than leaving them blank', () => {
+    // The landing page renders with no current step, so every dot is an
+    // upcoming one. Without this, rendering nothing for upcoming steps — five
+    // blank circles on the one screen this story ships — passed every test.
+    render(<StepIndicator currentStepId="none" />);
+    const items = screen.getAllByRole('listitem');
+    items.forEach((li, i) => expect(li).toHaveTextContent(String(i + 1)));
+  });
+
+  it('renders nothing when given an empty step list', () => {
+    const { container } = render(<StepIndicator steps={[]} currentStepId="none" />);
+    // An empty <ol> with a progress label is worse than no indicator for a
+    // screen that wants none, e.g. an error or session-expiry page.
+    expect(container.querySelector('ol')).toBeNull();
   });
 });

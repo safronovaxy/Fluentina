@@ -1,13 +1,23 @@
 import Link from 'next/link';
 import { PenTool } from 'lucide-react';
-import { StepIndicator, type GuestFlowStep } from './StepIndicator';
+import { StepIndicator } from './StepIndicator';
+import { type GuestFlowStep, type GuestFlowStepId } from './flow-steps';
 import { cn } from '@/lib/utils';
 
 export interface GuestFlowShellProps {
   children: React.ReactNode;
-  steps: GuestFlowStep[];
-  currentStepIndex: number;
-  /** Extra classes for the content wrapper — most pages won't need this. */
+  /** Defaults to GUEST_FLOW_STEPS. Pass [] on screens with no progress bar. */
+  steps?: readonly GuestFlowStep[];
+  /** Step id, or 'none' before the flow starts. See StepIndicator. */
+  currentStepId: GuestFlowStepId | 'none';
+  /**
+   * Extra classes for the content wrapper — most pages won't need this.
+   *
+   * Merged with tailwind-merge, so a conflicting utility REPLACES the
+   * default rather than stacking: passing `max-w-5xl` drops `max-w-3xl`,
+   * and `px-0` drops the `px-4` gutter. That is intended, and pinned by a
+   * test, so the next story finds out at test time rather than in review.
+   */
   contentClassName?: string;
 }
 
@@ -27,11 +37,15 @@ export interface GuestFlowShellProps {
 export function GuestFlowShell({
   children,
   steps,
-  currentStepIndex,
+  currentStepId,
   contentClassName,
 }: GuestFlowShellProps) {
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    // min-h-dvh, not min-h-screen: 100vh on iOS Safari and Chrome Android is
+    // the *large* viewport height, which ignores the visible URL bar, so a
+    // short page scrolls for no reason and a bottom-anchored control would
+    // sit under the browser chrome.
+    <div className="flex min-h-dvh flex-col bg-background">
       <header className="border-b bg-card">
         <div className="mx-auto flex max-w-3xl items-center gap-4 px-4 py-3 sm:gap-6 sm:px-6 sm:py-4">
           <Link
@@ -42,7 +56,7 @@ export function GuestFlowShell({
             <PenTool className="h-5 w-5 text-primary" aria-hidden />
             <span className="hidden sm:inline">Fluentina</span>
           </Link>
-          <StepIndicator steps={steps} currentStepIndex={currentStepIndex} />
+          <StepIndicator steps={steps} currentStepId={currentStepId} />
         </div>
       </header>
 

@@ -1,49 +1,58 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { GuestFlowShell } from './GuestFlowShell';
-import { GUEST_FLOW_STEPS } from './flow-steps';
 
 describe('GuestFlowShell', () => {
-  it('renders its children inside the main landmark', () => {
+  it('renders its children inside the main content column', () => {
     render(
-      <GuestFlowShell steps={GUEST_FLOW_STEPS} currentStepIndex={0}>
-        <p>Step content</p>
+      <GuestFlowShell currentStepId="none">
+        <p>Essay goes here</p>
       </GuestFlowShell>,
     );
-    expect(screen.getByRole('main')).toHaveTextContent('Step content');
+    expect(screen.getByRole('main')).toHaveTextContent('Essay goes here');
   });
 
-  it('renders a brand link back to the marketing homepage', () => {
+  it('excludes the marketing chrome and keeps a single main landmark', () => {
     render(
-      <GuestFlowShell steps={GUEST_FLOW_STEPS} currentStepIndex={0}>
+      <GuestFlowShell currentStepId="none">
         <p>content</p>
       </GuestFlowShell>,
     );
-    const homeLink = screen.getByRole('link', { name: /fluentina home/i });
-    expect(homeLink).toHaveAttribute('href', '/');
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Fluentina home' })).toHaveAttribute('href', '/');
   });
 
-  it('renders the full step list from the shared GUEST_FLOW_STEPS constant', () => {
+  it('shows the step indicator by default', () => {
     render(
-      <GuestFlowShell steps={GUEST_FLOW_STEPS} currentStepIndex={0}>
+      <GuestFlowShell currentStepId="prompt">
         <p>content</p>
       </GuestFlowShell>,
     );
-    expect(screen.getAllByRole('listitem')).toHaveLength(GUEST_FLOW_STEPS.length);
+    expect(screen.getByRole('list', { name: 'Guest essay flow progress' })).toBeInTheDocument();
   });
 
-  it('caps content width and keeps safe side padding at every size (no native-app-only APIs)', () => {
+  it('lets a screen opt out of the step indicator', () => {
     render(
-      <GuestFlowShell steps={GUEST_FLOW_STEPS} currentStepIndex={0}>
+      <GuestFlowShell steps={[]} currentStepId="none">
+        <p>content</p>
+      </GuestFlowShell>,
+    );
+    expect(screen.queryByRole('list', { name: 'Guest essay flow progress' })).toBeNull();
+  });
+
+  it('lets contentClassName override the default width, not stack with it', () => {
+    // contentClassName is the shell's one prop with a real failure mode, and
+    // the seam the next guest-flow story will actually use. tailwind-merge
+    // means a conflicting utility REPLACES the default: passing max-w-5xl
+    // drops max-w-3xl rather than producing both. Pinned here so KAN-13/14
+    // discover the semantics from a test rather than from a broken layout.
+    render(
+      <GuestFlowShell currentStepId="none" contentClassName="max-w-5xl">
         <p>content</p>
       </GuestFlowShell>,
     );
     const main = screen.getByRole('main');
-    // max-w-3xl caps desktop reading width; px-4 keeps a >=16px gutter on
-    // phones (widened via sm:px-6 above the sm breakpoint) — see the
-    // artifact-design responsive-gutter rule this mirrors for the product UI.
-    expect(main.className).toContain('max-w-3xl');
-    expect(main.className).toContain('px-4');
-    expect(main.className).toContain('sm:px-6');
+    expect(main.className).toContain('max-w-5xl');
+    expect(main.className).not.toContain('max-w-3xl');
   });
 });

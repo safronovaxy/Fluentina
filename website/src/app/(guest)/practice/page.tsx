@@ -8,7 +8,9 @@ export const metadata: Metadata = {
   title: 'Practice a B2 essay',
   description:
     'Write a B2-level German essay and get instant, AI-graded feedback against the Goethe exam rubric — no account needed to see your score.',
-  robots: { index: false, follow: false }, // no functioning flow behind it yet
+  // Inherited from (guest)/layout.tsx; restated here because this page is
+  // the one most likely to be linked externally before the flow works.
+  robots: { index: false, follow: false },
 };
 
 /**
@@ -26,7 +28,7 @@ export const metadata: Metadata = {
  */
 export default function GuestPracticeLandingPage() {
   return (
-    <GuestFlowShell steps={GUEST_FLOW_STEPS} currentStepIndex={-1}>
+    <GuestFlowShell steps={GUEST_FLOW_STEPS} currentStepId="none">
       <div className="mx-auto max-w-xl text-center">
         <PenTool className="mx-auto h-10 w-10 text-primary" aria-hidden />
         <h1 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl">
