@@ -1,11 +1,38 @@
 import { Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { GUEST_FLOW_STEPS, type GuestFlowStep, type GuestFlowStepId } from './flow-steps';
+import {
+  GUEST_FLOW_STEPS,
+  type CanonicalGuestFlowStep,
+  type GuestFlowStep,
+  type GuestFlowStepId,
+} from './flow-steps';
 
 export type { GuestFlowStep, GuestFlowStepId };
 
-export interface StepIndicatorProps {
-  steps?: readonly GuestFlowStep[];
+/**
+ * Generic over the supplied step list (KAN-27), defaulting to
+ * CanonicalGuestFlowStep so a caller that doesn't pass its own `steps` keeps
+ * exactly today's `GuestFlowStepId | 'none'` narrowing.
+ *
+ * Before this, `steps` was typed `readonly GuestFlowStep[]` (id: plain
+ * string) while `currentStepId` was independently typed against the
+ * canonical list, so the two props could disagree with no type error:
+ *
+ *   const CUSTOM = [{ id: 'alpha', label: 'Alpha' }] as const;
+ *   <StepIndicator steps={CUSTOM} currentStepId="prompt" />
+ *
+ * `currentStepId="prompt"` compiled because it's a valid canonical id, but
+ * `findIndex` against CUSTOM never finds it, so nothing highlights. Typing
+ * `currentStepId` as `TStep['id']` instead — TStep inferred from the actual
+ * `steps` argument — makes that a compile error. This only catches it when
+ * the caller's `steps` list keeps its literal id types (e.g. `as const`, as
+ * GUEST_FLOW_STEPS itself does); a plain mutable array widens `id` to
+ * `string` and the generic can't recover what TypeScript already discarded.
+ * The runtime warning below covers that remaining gap.
+ */
+export interface StepIndicatorProps<TStep extends GuestFlowStep = CanonicalGuestFlowStep> {
+  /** Defaults to GUEST_FLOW_STEPS. Pass [] on screens with no progress bar. */
+  steps?: readonly TStep[];
   /**
    * Id of the step currently in progress, or 'none' before the flow starts.
    *
@@ -13,9 +40,10 @@ export interface StepIndicatorProps {
    * shipped screen hardcoded an integer, so reordering the flow — collapsing
    * 'submit' into 'write', say, or inserting a 'grading' step — silently
    * mis-highlighted every existing page with no type error and no failing
-   * test. An unknown id is a compile error instead.
+   * test. An unknown id is a compile error instead (see TStep above for the
+   * caveat on non-const step lists).
    */
-  currentStepId: GuestFlowStepId | 'none';
+  currentStepId: TStep['id'] | 'none';
   className?: string;
 }
 
@@ -38,15 +66,36 @@ export interface StepIndicatorProps {
  * remaining content is an aria-hidden check icon. Completion is conveyed in
  * text there too, not by icon and colour alone.
  */
-export function StepIndicator({
-  steps = GUEST_FLOW_STEPS,
+export function StepIndicator<TStep extends GuestFlowStep = CanonicalGuestFlowStep>({
+  steps,
   currentStepId,
   className,
-}: StepIndicatorProps) {
-  if (steps.length === 0) return null;
+}: StepIndicatorProps<TStep>) {
+  // Cast, not a default parameter value: GUEST_FLOW_STEPS is typed as
+  // readonly CanonicalGuestFlowStep[], which isn't assignable to
+  // readonly TStep[] for an arbitrary caller-supplied TStep. Safe because
+  // this branch only runs when `steps` was omitted, i.e. the caller is
+  // relying on the default TStep = CanonicalGuestFlowStep.
+  const resolvedSteps = steps ?? (GUEST_FLOW_STEPS as unknown as readonly TStep[]);
+  if (resolvedSteps.length === 0) return null;
 
   const currentStepIndex =
-    currentStepId === 'none' ? -1 : steps.findIndex((s) => s.id === currentStepId);
+    currentStepId === 'none' ? -1 : resolvedSteps.findIndex((s) => s.id === currentStepId);
+
+  // Fallback for the case the generic TStep can't catch: a `steps` list
+  // whose `id` literals were widened to plain `string` (no `as const`), so
+  // TStep infers as `GuestFlowStep` and a mismatched currentStepId compiles.
+  // Runtime-only and dev-mode-only — this can't replace the type check
+  // above, only extend its coverage to non-const callers.
+  if (
+    process.env.NODE_ENV !== 'production' &&
+    currentStepId !== 'none' &&
+    currentStepIndex === -1
+  ) {
+    console.warn(
+      `StepIndicator: currentStepId "${String(currentStepId)}" does not match any id in the supplied steps list — no step will render as current.`,
+    );
+  }
 
   return (
     <ol
@@ -56,7 +105,7 @@ export function StepIndicator({
         className,
       )}
     >
-      {steps.map((step, index) => {
+      {resolvedSteps.map((step, index) => {
         const isComplete = currentStepIndex >= 0 && index < currentStepIndex;
         const isCurrent = index === currentStepIndex;
         // No suffix for the current step: aria-current="step" already
@@ -68,7 +117,7 @@ export function StepIndicator({
           <li
             key={step.id}
             aria-current={isCurrent ? 'step' : undefined}
-            aria-label={`Step ${index + 1} of ${steps.length}: ${step.label}${state}`}
+            aria-label={`Step ${index + 1} of ${resolvedSteps.length}: ${step.label}${state}`}
             className="flex min-w-0 flex-1 flex-col items-center gap-1 md:flex-row md:items-center md:gap-2"
           >
             <span

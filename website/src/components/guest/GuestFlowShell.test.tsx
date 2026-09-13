@@ -63,4 +63,86 @@ describe('GuestFlowShell', () => {
     expect(main.className).toContain('max-w-5xl');
     expect(main.className).not.toContain('max-w-3xl');
   });
+
+  it('gives the header the same max-width as the content column by default', () => {
+    // KAN-27: max-w-3xl used to be hardcoded independently on the header
+    // container and on main, so the two could only agree by coincidence.
+    render(
+      <GuestFlowShell currentStepId="none">
+        <p>content</p>
+      </GuestFlowShell>,
+    );
+    const main = screen.getByRole('main');
+    const header = screen.getByRole('link', { name: 'Fluentina home' }).parentElement;
+    const mainWidthClass = main.className.split(' ').find((c) => c.startsWith('max-w-'));
+    expect(mainWidthClass).toBe('max-w-3xl');
+    expect(header?.className).toContain(mainWidthClass);
+  });
+
+  it('carries a contentClassName width override over to the header too', () => {
+    // Without this, a screen that widens itself (contentClassName="max-w-5xl")
+    // gets a header bar visually indented against its own, wider content.
+    render(
+      <GuestFlowShell currentStepId="none" contentClassName="max-w-5xl">
+        <p>content</p>
+      </GuestFlowShell>,
+    );
+    const header = screen.getByRole('link', { name: 'Fluentina home' }).parentElement;
+    expect(header?.className).toContain('max-w-5xl');
+    expect(header?.className).not.toContain('max-w-3xl');
+  });
+
+  it('leaves the header padding alone when contentClassName overrides padding', () => {
+    // Only the width should carry over — a page passing px-0 for its content
+    // gutter shouldn't silently strip the header's own padding too, since
+    // the header isn't what contentClassName documents itself as touching.
+    render(
+      <GuestFlowShell currentStepId="none" contentClassName="px-0">
+        <p>content</p>
+      </GuestFlowShell>,
+    );
+    const header = screen.getByRole('link', { name: 'Fluentina home' }).parentElement;
+    expect(header?.className).toContain('px-4');
+    expect(header?.className).toContain('max-w-3xl');
+  });
+
+  it('renders no back link when backHref is omitted', () => {
+    // Must degrade cleanly: no empty wrapper, no reserved space, nothing to
+    // cause a layout shift once a later story starts passing backHref.
+    render(
+      <GuestFlowShell currentStepId="none">
+        <p>content</p>
+      </GuestFlowShell>,
+    );
+    expect(screen.queryByRole('link', { name: 'Back' })).toBeNull();
+  });
+
+  it('renders a back link before the step indicator when backHref is given', () => {
+    render(
+      <GuestFlowShell currentStepId="prompt" backHref="/practice/prompt" backLabel="Back to prompts">
+        <p>content</p>
+      </GuestFlowShell>,
+    );
+    const back = screen.getByRole('link', { name: 'Back to prompts' });
+    expect(back).toHaveAttribute('href', '/practice/prompt');
+
+    // "in the header before the step indicator" (KAN-27 AC) — assert the
+    // actual DOM order, not just that both elements exist.
+    const progress = screen.getByRole('list', { name: 'Guest essay flow progress' });
+    expect(
+      back.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('falls back to a default accessible label when backLabel is omitted', () => {
+    render(
+      <GuestFlowShell currentStepId="prompt" backHref="/practice/prompt">
+        <p>content</p>
+      </GuestFlowShell>,
+    );
+    expect(screen.getByRole('link', { name: 'Back' })).toHaveAttribute(
+      'href',
+      '/practice/prompt',
+    );
+  });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { StepIndicator } from './StepIndicator';
 import { GUEST_FLOW_STEPS } from './flow-steps';
@@ -97,5 +97,55 @@ describe('StepIndicator', () => {
     // An empty <ol> with a progress label is worse than no indicator for a
     // screen that wants none, e.g. an error or session-expiry page.
     expect(container.querySelector('ol')).toBeNull();
+  });
+
+  /**
+   * KAN-27 — steps is now generic (TStep extends GuestFlowStep), so
+   * currentStepId's type derives from whatever `steps` list is actually
+   * passed rather than always from the canonical GUEST_FLOW_STEPS. These are
+   * runtime tests of that; see StepIndicator.typecheck.tsx for the
+   * compile-time half — a mismatched currentStepId against a `steps` list
+   * that keeps its literal id types (via `as const`) is a type error, which
+   * a runtime test can't demonstrate on its own.
+   */
+  describe('KAN-27 — custom step lists', () => {
+    const CUSTOM_STEPS = [
+      { id: 'alpha', label: 'Alpha' },
+      { id: 'beta', label: 'Beta' },
+    ] as const;
+
+    it('highlights the matching id in a caller-supplied step list', () => {
+      render(<StepIndicator steps={CUSTOM_STEPS} currentStepId="beta" />);
+      expect(screen.getByRole('listitem', { name: 'Step 2 of 2: Beta' })).toHaveAttribute(
+        'aria-current',
+        'step',
+      );
+    });
+
+    it('warns in development when currentStepId matches nothing in the supplied list', () => {
+      // The exact bug this story fixes: a `steps` list with no `as const`
+      // widens `id` to plain `string`, so `currentStepId="prompt"` compiles
+      // cleanly (it's a valid canonical id) even though it matches nothing
+      // in `nonLiteralSteps` — no `as any` needed, that's what makes it a
+      // silent bug rather than a caught one. This is the runtime safety net
+      // for exactly that gap; the const-list case is caught at compile time
+      // instead (see StepIndicator.typecheck.tsx).
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const nonLiteralSteps = [{ id: 'alpha', label: 'Alpha' }];
+      render(<StepIndicator steps={nonLiteralSteps} currentStepId="prompt" />);
+
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn.mock.calls[0][0]).toContain('prompt');
+      expect(screen.queryByRole('listitem', { name: /Prompt/ })).toBeNull();
+      warn.mockRestore();
+    });
+
+    it('does not warn when currentStepId is "none" or matches an actual step', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      render(<StepIndicator steps={CUSTOM_STEPS} currentStepId="none" />);
+      render(<StepIndicator steps={CUSTOM_STEPS} currentStepId="alpha" />);
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
   });
 });

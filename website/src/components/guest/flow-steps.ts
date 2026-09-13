@@ -39,3 +39,14 @@ export const GUEST_FLOW_STEPS = [
 ] as const satisfies readonly GuestFlowStep[];
 
 export type GuestFlowStepId = (typeof GUEST_FLOW_STEPS)[number]['id'];
+
+/**
+ * The literal element type of GUEST_FLOW_STEPS — narrower than GuestFlowStep,
+ * whose `id` is a plain `string`. Used as the default type argument for
+ * StepIndicator/GuestFlowShell's generic `TStep` (KAN-27), so a caller that
+ * doesn't supply its own `steps` list keeps the same narrow
+ * `currentStepId: GuestFlowStepId | 'none'` compile-time check it had before
+ * those components were made generic — genericity for custom lists must not
+ * loosen the default, canonical-list case back down to plain `string`.
+ */
+export type CanonicalGuestFlowStep = (typeof GUEST_FLOW_STEPS)[number];
