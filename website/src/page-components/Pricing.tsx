@@ -89,7 +89,7 @@ const Pricing = ({ initialPricingData, initialFaqData }: PricingProps = {}) => {
       "Dedicated consultation & support",
     ],
     cta: "Contact Sales",
-    ctaLink: "mailto:sales@writewise.com",
+    ctaLink: "mailto:sales@fluentina.com",
     popular: false,
     isContactSales: true,
   };

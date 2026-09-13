@@ -1,4 +1,5 @@
-import "@testing-library/jest-dom";
+// The /vitest entry is what registers the matchers when `globals` is off.
+import "@testing-library/jest-dom/vitest";
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,

@@ -8,22 +8,22 @@ import { test, expect } from '@playwright/test';
 
 test.describe('T4 — Desktop navigation', () => {
   test('T4.1 — Logo links to homepage', async ({ page }) => {
-    await page.goto('/pricing');
+    await page.goto('/about');
     await page.locator('header a[href="/"]').first().click();
     await expect(page).toHaveURL('/');
   });
 
-  test('T4.2 — Active nav link is highlighted on /pricing', async ({ page }) => {
-    await page.goto('/pricing');
-    // The active pricing link should have a visually distinct style
-    // We check it exists and is within the header
-    const pricingLink = page.locator('header').getByRole('link', { name: /pricing/i }).first();
-    await expect(pricingLink).toBeVisible();
+  test('T4.2 — Active nav link is highlighted on /about', async ({ page }) => {
+    await page.goto('/about');
+    // Pricing was unlinked from nav (ADR-8), so this uses a link that still
+    // exists. Absence of Pricing is asserted by T4.10 below.
+    const aboutLink = page.locator('header').getByRole('link', { name: /about/i }).first();
+    await expect(aboutLink).toBeVisible();
   });
 
   test('T4.3 — All main nav links navigate without 404', async ({ page }) => {
     const navItems = [
-      { label: /pricing/i,       url: '/pricing' },
+      // Pricing deliberately absent — unlinked from nav per ADR-8.
       { label: /about/i,         url: '/about' },
       { label: /blog/i,          url: '/blog' },
       { label: /resources/i,     url: '/resources' },
@@ -78,35 +78,49 @@ test.describe('T4 — Mobile navigation', () => {
     await hamburger.click();
     // At least one nav link should be visible after opening
     await expect(
-      page.getByRole('link', { name: /pricing/i }).first()
+      page.getByRole('link', { name: /^about$/i }).first()
     ).toBeVisible();
   });
 
-  test('T4.8 — Mobile menu closes when X is clicked', async ({ page }) => {
+  test('T4.8 — Mobile menu closes when the toggle is clicked again', async ({ page }) => {
     await page.goto('/');
-    // Open
     const hamburger = page.locator('button[aria-label="Toggle menu"]');
+    const aboutLink = page.getByRole('link', { name: /^about$/i }).first();
+
+    // Open: the nav link becomes visible.
     await hamburger.click();
-    // Close — click again (toggle) or find close button
+    await expect(aboutLink).toBeVisible();
+
+    // Close: it must go away again. The previous version of this test computed
+    // visibility and then asserted expect(true).toBe(true), so it passed whether
+    // or not the menu ever closed.
     await hamburger.click();
-    // Nav links should no longer be in viewport
-    await page.waitForTimeout(300); // allow animation
-    const pricingLink = page.getByRole('link', { name: /^pricing$/i }).first();
-    // Either hidden or not visible
-    const isVisible = await pricingLink.isVisible().catch(() => false);
-    // Mobile menu items are tucked away — they shouldn't be visible in the viewport
-    // (some implementations hide them via height/opacity, others via display:none)
-    // We consider this pass if no error was thrown navigating to the page
-    expect(true).toBe(true); // structural check done above
+    await expect(aboutLink).toBeHidden();
   });
 
   test('T4.9 — Mobile nav links work', async ({ page }) => {
     await page.goto('/');
     const hamburger = page.locator('button[aria-label="Toggle menu"]');
     await hamburger.click();
-    const pricingLink = page.getByRole('link', { name: /pricing/i }).first();
-    await expect(pricingLink).toBeVisible();
-    await pricingLink.click();
-    await expect(page).toHaveURL('/pricing');
+    const aboutLink = page.getByRole('link', { name: /^about$/i }).first();
+    await expect(aboutLink).toBeVisible();
+    await aboutLink.click();
+    await expect(page).toHaveURL('/about');
+  });
+});
+
+// Regression guard for ADR-8. The route and its Stripe plumbing stay in place
+// and reachable — only the nav entries were removed — so without this, nothing
+// stops a later change from quietly re-linking it.
+test.describe('T4 — Pricing is unlinked from navigation (ADR-8)', () => {
+  test('T4.10 — Neither header nor footer links to /pricing', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('header a[href="/pricing"]')).toHaveCount(0);
+    await expect(page.locator('footer a[href="/pricing"]')).toHaveCount(0);
+  });
+
+  test('T4.11 — /pricing itself still serves', async ({ request }) => {
+    const response = await request.get('/pricing');
+    expect(response.status()).toBe(200);
   });
 });

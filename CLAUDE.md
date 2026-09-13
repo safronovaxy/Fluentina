@@ -44,22 +44,31 @@ Local-only, isolated from the shared production Cloud SQL instance — see
 `CONTRIBUTING.md` and Architecture Decisions ADR-1/ADR-10 on Confluence.
 
 ### Deployment (CI/CD via GitHub Actions)
+
+> ⚠️ **Merging does not deploy.** Pushing or merging to `main` runs `ci.yml`
+> and nothing else. `main` is kept always-releasable; shipping it is a separate,
+> deliberate action (Ways of Working §6). This changed in the CI/CD rework —
+> it used to auto-deploy on every push, and a lot of older notes still say so.
+
 ```bash
-git push origin main             # Auto-deploys changed service
-gh run list --limit 5            # Check deployment status
-gh run view <run-id>             # Watch a specific run
+git push origin main                        # Runs ci.yml only. Does NOT deploy.
+gh workflow run deploy-website.yml --ref main   # Deploy the website, deliberately
+gh workflow run deploy-cms.yml --ref main       # Deploy the CMS, deliberately
+gh run list --limit 5                       # Check run status
+gh run view <run-id>                        # Watch a specific run
 ```
 
-> ⚠️ **NEVER run `gh workflow run` after a `git push origin main`.**
-> Both workflows trigger automatically on every push to `main`.
-> Running `gh workflow run` on top of an already-triggered push causes a **concurrent
-> double deployment** which races on the same Cloud Run revision and **fails**.
-> Only use `gh workflow run` when you need to re-deploy **without** a new commit
-> (e.g. to pick up a Secret Manager change), and only when no push-triggered run
-> is already in progress.
->
-> ℹ️ **Never monitor GitHub Actions runs.** After pushing, stop — the user monitors
-> deployment status themselves and will report the outcome if action is needed.
+`gh workflow run` is now the **only** way to deploy — both deploy workflows are
+`workflow_dispatch` only. There is no push trigger left to race against, so the
+old "never run it after a push" warning no longer applies.
+
+Each deploy workflow starts with a `verify-ci` job that refuses to deploy a
+commit unless `ci.yml` has already recorded a successful run for that exact SHA.
+A commit that never passed CI cannot be shipped, whoever triggers it.
+
+> ℹ️ **Never monitor GitHub Actions runs.** After triggering a deploy, stop — the
+> user monitors deployment status themselves and will report the outcome if action
+> is needed.
 
 ### Logs & Monitoring
 ```bash
@@ -93,7 +102,9 @@ gcloud logging read "resource.type=cloud_run_revision AND resource.labels.servic
 - `writewise-cms`: 0-2 instances, 1 CPU, 512Mi, port 1337
 
 **Load Balancer:** Static IP `34.160.140.247`
-**SSL:** `writewise-ssl-cert-v2` (auto-renewal, covers all 3 domains)
+**SSL:** `writewise-ssl-cert-v2` (auto-renewal, covers the three `write-wise.com`
+names only — a managed cert's domain list is immutable, so `fluentina.com` needs
+a **new** certificate provisioned before DNS cutover; see `CUSTOM_DOMAIN_SETUP.md`)
 
 **Secrets (all in Google Secret Manager):**
 - `db-password`, `app-keys`, `api-token-salt`, `admin-jwt-secret`, `transfer-token-salt`, `jwt-secret`
@@ -178,4 +189,4 @@ Images: Upload to Strapi media library → GCS → reference URL in markdown.
 - Run `npm install` at root (no root package.json — run inside `cms/` or `website/`)
 - Modify `dist/` directly (build output, gitignored)
 - Use `node_modules/` paths for anything
-- Run `gh workflow run deploy-*.yml` immediately after a `git push origin main` — the push already triggers both workflows; a manual trigger on top causes a concurrent double deployment that fails (see Deployment section above)
+- Assume a merge to `main` deployed anything — it does not, and has not since the CI/CD rework. Deploys are manual `workflow_dispatch` only (see Deployment section above)

@@ -55,7 +55,8 @@ separate merge-approver role):
 
 - Solution Architect has approved
 - Test Lead has approved
-- CI is green (lint, typecheck, unit, integration, e2e)
+- CI is green — and a run actually exists. A PR with no `ci.yml` run at all
+  satisfies "nothing is red" without having tested anything; that is not green.
 - The Jira story's acceptance criteria are demonstrably met
 
 The Jira ticket moves to **Done** on merge.
@@ -65,12 +66,28 @@ The Jira ticket moves to **Done** on merge.
 **Merging and deploying are two separate actions.** Merging to `main` keeps it
 always releasable but does not itself deploy to production.
 
-- Every PR runs the full fast suite (`ci.yml`): install → lint → typecheck →
-  unit/integration tests → build → funnel Playwright e2e against a mocked
-  grading provider.
-- Anything touching the prompt template or a `GradingProvider` implementation
-  also runs the real-provider golden-set regression check
-  (`grading-regression.yml`).
+- Every PR runs `ci.yml`: install → lint → typecheck → Vitest → build →
+  Playwright against the locally built app.
+- **What that covers today is narrower than it sounds.** There are no
+  integration tests and no funnel specs yet — the Playwright suite is the
+  marketing regression suite, and the Vitest suite is the component tests plus
+  the wiring check in `src/test/setup.test.tsx`. The Postgres service container
+  and the `MOCK_GRADING_PROVIDER` flag are both provisioned ahead of the
+  stories that will use them, and neither is consumed by anything yet.
+- Specs tagged `@cms` need a reachable Strapi with published content, so CI
+  excludes them by tag and they run against a live site via
+  `npm run test:e2e:live`. Without that exclusion the suite is red on every PR
+  for reasons unrelated to the change under review.
+- `grading-regression.yml` is a **placeholder today — it does not validate
+  anything.** It runs on every PR as part of `ci.yml`, finds no
+  `test:grading-regression` script, prints a notice saying so, and passes.
+  Do not read a passing CI run as evidence that grading output is sound.
+  It becomes a real check, calling the live provider against a golden essay
+  set, once KAN-4 and KAN-16 land that script. Whether it should then run on
+  every PR or only when the prompt template or a `GradingProvider`
+  implementation changes is **deliberately undecided** — that choice only has
+  a cost (live API spend and time on each run) once the check does real work,
+  so it is deferred until then.
 - Deployment (`deploy-website.yml` / `deploy-cms.yml`) is a separate,
   deliberate, manually-triggered action gated on `ci.yml` having passed for
   the commit being deployed — not automatic on every merge.
