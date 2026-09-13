@@ -3,32 +3,38 @@ name: CI
 # Fast suite gating every PR and every push to main (Ways of Working §6,
 # Test Strategy §7): install -> lint -> typecheck -> unit/integration tests
 # (against an ephemeral Postgres) -> build -> funnel e2e (mocked grading
-# provider) -> the real-provider AI-grading golden-set regression check.
+# provider) -> a golden-set regression job that is a PLACEHOLDER and
+# validates nothing yet (see grading-regression.yml).
 # deploy-website.yml / deploy-cms.yml require a successful run of this
 # workflow for the commit being deployed before they'll run.
 
 on:
   pull_request:
-    branches: [main]
-    paths:
-      - 'website/**'
-      - 'cms/**'
-      - 'docker-compose.yml'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/grading-regression.yml'
+    # Stacked branches are the working pattern here, so PRs that target another
+    # feature branch must run CI too — `branches: [main]` alone would skip them.
+    branches: [main, 'chore/**', 'feature/**']
+    # No paths filter: deploy workflows and CI config are as worth gating as
+    # app code, and a PR editing the file that contains the verify-ci gate
+    # previously ran no CI at all.
   push:
     branches: [main]
-    paths:
-      - 'website/**'
-      - 'cms/**'
-      - 'docker-compose.yml'
-      - '.github/workflows/ci.yml'
-      - '.github/workflows/grading-regression.yml'
+    # No paths filter here either, and for a sharper reason: deploys require a
+    # successful ci.yml run for the exact SHA being deployed. A docs-only
+    # commit that matched no path produced no run, so main became undeployable
+    # until someone manually dispatched CI.
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only cancel superseded PR runs. On main, two merges in quick succession
+  # would cancel the first — conclusion `cancelled`, not `success` — and that
+  # commit could then never be deployed, even after the fact.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: checkout persists this token into .git/config, and the job
+# then runs npm lifecycle scripts from the PR branch.
+permissions:
+  contents: read
 
 jobs:
   website:
@@ -101,6 +107,10 @@ jobs:
 
       - name: Start built app
         working-directory: website
+        env:
+          # Must be on the SERVER, not just the test runner: once KAN-14 lands,
+          # grading is a server-side fetch that Playwright cannot intercept.
+          MOCK_GRADING_PROVIDER: '1'
         run: |
           npm run start -- -p 3000 &
           echo $! > /tmp/next-server.pid
@@ -114,15 +124,21 @@ jobs:
           echo "App did not become ready in time" >&2
           exit 1
 
-      - name: Funnel e2e (mocked grading provider)
+      # Named for what it actually runs: the marketing regression suite. There
+      # is no funnel yet (KAN-13 onward), and MOCK_GRADING_PROVIDER has no
+      # consumer in the repo today.
+      #
+      # @cms specs are excluded: they need a reachable Strapi with published
+      # content, and no CMS runs in this job. Without this the suite is red on
+      # day one for reasons unrelated to any PR, which is how a pipeline gets
+      # deleted or marked continue-on-error. They still run against a live site
+      # via `npm run test:e2e:live`.
+      - name: E2E (Playwright, no CMS)
         working-directory: website
         env:
           BASE_URL: http://localhost:3000
-          # Flag for the guest-funnel specs (KAN-14 onward) to intercept
-          # grading calls instead of hitting Mistral/Claude — see Test
-          # Strategy §5. No-op today: the funnel doesn't exist in code yet.
           MOCK_GRADING_PROVIDER: '1'
-        run: npx playwright test --project=chromium-desktop --project=chromium-mobile
+        run: npx playwright test --project=chromium-desktop --project=chromium-mobile --grep-invert "@cms"
 
       - name: Stop built app
         if: always()
@@ -157,7 +173,15 @@ jobs:
         run: npm run build
 
   grading-regression:
-    name: AI grading golden-set regression
+    # The check name is the only thing a reviewer sees. "AI grading golden-set
+    # regression" going green reads as "grading was validated"; nothing is
+    # called. Say so where it shows.
+    name: AI grading golden-set regression (PLACEHOLDER — validates nothing yet)
     needs: [website]
     uses: ./.github/workflows/grading-regression.yml
-    secrets: inherit
+    # Explicit, not `secrets: inherit`. Inherit exposed GCP_SA_KEY_BASE64,
+    # STRIPE_SECRET_KEY and the STRAPI_* signing secrets to a called workflow
+    # on every PR run, pre-merge.
+    secrets:
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

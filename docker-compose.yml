@@ -4,7 +4,7 @@
 ##
 ## Usage:
 ##   docker compose up -d db
-##   psql postgres://fluentina:fluentina_dev@localhost:5432/fluentina
+##   psql postgres://fluentina:fluentina_dev@localhost:55432/fluentina
 ##
 ## This gives every developer (including non-engineers checking out `main`
 ## per the Ways of Working page) an isolated local database that can never
@@ -20,7 +20,10 @@ services:
       POSTGRES_USER: fluentina
       POSTGRES_PASSWORD: fluentina_dev
     ports:
-      - '5432:5432'
+      # Deliberately not 5432: that is where cloud-sql-proxy conventionally
+      # listens, and having both meant either a bind failure or an app
+      # pointed at production while believing it was local.
+      - '55432:5432'
     volumes:
       - fluentina-db-dev-data:/var/lib/postgresql/data
     healthcheck:

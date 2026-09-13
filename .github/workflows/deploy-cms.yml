@@ -24,8 +24,12 @@ env:
 
 jobs:
   verify-ci:
-    name: Verify ci.yml passed for this commit
+    name: Verify main, and that ci.yml passed for this commit
     runs-on: ubuntu-latest
+    # workflow_dispatch accepts ANY ref. Without this, a feature branch whose
+    # PR had passed CI satisfied the SHA check below, and actions/checkout in
+    # the deploy job would then ship that unmerged branch to production.
+    if: github.ref == 'refs/heads/main'
     permissions:
       actions: read
     steps:
@@ -41,16 +45,26 @@ jobs:
               head_sha: sha,
               status: 'completed',
             });
-            const ok = data.workflow_runs.find(r => r.conclusion === 'success');
+            // A pull_request run reports the PR branch tip as head_sha, so a
+            // SHA match alone does not mean CI passed for this commit ON main.
+            // Require a push-event run on main.
+            const ok = data.workflow_runs.find(
+              r => r.conclusion === 'success' &&
+                   r.event === 'push' &&
+                   r.head_branch === 'main'
+            );
             if (!ok) {
+              const seen = data.workflow_runs
+                .map(r => `${r.event}/${r.head_branch}: ${r.conclusion}`)
+                .join(', ') || 'none';
               core.setFailed(
-                `No successful ci.yml run found for commit ${sha}. ` +
+                `No successful push-to-main ci.yml run found for commit ${sha}. ` +
                 `Deploys require ci.yml to pass for the exact commit being ` +
-                `deployed (Ways of Working §6 / Test Strategy §7) — push or ` +
-                `re-run ci.yml on this commit first.`
+                `deployed (Ways of Working §6 / Test Strategy §7). ` +
+                `Runs seen for this SHA: ${seen}.`
               );
             } else {
-              core.info(`ci.yml passed for ${sha}: ${ok.html_url}`);
+              core.info(`ci.yml passed on main for ${sha}: ${ok.html_url}`);
             }
 
   deploy:

@@ -25,11 +25,19 @@ name: AI Grading Golden-Set Regression
 
 on:
   workflow_call:
+    secrets:
+      MISTRAL_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   golden-set-regression:
-    name: Golden-set regression (real provider)
+    name: PLACEHOLDER — golden-set harness not built yet
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +58,12 @@ jobs:
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          if npm run 2>/dev/null | grep -q "test:grading-regression"; then
+          # Parse the manifest rather than grepping `npm run` output: the old
+          # form took grep's exit status with npm's stderr discarded, so a
+          # broken checkout or malformed package.json fell through to the
+          # friendly "not built yet" notice and went green. It was also a
+          # substring match, so test:grading-regression-baseline satisfied it.
+          if node -e "process.exit(require('./package.json').scripts?.['test:grading-regression'] ? 0 : 1)"; then
             npm run test:grading-regression
           else
             echo "::notice title=Golden-set harness not built yet::The GradingProvider abstraction, prompt template, and golden essay set (KAN-4/KAN-16, Architecture Decisions ADR-4/ADR-5) don't exist in the repo yet, so there's nothing to run against the real provider."
