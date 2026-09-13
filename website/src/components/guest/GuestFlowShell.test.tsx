@@ -22,13 +22,21 @@ describe('GuestFlowShell', () => {
     expect(screen.getByRole('link', { name: 'Fluentina home' })).toHaveAttribute('href', '/');
   });
 
-  it('shows the step indicator by default', () => {
+  it('forwards the current step id to the indicator', () => {
+    // The shell's whole job as a foundation is passing this down. Asserting
+    // only that the list exists meant hardcoding currentStepId="none" in the
+    // shell left every test in the repo green, and every later screen would
+    // have rendered with no step highlighted.
     render(
       <GuestFlowShell currentStepId="prompt">
         <p>content</p>
       </GuestFlowShell>,
     );
     expect(screen.getByRole('list', { name: 'Guest essay flow progress' })).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: 'Step 1 of 5: Prompt' })).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
   });
 
   it('lets a screen opt out of the step indicator', () => {

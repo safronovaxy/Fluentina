@@ -28,10 +28,10 @@ describe('StepIndicator', () => {
     expect(
       screen.getAllByRole('listitem').map((li) => li.getAttribute('aria-label')),
     ).toEqual([
-      'Step 1 of 5: Choose prompt',
-      'Step 2 of 5: Write essay',
+      'Step 1 of 5: Prompt',
+      'Step 2 of 5: Write',
       'Step 3 of 5: Submit',
-      'Step 4 of 5: Preview score',
+      'Step 4 of 5: Preview',
       'Step 5 of 5: Register',
     ]);
   });
@@ -42,7 +42,8 @@ describe('StepIndicator', () => {
       (li) => li.getAttribute('aria-current') === 'step',
     );
     expect(current).toHaveLength(1);
-    expect(current[0]).toHaveAttribute('aria-label', 'Step 2 of 5: Write essay, current step');
+    // No ", current step" suffix: aria-current carries that meaning already.
+    expect(current[0]).toHaveAttribute('aria-label', 'Step 2 of 5: Write');
   });
 
   it('distinguishes complete, current and upcoming steps in text', () => {
@@ -50,12 +51,26 @@ describe('StepIndicator', () => {
     // fixture contained an upcoming step at all, and completion was conveyed
     // by icon and colour with nothing readable to assert.
     render(<StepIndicator currentStepId="submit" />);
-    const labels = screen.getAllByRole('listitem').map((li) => li.getAttribute('aria-label'));
+    const items = screen.getAllByRole('listitem');
+    const labels = items.map((li) => li.getAttribute('aria-label'));
     expect(labels[0]).toContain(', completed');
     expect(labels[1]).toContain(', completed');
-    expect(labels[2]).toContain(', current step');
-    expect(labels[3]).not.toMatch(/completed|current/);
-    expect(labels[4]).not.toMatch(/completed|current/);
+    expect(labels[2]).not.toContain(', completed');
+    expect(items[2]).toHaveAttribute('aria-current', 'step');
+    expect(labels[3]).not.toContain(', completed');
+    expect(labels[4]).not.toContain(', completed');
+
+    // Assert what is RENDERED, not only the accessible name. The name is
+    // computed independently, so deleting the isComplete branch — making a
+    // finished step an identical grey numbered dot — left every assertion
+    // above still passing.
+    expect(items[0].querySelector('svg')).not.toBeNull();
+    expect(items[0]).not.toHaveTextContent('1');
+    expect(items[1].querySelector('svg')).not.toBeNull();
+    expect(items[2].querySelector('svg')).toBeNull();
+    expect(items[2]).toHaveTextContent('3');
+    expect(items[3].querySelector('svg')).toBeNull();
+    expect(items[3]).toHaveTextContent('4');
   });
 
   it('shows every step as upcoming before the flow starts', () => {
@@ -63,7 +78,8 @@ describe('StepIndicator', () => {
     const items = screen.getAllByRole('listitem');
     expect(items.some((li) => li.getAttribute('aria-current') === 'step')).toBe(false);
     for (const li of items) {
-      expect(li.getAttribute('aria-label')).not.toMatch(/completed|current/);
+      expect(li.getAttribute('aria-label')).not.toContain(', completed');
+      expect(li.querySelector('svg')).toBeNull();
     }
   });
 

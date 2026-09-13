@@ -19,11 +19,22 @@ export interface GuestFlowStep {
  * consumer could push to it, and on a long-lived Cloud Run instance that
  * mutation would persist across requests for every subsequent guest.
  */
+/**
+ * Labels are single words on purpose.
+ *
+ * The header column is capped at max-w-3xl (768px) at every width, so the
+ * five flex-1 items get ~114px each, and after a 28px dot and an 8px gap a
+ * label has ~78px. "Choose prompt" needs 102px and "Preview score" 92px, so
+ * both truncated to "Choose p…" and "Preview s…" on a full 1280px desktop —
+ * not just in a narrow band near the breakpoint, which is what an earlier
+ * reading of this assumed. Widening the header instead would misalign it
+ * with the main content column, which shares the same cap.
+ */
 export const GUEST_FLOW_STEPS = [
-  { id: 'prompt', label: 'Choose prompt' },
-  { id: 'write', label: 'Write essay' },
+  { id: 'prompt', label: 'Prompt' },
+  { id: 'write', label: 'Write' },
   { id: 'submit', label: 'Submit' },
-  { id: 'preview', label: 'Preview score' },
+  { id: 'preview', label: 'Preview' },
   { id: 'register', label: 'Register' },
 ] as const satisfies readonly GuestFlowStep[];
 

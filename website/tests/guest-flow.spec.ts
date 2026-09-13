@@ -34,18 +34,46 @@ test.describe('KAN-8 — /practice guest flow landing', () => {
   test('step labels are shown on desktop and collapsed to dots on mobile', async ({ page }) => {
     await page.goto('/practice');
 
-    const firstLabel = page.getByText('Choose prompt', { exact: true });
-    const dots = page.getByRole('listitem');
+    const progress = page.getByRole('list', { name: /guest essay flow progress/i });
+    // Located structurally, not by its text. Keying off the label wording made
+    // a label change fail this as "not visible", masking what is actually
+    // being tested.
+    const labels = progress.locator('li > span:last-child');
+    const firstLabel = labels.first();
 
     // The numbered dots are present at every width — that is the whole point
-    // of the collapse, and is what makes the mobile header usable.
-    await expect(dots).toHaveCount(5);
+    // of the collapse, and is what makes the mobile header usable. Scoped to
+    // the progress list: KAN-13 is itself a list of prompts.
+    await expect(progress.getByRole('listitem')).toHaveCount(5);
 
     if (isMobileProject()) {
       await expect(firstLabel).toBeHidden();
     } else {
       await expect(firstLabel).toBeVisible();
+
+      // Visible is not the same as readable: a label truncated to "Choose p…"
+      // is fully visible. Every label must fit its box, at every desktop
+      // width, or the step names are decoration.
+      for (const label of await labels.all()) {
+        const clipped = await label.evaluate(
+          (el) => el.scrollWidth > el.clientWidth,
+        );
+        expect(clipped, `step label "${await label.textContent()}" is truncated`).toBe(false);
+      }
     }
+  });
+
+  test('the guest segment is noindex, inherited from its layout', async ({ page }) => {
+    // Asserted here rather than trusted: the (guest) layout sets this so later
+    // screens inherit it without their authors remembering, and the failure —
+    // a half-built screen indexed by Google — is invisible until it happens.
+    // robots.txt is deliberately NOT the mechanism; a crawler has to be
+    // allowed to fetch the page in order to read this tag.
+    await page.goto('/practice');
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+      'content',
+      /noindex/,
+    );
   });
 
   test('every step is announced with a name, at both sizes', async ({ page }) => {
@@ -55,7 +83,7 @@ test.describe('KAN-8 — /practice guest flow landing', () => {
     // only content is an aria-hidden check icon, announces as empty.
     await page.goto('/practice');
     await expect(
-      page.getByRole('listitem', { name: 'Step 1 of 5: Choose prompt' }),
+      page.getByRole('listitem', { name: 'Step 1 of 5: Prompt' }),
     ).toBeAttached();
     await expect(
       page.getByRole('listitem', { name: 'Step 5 of 5: Register' }),

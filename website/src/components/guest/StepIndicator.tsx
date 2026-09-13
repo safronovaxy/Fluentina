@@ -59,7 +59,10 @@ export function StepIndicator({
       {steps.map((step, index) => {
         const isComplete = currentStepIndex >= 0 && index < currentStepIndex;
         const isCurrent = index === currentStepIndex;
-        const state = isComplete ? ', completed' : isCurrent ? ', current step' : '';
+        // No suffix for the current step: aria-current="step" already
+        // announces it, and repeating it double-announces. ", completed" has
+        // no ARIA equivalent and is what conveys the check icon in text.
+        const state = isComplete ? ', completed' : '';
 
         return (
           <li
