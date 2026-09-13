@@ -1,0 +1,36 @@
+{
+  "chrome": {
+    "guest": {
+      "progressLabel": "Guest essay flow progress",
+      "stepAriaLabel": "Step {index} of {total}: {label}{completed, select, yes {, completed} other {}}",
+      "steps": {
+        "prompt": "Prompt",
+        "write": "Write",
+        "submit": "Submit",
+        "preview": "Preview",
+        "register": "Register"
+      },
+      "shell": {
+        "brandHomeAriaLabel": "Fluentina home",
+        "backDefaultLabel": "Back"
+      },
+      "landing": {
+        "metaTitle": "Practice a B2 essay",
+        "metaDescription": "Write a B2-level German essay and get instant, AI-graded feedback against the Goethe exam rubric — no account needed to see your score.",
+        "title": "Practice a B2-style essay",
+        "description": "Pick a prompt or write freely, get an instant score against the Goethe B2 rubric with specific errors marked — no account needed to see how you did.",
+        "fastFeedbackTitle": "Fast feedback",
+        "fastFeedbackBody": "Your score and one worked example, usually within a minute.",
+        "noInstallTitle": "Nothing to install",
+        "noInstallBody": "Works right in your phone or desktop browser.",
+        "cta": "Start practicing",
+        "ctaHint": "Prompt selection and essay entry are launching next (KAN-13/KAN-14)."
+      }
+    },
+    "localeSwitcher": {
+      "label": "Language",
+      "en": "EN",
+      "de": "DE"
+    }
+  }
+}

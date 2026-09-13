@@ -19,6 +19,22 @@ export default defineConfig({
     // Bare 'node_modules' is not a recursive glob; keep Vitest's defaults and
     // add to them rather than replacing the list.
     exclude: ['**/node_modules/**', '**/.next/**', 'tests/**'],
+    server: {
+      deps: {
+        // KAN-9: by default Vitest "externalizes" node_modules deps —
+        // loading them with Node's native ESM loader instead of putting
+        // them through Vite's own resolution/transform. Node's ESM loader,
+        // unlike `require`, does not probe for a missing file extension, so
+        // next-intl's `import ... from 'next/navigation'` (extensionless,
+        // and `next`'s package.json has no "exports" map to resolve it)
+        // fails with "Cannot find module ... Did you mean
+        // next/navigation.js". Inlining next-intl routes it through Vite's
+        // resolver instead, which does add the extension. Test files still
+        // `vi.mock('next/navigation', ...)` to stub it — this only fixes
+        // resolving the *real* module underneath that mock.
+        inline: ['next-intl'],
+      },
+    },
   },
   resolve: {
     alias: {

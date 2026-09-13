@@ -1,4 +1,11 @@
 import type { NextConfig } from 'next';
+import createNextIntlPlugin from 'next-intl/plugin';
+
+// Points at the request-config module (KAN-9) so the plugin can wire the
+// locale-aware Server Component runtime for the tree nested under
+// src/app/[locale]/ (currently just the guest flow — see that config file's
+// own comment for the scope boundary).
+const withNextIntl = createNextIntlPlugin('./src/i18n/request.ts');
 
 const nextConfig: NextConfig = {
   // Produce a self-contained Node.js server for Cloud Run (no nginx needed)
@@ -68,4 +75,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default withNextIntl(nextConfig);

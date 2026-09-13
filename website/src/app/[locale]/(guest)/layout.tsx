@@ -16,6 +16,11 @@ import type { Metadata } from 'next';
  *
  * Note this must stay a `noindex` tag rather than a robots.txt disallow: a
  * crawler has to be allowed to fetch the page in order to read the tag.
+ *
+ * KAN-9: this layout now sits one level below `[locale]`, so it applies to
+ * every locale's version of the guest flow (`/practice` and `/de/practice`
+ * alike) without needing a copy per locale — nothing about adding German
+ * routing changes what stays out of search here.
  */
 export const metadata: Metadata = {
   robots: { index: false, follow: false },

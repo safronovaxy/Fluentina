@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { ArrowLeft, PenTool } from 'lucide-react';
+import { useLocale, useTranslations } from 'next-intl';
 import { StepIndicator } from './StepIndicator';
+import { LocaleSwitcher } from './LocaleSwitcher';
 import { type CanonicalGuestFlowStep, type GuestFlowStep } from './flow-steps';
 import { cn } from '@/lib/utils';
 
@@ -112,13 +114,38 @@ export function GuestFlowShell<TStep extends GuestFlowStep = CanonicalGuestFlowS
   backLabel,
 }: GuestFlowShellProps<TStep>) {
   const contentWidthClassName = resolveContentWidthClassName(contentClassName);
+  const locale = useLocale();
+  const t = useTranslations('chrome.guest.shell');
 
   return (
     // min-h-dvh, not min-h-screen: 100vh on iOS Safari and Chrome Android is
     // the *large* viewport height, which ignores the visible URL bar, so a
     // short page scrolls for no reason and a bottom-anchored control would
     // sit under the browser chrome.
-    <div className="flex min-h-dvh flex-col bg-background">
+    //
+    // lang={locale} (KAN-9): the true document <html lang> (app/layout.tsx)
+    // stays "en" — it wraps the marketing site too, which this story leaves
+    // untranslated, so it can't take a per-request locale without also
+    // restructuring marketing's layout. Setting `lang` again here instead,
+    // on the actual root of the localised subtree, is valid HTML (any
+    // element may declare a language change for its own subtree) and is
+    // what a screen reader or translation tool actually needs to get German
+    // guest-flow screens right.
+    <div lang={locale} className="flex min-h-dvh flex-col bg-background">
+      {/* A separate bar, not a fourth item in the header row below: that
+          row's flex-1 step list is already tuned to the pixel (see
+          flow-steps.ts) — one more shrink-0 sibling would eat into its
+          budget and could reintroduce the truncation KAN-27 fixed. */}
+      <div className="border-b bg-muted/40">
+        <div
+          className={cn(
+            'mx-auto flex justify-end px-4 py-1 sm:px-6',
+            contentWidthClassName,
+          )}
+        >
+          <LocaleSwitcher />
+        </div>
+      </div>
       <header className="border-b bg-card">
         <div
           className={cn(
@@ -129,9 +156,12 @@ export function GuestFlowShell<TStep extends GuestFlowStep = CanonicalGuestFlowS
           <Link
             href="/"
             className="flex shrink-0 items-center gap-1.5 font-semibold text-foreground"
-            aria-label="Fluentina home"
+            aria-label={t('brandHomeAriaLabel')}
           >
             <PenTool className="h-5 w-5 text-primary" aria-hidden />
+            {/* Product name, not translated — a brand name stays the same in
+                every locale, the same reason the German essay content it
+                sits above never gets translated either. */}
             <span className="hidden sm:inline">Fluentina</span>
           </Link>
           {backHref && (
@@ -149,10 +179,10 @@ export function GuestFlowShell<TStep extends GuestFlowStep = CanonicalGuestFlowS
             <Link
               href={backHref}
               className="flex shrink-0 items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label={backLabel ?? 'Back'}
+              aria-label={backLabel ?? t('backDefaultLabel')}
               // The label is not rendered, so a sighted pointer user has no
               // other way to discover where this goes.
-              title={backLabel ?? 'Back'}
+              title={backLabel ?? t('backDefaultLabel')}
             >
               <ArrowLeft className="h-4 w-4" aria-hidden />
             </Link>
