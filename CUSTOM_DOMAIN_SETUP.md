@@ -90,8 +90,16 @@ Since the `europe-west10` region doesn't support direct domain mapping, I've set
    - `writewise-website-backend` → Serves website traffic
    - `writewise-cms-backend` → Serves CMS traffic
 4. **SSL Certificate:** `writewise-ssl-cert-v2`
-   - Domains: `fluentina.com`, `www.fluentina.com`, `cms.fluentina.com`
-   - Status: Provisioning (will be ACTIVE after DNS is configured)
+   - Domains actually covered: `write-wise.com`, `www.write-wise.com`, `cms.write-wise.com`
+   - Status: ACTIVE for those names
+   - ⚠️ **A Google-managed certificate's domain list is fixed at creation and
+     cannot be extended.** This certificate does not cover the `fluentina.com`
+     names and cannot be made to. Renaming the resource would not help either,
+     and ADR-6 keeps the `writewise-` resource names as they are regardless.
+     Before DNS cutover you must provision a **new** managed certificate for
+     `fluentina.com`, `www.fluentina.com` and `cms.fluentina.com`, attach it to
+     the same target HTTPS proxy, and wait for it to reach ACTIVE. Pointing DNS
+     first means every request fails the TLS handshake with a name mismatch.
 5. **URL Routing:**
    - `fluentina.com` → Website backend
    - `www.fluentina.com` → Website backend

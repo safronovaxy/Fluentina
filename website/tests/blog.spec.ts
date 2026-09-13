@@ -7,7 +7,7 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('T6 — Blog listing', () => {
-  test('T6.1 — Blog listing loads with posts', async ({ page }) => {
+  test('T6.1 — @cms Blog listing loads with posts', async ({ page }) => {
     await page.goto('/blog');
     // Should show at least one article/post card
     const cards = page.locator('article, [class*="card"], [class*="post"]');
@@ -30,7 +30,7 @@ test.describe('T6 — Blog listing', () => {
     await expect(allButton).toBeVisible({ timeout: 8000 });
   });
 
-  test('T6.4 — Clicking "All" shows posts', async ({ page }) => {
+  test('T6.4 — @cms Clicking "All" shows posts', async ({ page }) => {
     await page.goto('/blog');
     // Wait for React to hydrate and render blog posts first
     const cards = page.locator('article, a[href^="/blog/"]');
@@ -43,7 +43,7 @@ test.describe('T6 — Blog listing', () => {
     await expect(cards.first()).toBeVisible();
   });
 
-  test('T6.5 — Clicking a post card navigates to post page', async ({ page }) => {
+  test('T6.5 — @cms Clicking a post card navigates to post page', async ({ page }) => {
     await page.goto('/blog');
     await page.waitForLoadState('networkidle');
     // Find first link to a blog post
