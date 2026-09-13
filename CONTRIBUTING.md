@@ -111,7 +111,7 @@ npm run develop              # http://localhost:1337/admin (SQLite by default)
 
 ### Local Postgres (product backend — guest sessions, essays, scores, users)
 ```bash
-docker compose up -d db      # Postgres 16 on localhost:5432, repo root
+docker compose up -d db      # Postgres 16 on localhost:55432, repo root
 ```
 This is a local-only database, completely separate from the shared production
 Cloud SQL instance — nothing done locally can touch real guest data. See

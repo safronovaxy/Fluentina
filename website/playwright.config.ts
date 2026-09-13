@@ -47,14 +47,25 @@ export default defineConfig({
     ...(isProduction ? { launchOptions: { slowMo: 500 } } : {}),
   },
 
-  // Only start a server when pointed at localhost. `reuseExistingServer` keeps
-  // a dev server you already have running from being shadowed by a second one.
-  ...(isProduction
+  // Start a server only when nobody else owns the lifecycle.
+  //
+  // ci.yml builds and starts the app itself, so Playwright must not also try:
+  // its webServer plugin throws when the URL already answers and
+  // reuseExistingServer is false, which aborts the run before a single test
+  // executes. Setting reuseExistingServer: true unconditionally would "fix"
+  // CI at the cost of silently testing a stale server locally, so the block is
+  // skipped entirely when a server is supplied externally instead.
+  //
+  // PLAYWRIGHT_EXTERNAL_SERVER is set by ci.yml. Keying off CI alone would
+  // break any future workflow that wants Playwright to own the lifecycle.
+  ...(isProduction || process.env.PLAYWRIGHT_EXTERNAL_SERVER
     ? {}
     : {
         webServer: {
           command: 'npm run build && npm run start',
           url: BASE_URL,
+          // Locally, reuse a dev server you already have running rather than
+          // shadowing it with a second one.
           reuseExistingServer: !process.env.CI,
           timeout: 180_000,
         },

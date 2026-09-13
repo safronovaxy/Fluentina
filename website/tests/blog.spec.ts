@@ -5,6 +5,7 @@
  * post content rendering, and 404 for unknown slugs.
  */
 import { test, expect } from '@playwright/test';
+import { isCritical } from './helpers/console-errors';
 
 test.describe('T6 — Blog listing', () => {
   test('T6.1 — @cms Blog listing loads with posts', async ({ page }) => {
@@ -27,9 +28,11 @@ test.describe('T6 — Blog listing', () => {
     await page.goto('/blog');
     // "All" button is rendered by the client component once hydrated. It does
     // not depend on CMS content — the category list always starts with "All" —
-    // but hydration is markedly slower when the CMS is unreachable, because the
-    // client query retries with backoff before settling. At 8s this was flaky
-    // under parallel load: green in isolation, red in a full run.
+    // but when the CMS is unreachable the client query retries with backoff,
+    // so hydration settles late and unpredictably. Raising the timeout alone
+    // left it flaky under parallel load; waiting for the network to go quiet
+    // makes it deterministic instead of racing a fixed deadline.
+    await page.waitForLoadState('networkidle');
     const allButton = page.getByRole('button', { name: /^all$/i });
     await expect(allButton).toBeVisible({ timeout: 20_000 });
   });
@@ -110,9 +113,10 @@ test.describe('T6 — Blog post', () => {
     });
     await page.goto(`/blog/${firstSlug}`);
     await page.waitForLoadState('networkidle');
-    const critical = errors.filter(e =>
-      !e.includes('favicon') && !e.includes('extension')
-    );
+    // Shared filter, not a local copy: this runs on test:e2e:live, where a
+    // narrower list lacks the analytics and network entries and goes
+    // spuriously red.
+    const critical = errors.filter(isCritical);
     expect(critical).toHaveLength(0);
   });
 });

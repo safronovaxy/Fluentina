@@ -138,6 +138,9 @@ jobs:
         env:
           BASE_URL: http://localhost:3000
           MOCK_GRADING_PROVIDER: '1'
+          # This job owns the server lifecycle (Start/Stop steps above), so
+          # Playwright must not also try to start one — see playwright.config.ts.
+          PLAYWRIGHT_EXTERNAL_SERVER: '1'
         run: npx playwright test --project=chromium-desktop --project=chromium-mobile --grep-invert "@cms"
 
       - name: Stop built app
