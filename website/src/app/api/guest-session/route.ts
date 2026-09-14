@@ -63,23 +63,47 @@ import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/g
  * using the forwarded/Host header, the same thing Next's own Server Action
  * CSRF check does.
  *
- * The header is trustworthy here even though it's client-supplied: a
- * cross-site attacker cannot set `X-Forwarded-Host` on a browser `fetch`
- * without it becoming a non-simple request, which triggers a CORS preflight
- * -- and this route answers no `OPTIONS` handler, so that preflight fails
- * before the forged header ever arrives. The stricter alternative, an
- * explicitly configured `APP_ORIGIN` env var compared instead of any
- * header, is deferred to KAN-28: it needs production wiring, and a missing
- * value would fail closed in exactly the silent way this fix exists to
- * close.
+ * `x-forwarded-host` is client-supplied and NOT trusted: we front Cloud Run
+ * with a Google external Application Load Balancer over serverless NEGs,
+ * which manages `x-forwarded-for` and `x-forwarded-proto` and preserves
+ * `Host` -- but it does not set or strip `x-forwarded-host`, and nothing in
+ * this repo does either, so whatever a caller sends arrives here verbatim.
+ * A caller that can set its own headers can therefore satisfy this check
+ * against itself. Measured directly against the real standalone build:
+ * `Origin: https://evil.example` plus `X-Forwarded-Host: evil.example`
+ * (`Host: fluentina.com`) returns 200.
+ *
+ * That makes this guard defence in depth against BROWSER-DRIVEN cross-site
+ * requests only, where the header genuinely can't be forged: setting
+ * `X-Forwarded-Host` turns the fetch into a non-simple request, which
+ * triggers a CORS preflight, and this route answers no `OPTIONS` handler
+ * (asserted directly in route.test.ts), so that preflight goes unanswered
+ * and the real request with the forged header never arrives.
+ *
+ * The property actually protecting this route is the session cookie being
+ * `SameSite=Lax` and mandatory (GUEST_SESSION_COOKIE_OPTIONS): a browser
+ * attaches a Lax cookie to no cross-site POST, so a cross-site attacker is
+ * rejected here for carrying no cookie at all, regardless of what it
+ * claims about Origin or forwarded host. Neutralise this Origin check
+ * entirely and an attacker gains nothing they cannot already get today by
+ * simply omitting `Origin`, which has always been accepted.
+ *
+ * Pinning the comparison to a genuinely proxy-set value, or to a
+ * configured origin allowlist, is KAN-28. Do not treat `forwardedHost` as
+ * a reusable trusted primitive elsewhere in this codebase -- KAN-14's
+ * submission path is the likeliest next place someone reaches for it.
  */
 export async function POST(request: NextRequest) {
   const origin = request.headers.get('origin');
-  if (origin !== null && originHost(origin) !== forwardedHost(request)) {
+  if (origin !== null && (originHost(origin) === null || forwardedHost(request) === null || originHost(origin) !== forwardedHost(request))) {
     // A same-origin fetch either omits Origin (older browsers, some
     // same-origin requests) or sends the page's own origin; a cross-site
-    // caller sends its own. Only reject when it's present and WRONG, not
-    // merely absent — absence alone isn't evidence of anything here.
+    // caller sends its own. Only reject when Origin is present and either
+    // side of the comparison is missing or WRONG — absence on ONE side
+    // (Origin itself) isn't evidence of anything, but absence on the OTHER
+    // side (a malformed Origin, or no Host/x-forwarded-host at all) must
+    // still reject: two `null`s are not a match, they're two ways of having
+    // nothing to compare.
     return NextResponse.json({ error: 'cross-origin request rejected' }, { status: 400 });
   }
 
@@ -117,8 +141,10 @@ export async function POST(request: NextRequest) {
 
 /**
  * The host `Origin` claims to be from, or `null` if `Origin` isn't even a
- * parseable URL (a malformed header is treated as a mismatch by the caller,
- * never as "absent" — only a genuinely missing header gets that pass).
+ * parseable URL. A malformed header is always treated as a mismatch by the
+ * caller and rejected, never as "absent" — the caller rejects whenever
+ * either this or `forwardedHost` comes back `null`, so there's no path
+ * where two `null`s cancel each other out into an accept.
  */
 function originHost(origin: string): string | null {
   try {
@@ -129,12 +155,15 @@ function originHost(origin: string): string | null {
 }
 
 /**
- * The host this request actually arrived at, from the proxy's point of
- * view. `x-forwarded-host` first — Cloud Run's load balancer sets it to the
- * public hostname the browser actually connected to — falling back to
- * `host` for local dev and any other deployment shape without a proxy in
- * front. Deliberately not `request.nextUrl.host`: see the route's own
- * comment above for why that's the container bind address, not this.
+ * `x-forwarded-host` if present, else `host`. NOT "the host from the
+ * proxy's point of view" — nothing proxy-side sets `x-forwarded-host` here.
+ * The load balancer in front of Cloud Run manages `x-forwarded-for` and
+ * `x-forwarded-proto` and preserves `Host`, but never sets or strips
+ * `x-forwarded-host`; this is a client-supplied value taken on faith. See
+ * the route's own comment above for what the resulting guard actually
+ * relies on (and doesn't). Deliberately not `request.nextUrl.host`: see the
+ * route's own comment above for why that's the container bind address, not
+ * this.
  */
 function forwardedHost(request: NextRequest): string | null {
   return request.headers.get('x-forwarded-host') ?? request.headers.get('host');

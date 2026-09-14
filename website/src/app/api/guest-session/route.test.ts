@@ -203,4 +203,102 @@ describe('POST /api/guest-session — cross-origin requests', () => {
     expect(response.status).toBe(400);
     expect(await getGuestSessionById({ kind: 'guest', sessionId: validCookie }, validCookie)).toBeNull();
   });
+
+  // Post-approval hardening (KAN-10): a malformed Origin is documented as
+  // "always a mismatch, never absent" (see originHost's own doc comment),
+  // but nothing exercised that with an actual malformed header until now.
+  it('rejects a malformed Origin header with 400, even alongside an otherwise valid Host', async () => {
+    const validCookie = generateGuestSessionId();
+    const req = new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
+      method: 'POST',
+      headers: {
+        cookie: `${GUEST_SESSION_COOKIE_NAME}=${validCookie}`,
+        origin: 'not a url',
+        host: 'localhost:3000',
+      },
+    });
+
+    const response = await POST(req);
+
+    expect(response.status).toBe(400);
+  });
+
+  // Post-approval hardening (KAN-10): originHost() and forwardedHost() both
+  // return `null` on absence/malformation, and `null !== null` is `false`
+  // — so a malformed Origin with NO host header at all used to collapse
+  // the mismatch check into a match and get accepted. Before this fix this
+  // request returned 200; the assertion below is what pins it at 400.
+  it('rejects a malformed Origin header with no Host or x-forwarded-host header at all — absence on both sides must not collapse into a match', async () => {
+    const validCookie = generateGuestSessionId();
+    const req = new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
+      method: 'POST',
+      headers: {
+        cookie: `${GUEST_SESSION_COOKIE_NAME}=${validCookie}`,
+        origin: 'not a url',
+      },
+    });
+    // NextRequest always carries some Host under the hood via the URL it's
+    // constructed from in Node; strip it explicitly so neither header this
+    // route reads is present, reproducing the real "no proxy header at
+    // all" case forwardedHost()'s doc comment describes.
+    req.headers.delete('host');
+
+    const response = await POST(req);
+
+    expect(response.status).toBe(400);
+  });
+
+  // Post-approval hardening (KAN-10): the precedence of
+  // `x-forwarded-host ?? host` in forwardedHost() is unpinned by every
+  // other test here, because none of them present both headers with
+  // different values — so silently reversing to `host ?? x-forwarded-host`
+  // would leave the rest of this suite green. This test presents both with
+  // different values and asserts the one actually compared is
+  // x-forwarded-host: an Origin matching x-forwarded-host is accepted even
+  // though it disagrees with Host, and the reverse (below) is rejected.
+  it('compares Origin against x-forwarded-host, not Host, when the two disagree', async () => {
+    const validCookie = generateGuestSessionId();
+    const acceptedReq = new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
+      method: 'POST',
+      headers: {
+        cookie: `${GUEST_SESSION_COOKIE_NAME}=${validCookie}`,
+        origin: 'https://fluentina.com',
+        'x-forwarded-host': 'fluentina.com',
+        host: 'evil.example',
+      },
+    });
+
+    const accepted = await POST(acceptedReq);
+
+    expect(accepted.status).toBe(200);
+
+    const rejectedCookie = generateGuestSessionId();
+    const rejectedReq = new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
+      method: 'POST',
+      headers: {
+        cookie: `${GUEST_SESSION_COOKIE_NAME}=${rejectedCookie}`,
+        origin: 'https://evil.example',
+        'x-forwarded-host': 'fluentina.com',
+        host: 'evil.example',
+      },
+    });
+
+    const rejected = await POST(rejectedReq);
+
+    expect(rejected.status).toBe(400);
+  });
+});
+
+// Post-approval hardening (KAN-10): the whole "browser can't forge
+// x-forwarded-host without triggering an unanswered CORS preflight"
+// argument in route.ts's comment rests on this route exporting no OPTIONS
+// handler. Nothing pinned that absence, so a later story (e.g. KAN-14)
+// could add one — or add CORS headers — and silently reopen the forged-
+// header path. Assert it directly.
+describe('POST /api/guest-session — preflight surface', () => {
+  it('exports no OPTIONS handler — the forged-header path stays closed only as long as this is true', async () => {
+    const routeModule: Record<string, unknown> = await import('./route');
+
+    expect(routeModule.OPTIONS).toBeUndefined();
+  });
 });

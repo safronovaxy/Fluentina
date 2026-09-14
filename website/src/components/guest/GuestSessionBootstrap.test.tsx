@@ -74,13 +74,18 @@ describe('GuestSessionBootstrap', () => {
   });
 
   it('does not log when the response is ok', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     render(<GuestSessionBootstrap />);
     await Promise.resolve();
     await Promise.resolve();
 
+    // Anchor: the effect actually fired and resolved a real (ok) response,
+    // so the absence of a console.error below is evidence the ok branch is
+    // silent — not just that the effect never ran at all.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(consoleSpy).not.toHaveBeenCalled();
 
     consoleSpy.mockRestore();
