@@ -12,7 +12,11 @@
 
 services:
   db:
-    image: postgres:16-alpine
+    # Pinned to an exact version, not the floating `16` tag, so local and CI
+    # cannot silently diverge from each other. The major must match
+    # EXPECTED_POSTGRES_MAJOR in website/src/lib/db/postgres-version.ts,
+    # which the migration runner asserts against the live server.
+    image: postgres:16.10-alpine
     container_name: fluentina-db-dev
     restart: unless-stopped
     environment:

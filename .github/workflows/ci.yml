@@ -43,7 +43,9 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        # Exact version, matching docker-compose.yml. See
+        # website/src/lib/db/postgres-version.ts.
+        image: postgres:16.10-alpine
         env:
           POSTGRES_DB: fluentina
           POSTGRES_USER: fluentina

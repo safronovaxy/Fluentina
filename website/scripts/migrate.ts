@@ -9,6 +9,7 @@ import { config } from 'dotenv';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { assertPostgresMajor } from '../src/lib/db/postgres-version';
 
 // quiet: true — see the comment in drizzle.config.ts on dotenv@17's
 // self-promotional console "tips".
@@ -19,6 +20,20 @@ async function main() {
     throw new Error('DATABASE_URL is not set — see website/.env.example');
   }
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+  // Check the server's major version BEFORE applying anything. See
+  // src/lib/db/postgres-version.ts for why this is asserted rather than
+  // assumed. A partly-applied migration is worse than none.
+  const { rows } = await pool.query<{ server_version_num: string }>(
+    'SHOW server_version_num',
+  );
+  try {
+    assertPostgresMajor(Number(rows[0].server_version_num), 'The target database');
+  } catch (err) {
+    await pool.end();
+    throw err;
+  }
+
   const db = drizzle(pool);
   await migrate(db, { migrationsFolder: './drizzle' });
   await pool.end();
