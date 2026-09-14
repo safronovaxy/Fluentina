@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ArrowLeft, PenTool } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
+import { Link as LocaleLink } from '@/i18n/navigation';
 import { StepIndicator } from './StepIndicator';
 import { LocaleSwitcher } from './LocaleSwitcher';
 import { type CanonicalGuestFlowStep, type GuestFlowStep } from '../flow-steps';
@@ -68,11 +69,23 @@ export interface GuestFlowShellProps<TStep extends GuestFlowStep = CanonicalGues
    * landing page — the header renders exactly as before, with no reserved
    * space and no layout shift.
    *
-   * App-relative paths only (e.g. `/practice/prompt`) — this renders as a
-   * plain `next/link` `href` with no validation, so an absolute URL would be
-   * followed as given. Nothing in this story derives `backHref` from
-   * user-controlled input, but a future story that reads it from a query
-   * param must sanitise it first; this prop is not the place for that guard.
+   * App-relative, UNPREFIXED paths only (e.g. `/practice/prompt`, never
+   * `/de/practice/prompt`) — rendered through `@/i18n/navigation`'s
+   * locale-aware `Link` (KAN-14 fix; every other in-flow href on this page
+   * goes through it too, e.g. `LocaleSwitcher`), which adds the current
+   * locale's prefix itself. Passing an already-prefixed path here would get
+   * double-prefixed. No validation beyond that, so an absolute URL would
+   * still be followed as given. Nothing in this story derives `backHref`
+   * from user-controlled input, but a future story that reads it from a
+   * query param must sanitise it first; this prop is not the place for
+   * that guard.
+   *
+   * Review (KAN-14): this used to render through plain `next/link`, same as
+   * the brand-home link below — correct for THAT link, since marketing
+   * (`/`) is deliberately unlocalised (see this component's own comment on
+   * `lang`), but wrong here: nothing had passed `backHref` yet to notice
+   * that a German guest on `/de/practice/write` clicking "back" would have
+   * landed on the English `/practice`, silently dropping their locale.
    */
   backHref?: string;
   /**
@@ -176,7 +189,7 @@ export function GuestFlowShell<TStep extends GuestFlowStep = CanonicalGuestFlowS
             // list's budget can't shrink because of it. The accessible name
             // still comes through as aria-label. p-1.5 pads the 16px icon
             // out to a 28px tap target — WCAG 2.2's 24x24 minimum.
-            <Link
+            <LocaleLink
               href={backHref}
               className="flex shrink-0 items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
               aria-label={backLabel ?? t('backDefaultLabel')}
@@ -185,7 +198,7 @@ export function GuestFlowShell<TStep extends GuestFlowStep = CanonicalGuestFlowS
               title={backLabel ?? t('backDefaultLabel')}
             >
               <ArrowLeft className="h-4 w-4" aria-hidden />
-            </Link>
+            </LocaleLink>
           )}
           <StepIndicator steps={steps} currentStepId={currentStepId} />
         </div>

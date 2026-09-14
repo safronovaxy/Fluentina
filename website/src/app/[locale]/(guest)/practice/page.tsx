@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { Link } from '@/i18n/navigation';
 import { PenTool, Clock, ShieldCheck } from 'lucide-react';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
 import { Button } from '@/components/ui/button';
@@ -39,10 +40,14 @@ export async function generateMetadata({
  * The remaining flow stages (prompt selection — KAN-13, essay entry —
  * KAN-14, submission/grading — KAN-16, preview — KAN-18, registration —
  * KAN-20/21) are separate backlog stories that nest their own pages under
- * this same (guest) layout and reuse this shell; the primary CTA here is
- * intentionally disabled until the first of those (after KAN-10's guest
- * session/data foundation) exists to link to, rather than pointing at a
- * dead or fake route.
+ * this same (guest) layout and reuse this shell. The primary CTA linked to
+ * nowhere until KAN-14 landed; it now goes straight to essay entry
+ * (`/practice/write`), skipping past prompt selection (KAN-13) since that
+ * screen doesn't exist yet — see that page's own comment on the resulting,
+ * deliberate step-indicator rough edge. This is also what keeps a
+ * first-time visitor's path to submitting an essay at two clicks (this CTA,
+ * then Submit), inside KAN-14's "under 3 clicks from landing" acceptance
+ * criterion.
  *
  * `setRequestLocale(locale)` — a review found this missing was the reason
  * neither locale was actually prerendered: `[locale]/layout.tsx` calling it
@@ -97,10 +102,9 @@ export default async function GuestPracticeLandingPage({
         </dl>
 
         <div className="mt-8">
-          <Button size="lg" className="w-full sm:w-auto" disabled>
-            {t('cta')}
+          <Button size="lg" className="w-full sm:w-auto" asChild>
+            <Link href="/practice/write">{t('cta')}</Link>
           </Button>
-          <p className="mt-2 text-xs text-muted-foreground">{t('ctaHint')}</p>
         </div>
       </div>
     </GuestFlowShell>

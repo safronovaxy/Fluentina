@@ -23,8 +23,21 @@
         "fastFeedbackBody": "Deine Bewertung und ein Beispiel, meist innerhalb einer Minute.",
         "noInstallTitle": "Nichts zu installieren",
         "noInstallBody": "Funktioniert direkt im Browser auf dem Handy oder Desktop.",
-        "cta": "Jetzt üben",
-        "ctaHint": "Themenauswahl und Aufsatzeingabe folgen als Nächstes."
+        "cta": "Jetzt üben"
+      },
+      "write": {
+        "metaTitle": "Schreibe deinen Aufsatz",
+        "metaDescription": "Schreibe oder füge deinen deutschen Aufsatz auf B2-Niveau ein — kein Konto nötig, um ihn einzureichen.",
+        "title": "Schreibe deinen Aufsatz",
+        "description": "Schreibe oder füge deinen deutschsprachigen Aufsatz unten ein und reiche ihn ein. Kein Konto nötig.",
+        "textareaLabel": "Dein Aufsatz",
+        "placeholder": "Schreibe oder füge hier deinen Aufsatz ein …",
+        "requiredError": "Bitte schreibe etwas, bevor du einreichst.",
+        "submitCta": "Aufsatz einreichen",
+        "submittingCta": "Wird eingereicht …",
+        "successTitle": "Aufsatz erhalten",
+        "successBody": "Dein Aufsatz wurde eingereicht. Wir arbeiten an den nächsten Schritten im Gast-Ablauf.",
+        "errorGeneric": "Beim Einreichen deines Aufsatzes ist ein Fehler aufgetreten. Bitte versuche es erneut."
       }
     },
     "localeSwitcher": {

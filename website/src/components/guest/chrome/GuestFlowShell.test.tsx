@@ -205,6 +205,20 @@ describe('GuestFlowShell', () => {
     );
   });
 
+  it('KAN-14 — prefixes backHref with the active locale, same as every other in-flow link on this page', () => {
+    // Nothing had passed backHref on a German screen before KAN-14's
+    // essay-entry page — this pins the fix: plain next/link would render
+    // the unprefixed path verbatim regardless of locale, silently dropping
+    // a German guest back onto the English URL.
+    renderWithIntl(
+      <GuestFlowShell currentStepId="write" backHref="/practice" backLabel="Zurück">
+        <p>content</p>
+      </GuestFlowShell>,
+      { locale: 'de' },
+    );
+    expect(screen.getByRole('link', { name: 'Zurück' })).toHaveAttribute('href', '/de/practice');
+  });
+
   it('KAN-9 — renders the locale switcher on every guest-flow screen, above the header row', () => {
     // Above the header row (a separate bar), not inside it: the header's
     // step list is already at its pixel budget (see flow-steps.ts) — this

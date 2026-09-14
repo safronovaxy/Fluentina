@@ -43,13 +43,13 @@ test.describe('KAN-9 — guest flow renders in both locales', () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
       'Practice a B2-style essay',
     );
-    await expect(page.getByRole('button', { name: /start practicing/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /start practicing/i })).toBeVisible();
   });
 
   test('German at /de/practice — same screen, translated chrome', async ({ page }) => {
     await gotoOk(page, '/de/practice');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Übe einen B2-Aufsatz');
-    await expect(page.getByRole('button', { name: 'Jetzt üben' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Jetzt üben' })).toBeVisible();
 
     // Same structural guarantees as the English screen (KAN-8/27), not just
     // the same text swapped in — the step indicator is still there, in
@@ -88,8 +88,9 @@ test.describe('KAN-9 — guest flow renders in both locales', () => {
     // And back again — this is routing, not a one-way trip.
     // exact: true — Playwright's accessible-name matching is a
     // case-insensitive substring match by default, and "Jetzt üben" (the
-    // disabled CTA button, also on this screen) contains "en", so a loose
-    // match for "EN" resolves to two elements.
+    // CTA, also on this screen — a link since KAN-14, not a button, but
+    // still worth being exact about) contains "en", so a loose match for
+    // "EN" could resolve to more than one element.
     await page.getByRole('button', { name: 'EN', exact: true }).click();
     await expect(page).toHaveURL(/\/practice$/);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(
