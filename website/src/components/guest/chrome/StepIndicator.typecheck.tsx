@@ -22,7 +22,7 @@
  */
 import { StepIndicator } from './StepIndicator';
 import { GuestFlowShell } from './GuestFlowShell';
-import { GUEST_FLOW_STEPS } from './flow-steps';
+import { GUEST_FLOW_STEPS } from '../flow-steps';
 
 const CUSTOM_STEPS = [
   { id: 'alpha', label: 'Alpha' },

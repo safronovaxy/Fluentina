@@ -1,10 +1,24 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { screen } from '@testing-library/react';
+import { renderWithIntl } from '@/test/renderWithIntl';
 import { GuestFlowShell } from './GuestFlowShell';
+
+/**
+ * KAN-9 — stubbed out, not exercised for real here. LocaleSwitcher pulls in
+ * next-intl's `useRouter`/`usePathname` (backed by `next/navigation`), which
+ * has its own dedicated test file (LocaleSwitcher.test.tsx) with the
+ * `next/navigation` mocking that needs. This suite is about the shell's own
+ * structure (back link, step indicator, width classes) — unchanged by this
+ * story except for what's asserted below — so it stubs the switcher rather
+ * than dragging routing concerns into every test in the file.
+ */
+vi.mock('./LocaleSwitcher', () => ({
+  LocaleSwitcher: () => <div data-testid="locale-switcher-stub" />,
+}));
 
 describe('GuestFlowShell', () => {
   it('renders its children inside the main content column', () => {
-    render(
+    renderWithIntl(
       <GuestFlowShell currentStepId="none">
         <p>Essay goes here</p>
       </GuestFlowShell>,
@@ -13,7 +27,7 @@ describe('GuestFlowShell', () => {
   });
 
   it('excludes the marketing chrome and keeps a single main landmark', () => {
-    render(
+    renderWithIntl(
       <GuestFlowShell currentStepId="none">
         <p>content</p>
       </GuestFlowShell>,
@@ -27,7 +41,7 @@ describe('GuestFlowShell', () => {
     // only that the list exists meant hardcoding currentStepId="none" in the
     // shell left every test in the repo green, and every later screen would
     // have rendered with no step highlighted.
-    render(
+    renderWithIntl(
       <GuestFlowShell currentStepId="prompt">
         <p>content</p>
       </GuestFlowShell>,
@@ -40,7 +54,7 @@ describe('GuestFlowShell', () => {
   });
 
   it('lets a screen opt out of the step indicator', () => {
-    render(
+    renderWithIntl(
       <GuestFlowShell steps={[]} currentStepId="none">
         <p>content</p>
       </GuestFlowShell>,
@@ -54,7 +68,7 @@ describe('GuestFlowShell', () => {
     // means a conflicting utility REPLACES the default: passing max-w-5xl
     // drops max-w-3xl rather than producing both. Pinned here so KAN-13/14
     // discover the semantics from a test rather than from a broken layout.
-    render(
+    renderWithIntl(
       <GuestFlowShell currentStepId="none" contentClassName="max-w-5xl">
         <p>content</p>
       </GuestFlowShell>,
@@ -67,7 +81,7 @@ describe('GuestFlowShell', () => {
   it('gives the header the same max-width as the content column by default', () => {
     // KAN-27: max-w-3xl used to be hardcoded independently on the header
     // container and on main, so the two could only agree by coincidence.
-    render(
+    renderWithIntl(
       <GuestFlowShell currentStepId="none">
         <p>content</p>
       </GuestFlowShell>,
@@ -82,7 +96,7 @@ describe('GuestFlowShell', () => {
   it('carries a contentClassName width override over to the header too', () => {
     // Without this, a screen that widens itself (contentClassName="max-w-5xl")
     // gets a header bar visually indented against its own, wider content.
-    render(
+    renderWithIntl(
       <GuestFlowShell currentStepId="none" contentClassName="max-w-5xl">
         <p>content</p>
       </GuestFlowShell>,
@@ -100,7 +114,7 @@ describe('GuestFlowShell', () => {
     // screen that only widens from a breakpoint got a header that stayed
     // capped at the unprefixed default: exactly the indented-header
     // misalignment this whole mechanism exists to prevent.
-    render(
+    renderWithIntl(
       <GuestFlowShell
         currentStepId="none"
         contentClassName="max-w-5xl sm:max-w-7xl md:!max-w-4xl"
@@ -125,7 +139,7 @@ describe('GuestFlowShell', () => {
     // Only the width should carry over — a page passing px-0 for its content
     // gutter shouldn't silently strip the header's own padding too, since
     // the header isn't what contentClassName documents itself as touching.
-    render(
+    renderWithIntl(
       <GuestFlowShell currentStepId="none" contentClassName="px-0">
         <p>content</p>
       </GuestFlowShell>,
@@ -138,7 +152,7 @@ describe('GuestFlowShell', () => {
   it('renders no back link when backHref is omitted', () => {
     // Must degrade cleanly: no empty wrapper, no reserved space, nothing to
     // cause a layout shift once a later story starts passing backHref.
-    render(
+    renderWithIntl(
       <GuestFlowShell currentStepId="none">
         <p>content</p>
       </GuestFlowShell>,
@@ -157,7 +171,7 @@ describe('GuestFlowShell', () => {
   });
 
   it('renders a back link before the step indicator when backHref is given', () => {
-    render(
+    renderWithIntl(
       <GuestFlowShell currentStepId="prompt" backHref="/practice/prompt" backLabel="Back to prompts">
         <p>content</p>
       </GuestFlowShell>,
@@ -180,7 +194,7 @@ describe('GuestFlowShell', () => {
   });
 
   it('falls back to a default accessible label when backLabel is omitted', () => {
-    render(
+    renderWithIntl(
       <GuestFlowShell currentStepId="prompt" backHref="/practice/prompt">
         <p>content</p>
       </GuestFlowShell>,
@@ -189,5 +203,36 @@ describe('GuestFlowShell', () => {
       'href',
       '/practice/prompt',
     );
+  });
+
+  it('KAN-9 — renders the locale switcher on every guest-flow screen, above the header row', () => {
+    // Above the header row (a separate bar), not inside it: the header's
+    // step list is already at its pixel budget (see flow-steps.ts) — this
+    // pins the switcher to a position that can't silently start competing
+    // with it for width.
+    renderWithIntl(
+      <GuestFlowShell currentStepId="none">
+        <p>content</p>
+      </GuestFlowShell>,
+    );
+    const switcher = screen.getByTestId('locale-switcher-stub');
+    const header = screen.getByRole('link', { name: 'Fluentina home' }).closest('header');
+    expect(header).not.toBeNull();
+    expect(
+      switcher.compareDocumentPosition(header!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('KAN-9 — sets lang from the active locale on its own root, not just relying on <html>', () => {
+    renderWithIntl(
+      <GuestFlowShell currentStepId="none">
+        <p>content</p>
+      </GuestFlowShell>,
+      { locale: 'de' },
+    );
+    // <html lang> stays "en" (root layout, outside the localised subtree —
+    // see GuestFlowShell.tsx) — this is the shell asserting its own
+    // language for assistive tech and translation tools regardless of that.
+    expect(screen.getByRole('main').closest('[lang]')).toHaveAttribute('lang', 'de');
   });
 });

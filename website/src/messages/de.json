@@ -1,0 +1,36 @@
+{
+  "chrome": {
+    "guest": {
+      "progressLabel": "Fortschritt im Gast-Aufsatzablauf",
+      "stepAriaLabel": "Schritt {index} von {total}: {label}{completed, select, yes {, abgeschlossen} other {}}",
+      "steps": {
+        "prompt": "Thema",
+        "write": "Schreiben",
+        "submit": "Einreichen",
+        "preview": "Vorschau",
+        "register": "Konto"
+      },
+      "shell": {
+        "brandHomeAriaLabel": "Fluentina Startseite",
+        "backDefaultLabel": "Zurück"
+      },
+      "landing": {
+        "metaTitle": "B2-Aufsatz üben",
+        "metaDescription": "Schreibe einen deutschen Aufsatz auf B2-Niveau und erhalte sofortiges, KI-bewertetes Feedback nach dem Goethe-Prüfungsraster — kein Konto nötig, um deine Bewertung zu sehen.",
+        "title": "Übe einen B2-Aufsatz",
+        "description": "Wähle ein Thema oder schreibe frei, erhalte sofort eine Bewertung nach dem Goethe-B2-Raster mit markierten Fehlern — kein Konto nötig, um dein Ergebnis zu sehen.",
+        "fastFeedbackTitle": "Schnelles Feedback",
+        "fastFeedbackBody": "Deine Bewertung und ein Beispiel, meist innerhalb einer Minute.",
+        "noInstallTitle": "Nichts zu installieren",
+        "noInstallBody": "Funktioniert direkt im Browser auf dem Handy oder Desktop.",
+        "cta": "Jetzt üben",
+        "ctaHint": "Themenauswahl und Aufsatzeingabe folgen als Nächstes."
+      }
+    },
+    "localeSwitcher": {
+      "label": "Sprache",
+      "en": "EN",
+      "de": "DE"
+    }
+  }
+}

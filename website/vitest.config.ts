@@ -34,6 +34,22 @@ export default defineConfig({
     // observed directly as spurious FK-violation failures before this was
     // added. The whole suite is small enough that serial execution is cheap.
     fileParallelism: false,
+    server: {
+      deps: {
+        // KAN-9: by default Vitest "externalizes" node_modules deps —
+        // loading them with Node's native ESM loader instead of putting
+        // them through Vite's own resolution/transform. Node's ESM loader,
+        // unlike `require`, does not probe for a missing file extension, so
+        // next-intl's `import ... from 'next/navigation'` (extensionless,
+        // and `next`'s package.json has no "exports" map to resolve it)
+        // fails with "Cannot find module ... Did you mean
+        // next/navigation.js". Inlining next-intl routes it through Vite's
+        // resolver instead, which does add the extension. Test files still
+        // `vi.mock('next/navigation', ...)` to stub it — this only fixes
+        // resolving the *real* module underneath that mock.
+        inline: ['next-intl'],
+      },
+    },
   },
   resolve: {
     alias: {

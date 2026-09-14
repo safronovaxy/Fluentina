@@ -1,13 +1,25 @@
 import { Check } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import {
   GUEST_FLOW_STEPS,
   type CanonicalGuestFlowStep,
   type GuestFlowStep,
   type GuestFlowStepId,
-} from './flow-steps';
+} from '../flow-steps';
 
 export type { GuestFlowStep, GuestFlowStepId };
+
+/**
+ * The canonical flow's ids only (KAN-9) — used below to decide whether a
+ * step's label comes from the `chrome.guest.steps` catalogue or from the
+ * literal string the caller supplied. Only the five canonical ids are
+ * localised: a caller-supplied custom step list (the KAN-27 generic escape
+ * hatch — see CUSTOM_STEPS in the tests) is not part of this story's guest
+ * flow and keeps carrying its own literal `label` text, in whatever language
+ * its author chose, same as before this story.
+ */
+const CANONICAL_STEP_IDS = new Set<string>(GUEST_FLOW_STEPS.map((s) => s.id));
 
 /**
  * Generic over the supplied step list (KAN-27), defaulting to
@@ -100,6 +112,7 @@ export function StepIndicator<TStep extends GuestFlowStep = CanonicalGuestFlowSt
   currentStepId,
   className,
 }: StepIndicatorProps<TStep>) {
+  const t = useTranslations('chrome.guest');
   // Cast, not a default parameter value: GUEST_FLOW_STEPS is typed as
   // readonly CanonicalGuestFlowStep[], which isn't assignable to
   // readonly TStep[] for an arbitrary caller-supplied TStep. Safe because
@@ -128,7 +141,7 @@ export function StepIndicator<TStep extends GuestFlowStep = CanonicalGuestFlowSt
 
   return (
     <ol
-      aria-label="Guest essay flow progress"
+      aria-label={t('progressLabel')}
       className={cn(
         'flex w-full items-start justify-between gap-1 sm:gap-2',
         className,
@@ -137,16 +150,26 @@ export function StepIndicator<TStep extends GuestFlowStep = CanonicalGuestFlowSt
       {resolvedSteps.map((step, index) => {
         const isComplete = currentStepIndex >= 0 && index < currentStepIndex;
         const isCurrent = index === currentStepIndex;
-        // No suffix for the current step: aria-current="step" already
-        // announces it, and repeating it double-announces. ", completed" has
-        // no ARIA equivalent and is what conveys the check icon in text.
-        const state = isComplete ? ', completed' : '';
+        const label = CANONICAL_STEP_IDS.has(step.id) ? t(`steps.${step.id}`) : step.label;
 
         return (
           <li
             key={step.id}
             aria-current={isCurrent ? 'step' : undefined}
-            aria-label={`Step ${index + 1} of ${resolvedSteps.length}: ${step.label}${state}`}
+            // No suffix for the current step: aria-current="step" already
+            // announces it, and repeating it double-announces. ", completed"
+            // has no ARIA equivalent and is what conveys the check icon in
+            // text — the `completed` param below picks that ICU `select`
+            // case (see chrome.guest.stepAriaLabel in the message catalogue)
+            // rather than string-concatenating a translated suffix onto an
+            // untranslated template, which would produce the wrong word
+            // order in German.
+            aria-label={t('stepAriaLabel', {
+              index: index + 1,
+              total: resolvedSteps.length,
+              label,
+              completed: isComplete ? 'yes' : 'no',
+            })}
             className="flex min-w-0 flex-1 flex-col items-center gap-1 md:flex-row md:items-center md:gap-2"
           >
             <span
@@ -170,7 +193,7 @@ export function StepIndicator<TStep extends GuestFlowStep = CanonicalGuestFlowSt
                 isCurrent ? 'text-foreground' : 'text-muted-foreground',
               )}
             >
-              {step.label}
+              {label}
             </span>
           </li>
         );
