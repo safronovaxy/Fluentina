@@ -50,10 +50,32 @@ import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/g
  * already passes `guestSessionIdSchema`. `src/middleware.ts`'s own mint
  * branch (malformed/missing cookie → fresh id) is left alone; that is its
  * contract, not this route's.
+ *
+ * Review (round 2): the cross-origin check used to compare `Origin` against
+ * `request.nextUrl.origin` -- which is wrong in exactly the deployed shape
+ * this route runs in. The `output: standalone` server builds its own URL
+ * from the container bind address (`HOSTNAME`/`PORT`, `trustHostHeader:
+ * false`), not from any header a real request carries, so on Cloud Run
+ * `request.nextUrl.origin` is always `https://0.0.0.0:8080` -- a value no
+ * browser can ever send as `Origin`. Every real guest's first POST was
+ * rejected 400, silently: no row, no log. `request.nextUrl` must never be
+ * read for host or origin anywhere in this route; compare HOSTS instead,
+ * using the forwarded/Host header, the same thing Next's own Server Action
+ * CSRF check does.
+ *
+ * The header is trustworthy here even though it's client-supplied: a
+ * cross-site attacker cannot set `X-Forwarded-Host` on a browser `fetch`
+ * without it becoming a non-simple request, which triggers a CORS preflight
+ * -- and this route answers no `OPTIONS` handler, so that preflight fails
+ * before the forged header ever arrives. The stricter alternative, an
+ * explicitly configured `APP_ORIGIN` env var compared instead of any
+ * header, is deferred to KAN-28: it needs production wiring, and a missing
+ * value would fail closed in exactly the silent way this fix exists to
+ * close.
  */
 export async function POST(request: NextRequest) {
   const origin = request.headers.get('origin');
-  if (origin !== null && origin !== request.nextUrl.origin) {
+  if (origin !== null && originHost(origin) !== forwardedHost(request)) {
     // A same-origin fetch either omits Origin (older browsers, some
     // same-origin requests) or sends the page's own origin; a cross-site
     // caller sends its own. Only reject when it's present and WRONG, not
@@ -70,21 +92,50 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'missing or invalid guest session cookie' }, { status: 400 });
   }
 
-  const { actor } = await resolveGuestSession(raw);
+  const { actor, reissued } = await resolveGuestSession(raw);
 
   const response = NextResponse.json({ ok: true });
-  if (actor.sessionId !== raw) {
-    // The only way resolveGuestSession can hand back an id different from
-    // the well-formed one just presented: `raw` named a session that had
-    // already converted to a registered account, and a fresh id had to be
-    // minted in its place (see lib/domain/guest-session.ts's
-    // ConvertedSessionIdCollisionError recovery) — the fix for a converted
-    // guest otherwise colliding with their own, now-attached row on every
-    // subsequent page load. That's the one case this adapter still has to
-    // reissue the cookie for; every other outcome (ordinary first use,
-    // returning guest) resolves under the exact id middleware already set,
-    // so there is nothing to reissue.
+  if (reissued) {
+    // The only way resolveGuestSession hands this back true for a
+    // well-formed cookie: `raw` named a session that's no longer available
+    // as a guest session (see lib/domain/guest-session.ts's
+    // `SessionIdUnavailableError` recovery — converted to a registered
+    // account, or deleted since) and a fresh id had to be minted in its
+    // place. That's the one case this adapter still has to reissue the
+    // cookie for; every other outcome (ordinary first use, returning guest)
+    // resolves under the exact id middleware already set, so there is
+    // nothing to reissue.
+    //
+    // Review (round 2): this used to compare `actor.sessionId !== raw`
+    // itself instead of reading `reissued` off the domain result — the
+    // exact rediscovery-by-string-comparison `reissued`'s own doc comment
+    // warns the next caller (KAN-14's submission path) away from repeating.
     response.cookies.set(GUEST_SESSION_COOKIE_NAME, actor.sessionId, GUEST_SESSION_COOKIE_OPTIONS);
   }
   return response;
+}
+
+/**
+ * The host `Origin` claims to be from, or `null` if `Origin` isn't even a
+ * parseable URL (a malformed header is treated as a mismatch by the caller,
+ * never as "absent" — only a genuinely missing header gets that pass).
+ */
+function originHost(origin: string): string | null {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The host this request actually arrived at, from the proxy's point of
+ * view. `x-forwarded-host` first — Cloud Run's load balancer sets it to the
+ * public hostname the browser actually connected to — falling back to
+ * `host` for local dev and any other deployment shape without a proxy in
+ * front. Deliberately not `request.nextUrl.host`: see the route's own
+ * comment above for why that's the container bind address, not this.
+ */
+function forwardedHost(request: NextRequest): string | null {
+  return request.headers.get('x-forwarded-host') ?? request.headers.get('host');
 }

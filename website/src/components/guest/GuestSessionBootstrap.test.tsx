@@ -49,4 +49,40 @@ describe('GuestSessionBootstrap', () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('logs a non-ok response instead of swallowing it — review, round 2: a 400 resolves the fetch promise, .catch() alone never sees it', async () => {
+    // This is the shape of the bug that actually shipped: the route
+    // rejected every real browser request with a 400 (see route.ts's own
+    // round-2 review note), and because a 400 is a RESOLVED response, not a
+    // rejection, the old `.catch(() => {})` never ran and nothing was ever
+    // logged — the failure was invisible end to end.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 400 })));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(<GuestSessionBootstrap />);
+    // Let the resolved promise's .then() settle before asserting.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    const [, detail] = consoleSpy.mock.calls[0] as [string, { status: number }];
+    expect(detail).toEqual({ status: 400 });
+    // Never the cookie value or the session id — see the component comment.
+    expect(JSON.stringify(consoleSpy.mock.calls[0])).not.toMatch(/[0-9a-f]{32}/);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('does not log when the response is ok', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(<GuestSessionBootstrap />);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(consoleSpy).not.toHaveBeenCalled();
+
+    consoleSpy.mockRestore();
+  });
 });

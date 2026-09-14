@@ -42,14 +42,33 @@ export interface ResolvedGuestSession {
    * — ordinary first use (id unchanged) as much as a fresh mint (id
    * changed, e.g. a malformed cookie or one naming an already-converted
    * session). It is NOT, on its own, "the calling route handler needs to
-   * (re)set the cookie": that's only true when the id actually changed —
-   * compare `actor.sessionId` against whatever raw value was presented, the
-   * way `src/app/api/guest-session/route.ts` does, rather than branching on
-   * this flag alone. False is the "returning guest" path: a valid cookie
-   * whose row already existed, resolved with a single read and no write at
-   * all.
+   * (re)set the cookie" — that's `reissued`, below.
    */
   readonly isNew: boolean;
+  /**
+   * True whenever `actor.sessionId` is NOT the id the caller presented —
+   * i.e. whenever the calling adapter must (re)set the cookie, or a later
+   * write (an essay insert, say) must use this id rather than whatever the
+   * browser's cookie currently says, because the browser doesn't know
+   * about the new one yet.
+   *
+   * False for both "returning guest" (valid id, row already existed) and
+   * "ordinary first use" (valid id, row created now, under that exact id):
+   * the cookie already in the browser names the right session either way,
+   * nothing to reissue. True for every path through `mintFreshGuestSession`
+   * — no cookie, a malformed one, or one naming a session that turned out
+   * to be unavailable (see `SessionIdUnavailableError`) — since a fresh id
+   * was minted and whatever cookie was, or wasn't, there is now stale.
+   *
+   * Computed here, once, rather than left for each caller to rediscover by
+   * string-comparing `actor.sessionId` against the raw value it passed in
+   * (`src/app/api/guest-session/route.ts` used to do exactly that — read it
+   * from here instead). The same comparison, done wrong or skipped, is how
+   * KAN-14's essay submission path would insert an essay under a session id
+   * the browser was never told to send back, making the guest unable to
+   * ever read their own graded result.
+   */
+  readonly reissued: boolean;
 }
 
 /**
@@ -74,16 +93,18 @@ export async function resolveGuestSession(rawCookieValue: string | undefined): P
     const actor: GuestActor = { kind: 'guest', sessionId: parsed.data };
     const existing = await getGuestSessionById(actor, parsed.data);
     if (existing) {
-      return { actor, session: existing, isNew: false };
+      return { actor, session: existing, isNew: false, reissued: false };
     }
     try {
-      return { actor, session: await createSessionTolerably(actor), isNew: true };
+      const session = await createSessionTolerably(actor);
+      return { actor, session, isNew: true, reissued: false };
     } catch (err) {
-      if (!(err instanceof ConvertedSessionIdCollisionError)) throw err;
-      // The cookie named a real id, but one that already belongs to a
-      // converted session (see the error's own comment below) — that id can
-      // never authorise a guest session again. Recover exactly the way a
-      // malformed/forged cookie already does: mint a completely different
+      if (!(err instanceof SessionIdUnavailableError)) throw err;
+      // The cookie named a real id, but one that's no longer available for
+      // a guest session — converted, or deleted since, and the recovery is
+      // identical either way (see the error's own comment below). That id
+      // can never authorise a guest session again. Recover exactly the way
+      // a malformed/forged cookie already does: mint a completely different
       // one. This is the fix for the guest who registers, still holds the
       // old cookie, and would otherwise hit a duplicate-key error on every
       // subsequent guest-flow page load.
@@ -96,7 +117,8 @@ export async function resolveGuestSession(rawCookieValue: string | undefined): P
 
 async function mintFreshGuestSession(): Promise<ResolvedGuestSession> {
   const actor: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
-  return { actor, session: await createSessionTolerably(actor), isNew: true };
+  const session = await createSessionTolerably(actor);
+  return { actor, session, isNew: true, reissued: true };
 }
 
 /**
@@ -108,10 +130,11 @@ async function mintFreshGuestSession(): Promise<ResolvedGuestSession> {
  * this, the loser surfaces Postgres's unique-violation to the guest instead
  * of quietly reusing the row the winner just committed.
  *
- * Throws `ConvertedSessionIdCollisionError` instead of the raw
- * unique-violation when the reread below comes back empty — see that
- * error's own comment for why that specific outcome is never the "something
- * other than the expected race" case the comment used to worry about.
+ * Throws `SessionIdUnavailableError` instead of the raw unique-violation
+ * when the reread below comes back empty — see that error's own comment for
+ * why that specific outcome is never the "something other than the expected
+ * race" case the comment used to worry about, and for what it can and can't
+ * be taken to mean.
  */
 async function createSessionTolerably(actor: GuestActor): Promise<GuestSession> {
   try {
@@ -127,24 +150,44 @@ async function createSessionTolerably(actor: GuestActor): Promise<GuestSession> 
     // and it cannot have been converted between the insert and this read.
     // A unique-violation whose reread still can't find the row therefore
     // means the row was never ours to begin with: this id belongs to a
-    // session that had already converted to a registered account before
-    // this call ever ran.
-    throw new ConvertedSessionIdCollisionError(actor.sessionId);
+    // session that is no longer available as a guest session — most likely
+    // converted to a registered account before this call ever ran, but see
+    // the error's own comment for the other case this covers.
+    throw new SessionIdUnavailableError(actor.sessionId);
   }
 }
 
 /**
- * Distinguishes "this id already belongs to a converted session" from a
+ * Distinguishes "this id is no longer available for a guest session" from a
  * genuine, unexpected failure during the race-tolerant insert above — see
  * `createSessionTolerably`'s comment for why the reread it follows can only
  * mean this. `resolveGuestSession` catches it, specifically, to recover by
  * minting a different id rather than surfacing the duplicate-key error to
  * the guest as a 500.
+ *
+ * Named for the recovery, not the cause, on purpose (review, round 2): a
+ * 23505 whose ownership-scoped reread comes back empty means either the id
+ * converted (the case this was written for) or the row was deleted since —
+ * a 30-day retention sweep, or a right-to-erasure cascade, landing between
+ * the failed insert and the reread. `resolveGuestSession` recovers
+ * identically either way, mint a fresh id, so the two are indistinguishable
+ * here and this error must not be read as "converted" by anything that
+ * counts occurrences of it for a conversion metric — it would silently
+ * mislabel retention deletions as conversions.
+ *
+ * The guarantee this rests on is actually stronger than "probably
+ * converted": Postgres blocks the second inserter on a conflicting key
+ * until the first transaction ends, and if the first one rolls back, the
+ * second insert simply succeeds instead of conflicting — so seeing a 23505
+ * at all implies a row under this id was, at that instant, COMMITTED. That
+ * is what makes the reread above a meaningful check rather than a race with
+ * an uncommitted insert: whatever the reread's answer, something real was
+ * there a moment ago.
  */
-class ConvertedSessionIdCollisionError extends Error {
+class SessionIdUnavailableError extends Error {
   constructor(sessionId: string) {
-    super(`guest session id "${sessionId}" already belongs to a converted session`);
-    this.name = 'ConvertedSessionIdCollisionError';
+    super(`guest session id "${sessionId}" is no longer available for a guest session`);
+    this.name = 'SessionIdUnavailableError';
   }
 }
 

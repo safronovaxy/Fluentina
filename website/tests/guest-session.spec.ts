@@ -20,16 +20,22 @@ import { test, expect } from '@playwright/test';
 const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 
 // Chromium (and Firefox) treat "localhost" as a secure context and honour
-// __Host- there even over plain HTTP — the same exception they already make
-// for the plain `Secure` attribute (see guest-session-cookie.ts's own
-// comment on that). WebKit doesn't extend that exception to __Host-:
-// verified locally (`npx playwright test --project=webkit-desktop`) that
-// every one of these tests fails with no session cookie present at all —
-// WebKit silently refuses to store it — while chromium-desktop and
-// chromium-mobile both pass all five. Production always serves HTTPS, so
-// this is an artifact of testing over plain HTTP locally/in CI, not a
-// defect in the cookie: the review's own instruction is to keep the prefix
-// and adjust the test, not drop it.
+// `Secure` cookies there even over plain HTTP. WebKit doesn't: probed
+// directly (round 2 review) with three cookies set over plain
+// `http://localhost:8080/` — a bare cookie, a `Secure` one, and a
+// `__Host-`-prefixed one — only the bare cookie was stored; BOTH of the
+// other two, `Secure` alone as much as `__Host-`, were silently dropped.
+// The same probe over `https://localhost:8443/`, including with an
+// untrusted self-signed cert, stored all three, `__Host-` included. So the
+// cause is `Secure` over plain HTTP, full stop — `__Host-` implies `Secure`
+// and is incidental here, not an extra WebKit restriction of its own; an
+// earlier version of this comment blamed `__Host-` specifically, which is
+// what a reader would have "fixed" by dropping the prefix, a real security
+// regression that would not have made WebKit pass anyway (the bare
+// `Secure` attribute alone already fails the same way). Production always
+// serves HTTPS, so this is an artifact of testing over plain HTTP
+// locally/in CI, not a defect in the cookie: the review's own instruction
+// is to keep the prefix and adjust the test, not drop it.
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3000';
 const isPlainHttp = BASE_URL.startsWith('http://');
 
@@ -56,8 +62,18 @@ test.describe('KAN-10 — guest session cookie', () => {
     expect(sessionCookie?.path).toBe('/');
   });
 
-  test('never readable from client JavaScript — HttpOnly excludes it from document.cookie', async ({ page }) => {
+  test('never readable from client JavaScript — HttpOnly excludes it from document.cookie', async ({ page, context }) => {
     await page.goto('/practice');
+
+    // Review (round 2): this assertion holds trivially, and for the wrong
+    // reason, in a browser that refused to store the cookie at all — it was
+    // the one test in this file that still passed under WebKit-over-plain-
+    // HTTP, precisely because there, `document.cookie` not containing it and
+    // `context.cookies()` not containing it were the same fact. Pinning that
+    // the cookie really was set is what makes "and yet unreadable" mean
+    // anything.
+    const cookies = await context.cookies();
+    expect(cookies.find((c) => c.name === SESSION_COOKIE_NAME)).toBeDefined();
 
     const documentCookie = await page.evaluate(() => document.cookie);
     expect(documentCookie).not.toContain(SESSION_COOKIE_NAME);

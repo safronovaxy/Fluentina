@@ -37,6 +37,16 @@ import { useEffect, useRef } from 'react';
  * component ran; it has to call `resolveGuestSession` itself before
  * inserting an essay — which is safe, because that function is already
  * idempotent (see its own comment in lib/domain/guest-session.ts).
+ *
+ * Review (round 2): `.catch()` alone never caught the one failure that
+ * actually shipped — the route rejecting a legitimate request with a 400
+ * (see route.ts's own round-2 review note) resolves the fetch promise, it
+ * doesn't reject it, so nothing here ever ran and nothing was ever logged.
+ * A non-2xx response is now logged client-side, specifically to make that
+ * class of failure visible instead of silent; still best-effort otherwise —
+ * no retry, no UI, per the rest of this comment. Status code only, never
+ * the cookie value or the session id: logging either would put a guest
+ * identifier somewhere outside the HttpOnly cookie it's meant to stay in.
  */
 export function GuestSessionBootstrap() {
   const firedRef = useRef(false);
@@ -44,9 +54,15 @@ export function GuestSessionBootstrap() {
   useEffect(() => {
     if (firedRef.current) return;
     firedRef.current = true;
-    fetch('/api/guest-session', { method: 'POST' }).catch(() => {
-      // Best-effort — see the component comment above.
-    });
+    fetch('/api/guest-session', { method: 'POST' })
+      .then((response) => {
+        if (!response.ok) {
+          console.error('[guest-session] bootstrap request failed', { status: response.status });
+        }
+      })
+      .catch(() => {
+        // Best-effort — see the component comment above.
+      });
   }, []);
 
   return null;

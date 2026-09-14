@@ -22,12 +22,14 @@ afterAll(async () => {
 
 describe('resolveGuestSession — no cookie (first visit)', () => {
   it('mints a fresh session id and creates its row', async () => {
-    const { actor, session, isNew } = await resolveGuestSession(undefined);
+    const { actor, session, isNew, reissued } = await resolveGuestSession(undefined);
 
     expect(guestSessionIdSchema.safeParse(actor.sessionId).success).toBe(true);
     expect(session.id).toBe(actor.sessionId);
     expect(session.userId).toBeNull();
     expect(isNew).toBe(true);
+    // There was nothing to reuse — the caller must set a cookie.
+    expect(reissued).toBe(true);
 
     // The row is really there, not just returned in memory — read it back
     // through the ownership-scoped repository the same way any later
@@ -43,11 +45,14 @@ describe('resolveGuestSession — well-formed cookie, no row yet (ordinary first
     // earlier, on the same request cycle, without being able to persist it.
     const mintedByEdge = generateGuestSessionId();
 
-    const { actor, session, isNew } = await resolveGuestSession(mintedByEdge);
+    const { actor, session, isNew, reissued } = await resolveGuestSession(mintedByEdge);
 
     expect(actor.sessionId).toBe(mintedByEdge);
     expect(session.id).toBe(mintedByEdge);
     expect(isNew).toBe(true);
+    // The id presented is the id resolved under — nothing for the caller to
+    // reissue a cookie for.
+    expect(reissued).toBe(false);
   });
 });
 
@@ -60,6 +65,7 @@ describe('resolveGuestSession — well-formed cookie, row already exists (return
     expect(second.actor.sessionId).toBe(first.actor.sessionId);
     expect(second.session.createdAt).toEqual(first.session.createdAt);
     expect(second.isNew).toBe(false);
+    expect(second.reissued).toBe(false);
   });
 
   it('does not write a second row for the same id', async () => {
@@ -81,12 +87,15 @@ describe('resolveGuestSession — malformed or forged cookie', () => {
   it('never lets a malformed value become the session id — a fresh one is generated instead', async () => {
     const forged = 'not-a-valid-session-id';
 
-    const { actor, session, isNew } = await resolveGuestSession(forged);
+    const { actor, session, isNew, reissued } = await resolveGuestSession(forged);
 
     expect(actor.sessionId).not.toBe(forged);
     expect(guestSessionIdSchema.safeParse(actor.sessionId).success).toBe(true);
     expect(session.id).not.toBe(forged);
     expect(isNew).toBe(true);
+    // The id resolved under is not the one presented — the caller must
+    // overwrite whatever cookie was there.
+    expect(reissued).toBe(true);
 
     // The forged string itself must never have reached the database as a
     // primary key — not even a row that later got superseded.
@@ -97,10 +106,11 @@ describe('resolveGuestSession — malformed or forged cookie', () => {
   it('rejects a well-formed-length but uppercase value the same way — the format is lowercase hex only', async () => {
     const uppercase = generateGuestSessionId().toUpperCase();
 
-    const { actor, isNew } = await resolveGuestSession(uppercase);
+    const { actor, isNew, reissued } = await resolveGuestSession(uppercase);
 
     expect(actor.sessionId).not.toBe(uppercase);
     expect(isNew).toBe(true);
+    expect(reissued).toBe(true);
   });
 
   it('an attacker-chosen but syntactically valid id never gets planted as a session merely by presenting it once — only an id this resolver itself minted gets a row', async () => {
@@ -180,13 +190,17 @@ describe('resolveGuestSession — the cookie names an already-converted session'
     // registration — a separate story; see this ticket's own review note)
     // and presents the exact same, now-converted id on its very next
     // guest-flow page load.
-    const { actor, session, isNew } = await resolveGuestSession(originalActor.sessionId);
+    const { actor, session, isNew, reissued } = await resolveGuestSession(originalActor.sessionId);
 
     expect(actor.sessionId).not.toBe(originalActor.sessionId);
     expect(guestSessionIdSchema.safeParse(actor.sessionId).success).toBe(true);
     expect(session.id).toBe(actor.sessionId);
     expect(session.userId).toBeNull();
     expect(isNew).toBe(true);
+    // The id resolved under differs from the one presented — the caller
+    // must reissue the cookie, or (KAN-14) write under this id rather than
+    // the one the browser's current cookie names.
+    expect(reissued).toBe(true);
 
     // The old, converted session is untouched — still attached to the user,
     // not somehow reopened as a guest session by this call.
@@ -195,5 +209,39 @@ describe('resolveGuestSession — the cookie names an already-converted session'
       originalActor.sessionId,
     );
     expect(convertedSession?.userId).toBe(userId);
+  });
+});
+
+describe('resolveGuestSession — a genuine, unexpected failure creating the row', () => {
+  // Review (round 2): both `if (!(err instanceof SessionIdUnavailableError))
+  // throw err;` (the outer catch in resolveGuestSession) and `if
+  // (!isUniqueViolation(err)) throw err;` (createSessionTolerably's own
+  // catch) survived the entire suite as mutants before this test existed —
+  // every test above proves "on an error, mint a fresh id", none of them
+  // proves "on THIS error, and only this one". With either guard deleted, a
+  // statement timeout or a serialisation failure gets treated exactly like
+  // a unique-violation-on-a-converted-session: silently swallowed, and the
+  // guest gets rotated onto a different session id with a 200, severing
+  // their in-flight work with nothing anywhere to show it happened.
+  it('rejects rather than minting a fresh session, when session creation fails for a reason that has nothing to do with a unique-key conflict', async () => {
+    const freshId = generateGuestSessionId();
+    // SQLSTATE 57014 (query_canceled — e.g. a statement timeout), not 23505
+    // (unique_violation): a real, different failure mode, shaped the way
+    // isUniqueViolation actually reads a driver error (see that function's
+    // own comment on `.code` vs `.cause.code`).
+    const timeoutError = Object.assign(new Error('canceling statement due to statement timeout'), {
+      code: '57014',
+    });
+    const createSpy = vi.spyOn(guestSessionsDb, 'createGuestSession').mockRejectedValueOnce(timeoutError);
+
+    try {
+      await expect(resolveGuestSession(freshId)).rejects.toBe(timeoutError);
+    } finally {
+      createSpy.mockRestore();
+    }
+
+    // Not silently recovered from by minting a different id under the
+    // covers, either — nothing was ever created for this id at all.
+    expect(await getGuestSessionById({ kind: 'guest', sessionId: freshId }, freshId)).toBeNull();
   });
 });
