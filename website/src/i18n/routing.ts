@@ -17,25 +17,31 @@ import { defineRouting } from 'next-intl/routing';
  * request for the prefixed default-locale path (`/en/practice`) redirects to
  * the unprefixed one, so the two never both serve as duplicate content.
  *
- * `localeDetection: true` (next-intl's default — stated explicitly here,
- * not left implicit) means the middleware also negotiates from the
- * request's `Accept-Language` header (and a `NEXT_LOCALE` cookie once one
- * has been set, e.g. by the locale switcher): a German-browser guest
- * requesting the *unprefixed* default-locale URL (`/practice`) is
- * redirected to `/de/practice`, same as a French-browser guest would be if
- * `fr` existed. That is a real product question — is a browser's language
- * preference allowed to override a URL that already unambiguously names a
- * locale? — not one this story is answering; it's flagged separately. This
- * comment and the test pinning it (tests/guest-flow-i18n.spec.ts) exist so
- * the current, default behaviour is visible and intentional-looking rather
- * than an unstated side effect someone has to rediscover by reading
- * next-intl's source.
+ * `localeDetection: false` — a deliberate departure from next-intl's
+ * default, decided by Irina on 2026-09-14.
+ *
+ * With detection on, the middleware negotiates from the request's
+ * `Accept-Language` header, so a German-browser guest asking for `/practice`
+ * was redirected to `/de/practice`. Friendlier, but it means a URL that
+ * already names a locale does not reliably serve that locale.
+ *
+ * The deciding factor was caching, not preference. Once the guest pages
+ * became genuinely prerendered, `/practice` started serving with a long
+ * shared-cache lifetime while its body still depended on a request header
+ * that `Vary` does not name. A shared cache in front of Cloud Run could
+ * therefore hand a stored English page — and its `NEXT_LOCALE` cookie — to a
+ * German visitor, pinning the wrong language for them. Turning detection off
+ * makes `/practice` unambiguously English, so the cached copy is correct for
+ * everyone and the hazard disappears rather than being mitigated.
+ *
+ * The locale switcher still works: it sets the cookie and navigates, which
+ * is an explicit choice rather than an inferred one.
  */
 export const routing = defineRouting({
   locales: ['en', 'de'],
   defaultLocale: 'en',
   localePrefix: 'as-needed',
-  localeDetection: true,
+  localeDetection: false,
 });
 
 export type AppLocale = (typeof routing.locales)[number];

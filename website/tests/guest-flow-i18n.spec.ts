@@ -134,22 +134,31 @@ test.describe('KAN-9 — guest flow renders in both locales', () => {
   });
 });
 
-test.describe('KAN-9 — browser locale detection (consider item)', () => {
-  // routing.ts's `localeDetection: true` (next-intl's default, now stated
-  // explicitly) means a request for the unprefixed *default*-locale URL
-  // still gets negotiated against the browser's `Accept-Language` header.
-  // This is flagged to Irina as a product question — should a browser
-  // preference override a URL that already unambiguously names a locale? —
-  // and deliberately left as-is here; this test only makes the current,
-  // already-shipping behaviour visible and pinned rather than an unstated
-  // side effect someone has to rediscover by reading next-intl's source.
+test.describe('KAN-9 — a URL names its locale, the browser does not', () => {
+  // routing.ts sets `localeDetection: false` (Irina, 2026-09-14), against
+  // next-intl's default. The deciding factor was caching: once these pages
+  // became genuinely prerendered, /practice started serving with a long
+  // shared-cache lifetime while its body depended on a request header that
+  // `Vary` does not name, so a shared cache could hand a stored English page
+  // to a German visitor. With detection off, /practice is unambiguously
+  // English and the cached copy is correct for everyone.
+  //
+  // This test is the guard on that: it fails if the default is ever restored,
+  // which would reintroduce the hazard silently.
   test.use({ locale: 'de-DE' });
 
-  test('a German-browser guest requesting /practice is redirected to /de/practice', async ({
-    page,
-  }) => {
-    await page.goto('/practice');
-    await expect(page).toHaveURL(/\/de\/practice$/);
+  test('a German-browser guest requesting /practice still gets English', async ({ page }) => {
+    const response = await page.goto('/practice');
+    expect(response?.ok()).toBe(true);
+    await expect(page).toHaveURL(/\/practice$/);
+    await expect(page).not.toHaveURL(/\/de\/practice$/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Practice a B2-style essay');
+  });
+
+  test('the German URL still serves German to an English browser', async ({ page }) => {
+    // The other direction: the URL decides, in both directions.
+    const response = await page.goto('/de/practice');
+    expect(response?.ok()).toBe(true);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Übe einen B2-Aufsatz');
   });
 });
