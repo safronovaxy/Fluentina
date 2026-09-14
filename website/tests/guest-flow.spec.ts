@@ -16,11 +16,11 @@
  * Same trap, one axis over: running these against English alone twice (once
  * per viewport project) doubles the assertion count without doubling the
  * evidence for the locale axis. German is the harder case for the
- * differential/truncation tests specifically. German is the harder case:
- * running them in German is what caught "Registrieren" truncating on a full
- * desktop width, which is why that label is now "Konto". Original note —
- * "Register", "Einreichen" against "Submit" — against a step row already
- * tuned to the pixel (see flow-steps.ts). A label that truncates only in
+ * differential/truncation tests specifically: "Registrieren" against
+ * "Register", "Einreichen" against "Submit", against a step row already
+ * tuned to the pixel (see flow-steps.ts). Running them in German is what
+ * caught "Registrieren" truncating at a full desktop width, which is why
+ * that label is now "Konto". A label that truncates only in
  * German, only on desktop, would ship green if this file only ever loaded
  * `/practice`. Looping the whole describe block over both locale fixtures,
  * rather than hand-copying it into a second file, is what keeps this from

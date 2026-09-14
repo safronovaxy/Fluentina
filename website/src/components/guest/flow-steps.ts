@@ -30,6 +30,13 @@ export interface GuestFlowStep {
  * reading of this assumed. Widening the header instead would misalign it
  * with the main content column, which shares the same cap.
  */
+/**
+ * Note on `label`: for these canonical steps the rendered text comes from the
+ * message catalogue (`chrome.guest.steps.<id>`), not from here — see
+ * StepIndicator. These literals stay because they are still what a
+ * caller-supplied custom step list uses, but editing one will not change
+ * anything on screen. Change the catalogue instead.
+ */
 export const GUEST_FLOW_STEPS = [
   { id: 'prompt', label: 'Prompt' },
   { id: 'write', label: 'Write' },
