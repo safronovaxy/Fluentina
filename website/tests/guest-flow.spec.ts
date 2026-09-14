@@ -16,7 +16,9 @@
  * Same trap, one axis over: running these against English alone twice (once
  * per viewport project) doubles the assertion count without doubling the
  * evidence for the locale axis. German is the harder case for the
- * differential/truncation tests specifically — "Registrieren" against
+ * differential/truncation tests specifically. German is the harder case:
+ * running them in German is what caught "Registrieren" truncating on a full
+ * desktop width, which is why that label is now "Konto". Original note —
  * "Register", "Einreichen" against "Submit" — against a step row already
  * tuned to the pixel (see flow-steps.ts). A label that truncates only in
  * German, only on desktop, would ship green if this file only ever loaded
@@ -69,7 +71,7 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     ctaName: 'Jetzt üben',
     brandName: 'Fluentina Startseite',
     firstStepLabel: 'Schritt 1 von 5: Thema',
-    lastStepLabel: 'Schritt 5 von 5: Registrieren',
+    lastStepLabel: 'Schritt 5 von 5: Konto',
   },
 ];
 
