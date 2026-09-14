@@ -20,7 +20,7 @@ import { buildOwnershipCondition } from './ownership';
 import { createEssay, getEssayById } from './essays';
 import { createGuestSession, convertGuestSessionToUser } from './guest-sessions';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
-import { resetDatabase, createTestUser, closePool } from './test-helpers';
+import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import type { GuestActor, UserActor } from '@/lib/contracts/actor';
 
 function newGuestActor(): GuestActor {
@@ -59,8 +59,8 @@ describe('the ownership predicate never silently collapses to "no filter"', () =
   it('demonstrates the danger directly: and() with no conditions makes .where() match every row', async () => {
     const sessionA = await createGuestSession(newGuestActor());
     const sessionB = await createGuestSession(newGuestActor());
-    await createEssay({ kind: 'guest', sessionId: sessionA.id }, 'Essay under session A, fifty-plus words to satisfy a future length check, though this test does not exercise that rule at all.');
-    await createEssay({ kind: 'guest', sessionId: sessionB.id }, 'Essay under session B, entirely unrelated to session A and owned by a different guest altogether.');
+    const essayA = await createEssay({ kind: 'guest', sessionId: sessionA.id }, 'Essay under session A, fifty-plus words to satisfy a future length check, though this test does not exercise that rule at all.');
+    const essayB = await createEssay({ kind: 'guest', sessionId: sessionB.id }, 'Essay under session B, entirely unrelated to session A and owned by a different guest altogether.');
 
     // and() with no arguments is exactly what a bug in ownedBy() could
     // produce before the throwing guard was added. This is what would have
@@ -69,10 +69,16 @@ describe('the ownership predicate never silently collapses to "no filter"', () =
     expect(dangerousCondition).toBeUndefined();
 
     const rows = await db.select().from(essaysTable).where(dangerousCondition);
-    // Every row, from every session — the silent full-table read this story
+    // Both of session A's and session B's essays come back through a filter
+    // that names neither session — the silent full-table read this story
     // exists to prevent, reproduced deliberately so the guard above can be
     // trusted to be catching a real failure mode and not a theoretical one.
-    expect(rows).toHaveLength(2);
+    // Scoped to these two ids rather than asserting the table's total
+    // length: this is the only test in the suite coupled to global database
+    // state (`resetDatabase` between tests hides that today), and an exact
+    // length breaks the moment parallel test execution is ever re-enabled.
+    const returnedIds = rows.map((row) => row.id);
+    expect(returnedIds).toEqual(expect.arrayContaining([essayA.id, essayB.id]));
   });
 });
 

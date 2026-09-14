@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { createEssay, getEssayById } from './essays';
 import { createGuestSession, getGuestSessionById, convertGuestSessionToUser } from './guest-sessions';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
-import { resetDatabase, createTestUser, closePool } from './test-helpers';
+import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import type { GuestActor, UserActor } from '@/lib/contracts/actor';
 
 function newGuestActor(): GuestActor {
@@ -85,5 +85,37 @@ describe('convertGuestSessionToUser', () => {
     await expect(convertGuestSessionToUser(actor, madeUpUserId)).rejects.toThrow(
       /no unconverted session found/,
     );
+  });
+
+  it('does not touch a second, unrelated guest session or its essay', async () => {
+    // The essays update is the one multi-row write in this story. Every
+    // other conversion test above has exactly one guest session in the
+    // database when it runs, so a predicate that dropped the session match
+    // — leaving only "unattached" — would attach every OTHER guest's
+    // unattached essay to the converting user too, and every test would
+    // still pass. This is the case that catches that: a bystander session,
+    // never converted, with its own essay.
+    const converting = newGuestActor();
+    const bystander = newGuestActor();
+    await createGuestSession(converting);
+    await createGuestSession(bystander);
+    await createEssay(converting, 'Essay under the session that will be converted.');
+    const bystanderEssay = await createEssay(bystander, 'Essay under an entirely unrelated guest session.');
+    const user = await newUserActor();
+
+    await convertGuestSessionToUser(converting, user.userId);
+
+    const bystanderSessionAfter = await getGuestSessionById(bystander, bystander.sessionId);
+    const bystanderEssayAsItsOwnGuest = await getEssayById(bystander, bystanderEssay.id);
+    const bystanderEssayAsConvertingUser = await getEssayById(user, bystanderEssay.id);
+
+    // Still a guest session, not swept up into the conversion.
+    expect(bystanderSessionAfter?.userId).toBeNull();
+    expect(bystanderSessionAfter?.convertedAt).toBeNull();
+    // Its own guest can still read its essay...
+    expect(bystanderEssayAsItsOwnGuest?.id).toBe(bystanderEssay.id);
+    // ...and the converting user, despite now owning everything under its
+    // own session, must not be able to read someone else's.
+    expect(bystanderEssayAsConvertingUser).toBeNull();
   });
 });

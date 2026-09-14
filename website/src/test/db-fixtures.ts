@@ -1,15 +1,22 @@
-import 'server-only';
-
 /**
- * Test-only fixture helpers. `resetDatabase` is a raw TRUNCATE — the kind of
- * unscoped query `lib/db`'s repositories deliberately never expose — but
- * this is fixture setup for the test suite, not a production read/write
- * path, so it lives outside the repository files and is imported only by
- * `*.test.ts` files in this directory.
+ * Test-only fixture helpers for the KAN-10 data-layer suite. `resetDatabase`
+ * is a raw TRUNCATE — the kind of unscoped query `lib/db`'s repositories
+ * deliberately never expose — so it lives here, in `src/test`, not inside
+ * `lib/db` itself.
+ *
+ * It used to live in `lib/db/test-helpers.ts`. Review flagged that as a real
+ * hole, not just an odd location: the layering lint blocks adapters from
+ * importing `lib/db` at all, but only blocks the domain layer from the raw
+ * client (`@/lib/db/client`) — never from the rest of `lib/db` — so a plain
+ * export sitting inside `lib/db` was reachable from domain code, which could
+ * import it and wipe every owned table. Moving it out of `lib/db` entirely,
+ * and adding `@/test`/`@/test/**` to the restricted-import groups for
+ * contracts, domain and adapters (see eslint.config.js), closes that: no
+ * production module graph can reach this file at all, from any layer.
  */
 import { sql } from 'drizzle-orm';
-import { db, closePool } from './client';
-import { users } from './schema';
+import { db, closePool } from '@/lib/db/client';
+import { users } from '@/lib/db/schema';
 
 /** Wipes every KAN-10 table between tests. Cascades handle ordering. */
 export async function resetDatabase(): Promise<void> {

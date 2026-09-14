@@ -36,7 +36,7 @@
  * guest_sessions to determine ownership.
  */
 import { sql } from 'drizzle-orm';
-import { pgSchema, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { index, pgSchema, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const fluentinaSchema = pgSchema('fluentina');
 
@@ -49,29 +49,58 @@ export const users = fluentinaSchema.table('users', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const guestSessions = fluentinaSchema.table('guest_sessions', {
-  // The bearer session id itself (see lib/domain/session-id.ts) — it is its
-  // own primary key, not a separate surrogate id.
-  id: text('id').primaryKey(),
-  // Null until the guest converts to a registered account. Cascades on
-  // account erasure: deleting a user deletes any session they converted.
-  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  // Set once, at conversion. Null is the "still a guest" state the
-  // ownership predicate keys off; see ownership.ts.
-  convertedAt: timestamp('converted_at', { withTimezone: true }),
-});
+export const guestSessions = fluentinaSchema.table(
+  'guest_sessions',
+  {
+    // The bearer session id itself (see lib/domain/session-id.ts) — it is
+    // its own primary key, not a separate surrogate id.
+    id: text('id').primaryKey(),
+    // Null until the guest converts to a registered account. Cascades on
+    // account erasure: deleting a user deletes any session they converted.
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    // Set once, at conversion. Null is the "still a guest" state the
+    // ownership predicate keys off; see ownership.ts.
+    convertedAt: timestamp('converted_at', { withTimezone: true }),
+  },
+  (table) => [
+    // Postgres does not index the referencing side of a foreign key for
+    // you. Every account-erasure delete and every retention sweep filters
+    // or joins on this column, and without an index each one is a
+    // sequential scan of the whole table.
+    index('guest_sessions_user_id_idx').on(table.userId),
+  ],
+);
 
-export const essays = fluentinaSchema.table('essays', {
-  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
-  // Kept for the row's whole lifetime, even after conversion — it records
-  // provenance and lets the ownership predicate work without a join.
-  // Cascades: deleting the originating guest session deletes its essays.
-  sessionId: text('session_id')
-    .notNull()
-    .references(() => guestSessions.id, { onDelete: 'cascade' }),
-  // Null until the owning session converts. Cascades on account erasure.
-  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
-  content: text('content').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const essays = fluentinaSchema.table(
+  'essays',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    // Kept for the row's whole lifetime, even after conversion — it records
+    // provenance and lets the ownership predicate work without a join.
+    // Cascades: deleting the originating guest session deletes its essays.
+    //
+    // That cascade is on the session row, not on whether it converted — the
+    // FK can express "delete essays when their session is deleted", not
+    // "...unless that session has since been attached to an account". A
+    // retention sweep that deletes guest_sessions rows older than N days
+    // (KAN-10's own scope stops short of writing that sweep) must exclude
+    // converted sessions explicitly (`converted_at IS NULL`) or it will
+    // cascade-delete a registered user's essays through the session row
+    // they originated from, days or months after that user signed up.
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => guestSessions.id, { onDelete: 'cascade' }),
+    // Null until the owning session converts. Cascades on account erasure.
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    content: text('content').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Same reasoning as guest_sessions.user_id above: both FK columns are
+    // read on every ownership-scoped query and every cascade, and neither
+    // gets an index automatically.
+    index('essays_session_id_idx').on(table.sessionId),
+    index('essays_user_id_idx').on(table.userId),
+  ],
+);

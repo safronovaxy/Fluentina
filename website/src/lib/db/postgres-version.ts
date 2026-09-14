@@ -52,3 +52,38 @@ export function assertPostgresMajor(versionNum: number, describeTarget: string):
     );
   }
 }
+
+/** The one row `SHOW server_version_num` returns. */
+export interface PostgresVersionRow {
+  readonly server_version_num: string;
+}
+
+/**
+ * The minimal shape `assertDatabaseMajorVersion` needs from a database
+ * handle — satisfied structurally by a real `pg.Pool`/`pg.Client`, and
+ * cheaply by a fake in a test. Deliberately not the concrete `pg.Pool` type:
+ * that would force every caller (and every test) to construct a real
+ * connection just to exercise the assertion.
+ */
+export interface VersionQueryable {
+  query(sql: string): Promise<{ rows: PostgresVersionRow[] }>;
+}
+
+/**
+ * Reads the connected server's major version and asserts it, throwing
+ * before returning if it doesn't match `EXPECTED_POSTGRES_MAJOR`. This is
+ * the "pool-reading half" split out of `scripts/migrate.ts` so it — and the
+ * refusal it produces — can be exercised directly in a test against both a
+ * real pool and an injected fake, rather than only unit-testing the pure
+ * arithmetic in `assertPostgresMajor` and hoping the script wires it in
+ * correctly. See `assertDatabaseMajorVersion`'s tests and
+ * `scripts/migrate.ts::runMigration`, which is what actually proves the
+ * guard blocks a migration and not just that it computes the right boolean.
+ */
+export async function assertDatabaseMajorVersion(
+  pool: VersionQueryable,
+  describeTarget: string,
+): Promise<void> {
+  const { rows } = await pool.query('SHOW server_version_num');
+  assertPostgresMajor(Number(rows[0].server_version_num), describeTarget);
+}

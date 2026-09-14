@@ -8,6 +8,13 @@
       "when": 1789338372638,
       "tag": "0000_kan10_guest_sessions_and_essays",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789367858649,
+      "tag": "0001_kan10_fk_indexes",
+      "breakpoints": true
     }
   ]
 }

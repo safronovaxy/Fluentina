@@ -6,40 +6,57 @@
  * of that record; run this by hand (or from Vitest's DB test setup) for now.
  */
 import { config } from 'dotenv';
+import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import { assertPostgresMajor } from '../src/lib/db/postgres-version';
+import { assertDatabaseMajorVersion, type VersionQueryable } from '../src/lib/db/postgres-version';
 
 // quiet: true — see the comment in drizzle.config.ts on dotenv@17's
 // self-promotional console "tips".
 config({ path: '.env.local', quiet: true });
+
+/**
+ * The whole migration run: check the version, then apply. `applyMigrations`
+ * defaults to the real drizzle-orm migrator but is injectable so a test can
+ * replace it with a spy and assert it was never called when the version
+ * guard throws — proving the guard actually blocks a migration end to end,
+ * not just that `assertPostgresMajor`'s arithmetic is correct in isolation.
+ * See src/lib/db/postgres-version.test.ts.
+ */
+export async function runMigration(
+  pool: VersionQueryable & Pick<Pool, 'query'>,
+  applyMigrations: (db: NodePgDatabase) => Promise<void> = (db) =>
+    migrate(db, { migrationsFolder: './drizzle' }),
+): Promise<void> {
+  // Check the server's major version BEFORE applying anything. See
+  // src/lib/db/postgres-version.ts for why this is asserted rather than
+  // assumed. A partly-applied migration is worse than none.
+  await assertDatabaseMajorVersion(pool, 'The target database');
+  const db = drizzle(pool as Pool);
+  await applyMigrations(db);
+}
 
 async function main() {
   if (!process.env.DATABASE_URL) {
     throw new Error('DATABASE_URL is not set — see website/.env.example');
   }
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
-  // Check the server's major version BEFORE applying anything. See
-  // src/lib/db/postgres-version.ts for why this is asserted rather than
-  // assumed. A partly-applied migration is worse than none.
-  const { rows } = await pool.query<{ server_version_num: string }>(
-    'SHOW server_version_num',
-  );
   try {
-    assertPostgresMajor(Number(rows[0].server_version_num), 'The target database');
-  } catch (err) {
+    await runMigration(pool);
+  } finally {
     await pool.end();
-    throw err;
   }
-
-  const db = drizzle(pool);
-  await migrate(db, { migrationsFolder: './drizzle' });
-  await pool.end();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only auto-run when this file is the process entry point (`tsx
+// scripts/migrate.ts` / `npm run db:migrate`) — not when a test imports
+// `runMigration` above. `main()` opens a real connection from
+// DATABASE_URL and calls `process.exit`, neither of which a test should
+// trigger just by importing this module.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

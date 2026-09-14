@@ -12,12 +12,15 @@ import { eq, and } from 'drizzle-orm';
 import { db } from './client';
 import { essays, guestSessions } from './schema';
 import { ownedBy } from './ownership';
+import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import type { GuestSession } from '@/lib/contracts/guest-session';
 import type { GuestActor, OwnerActor } from '@/lib/contracts/actor';
 
 function toGuestSession(row: typeof guestSessions.$inferSelect): GuestSession {
   return {
-    id: row.id,
+    // The one explicit conversion from a raw database string to the branded
+    // `GuestSessionId` — see the brand comment on `guestSessionIdSchema`.
+    id: guestSessionIdSchema.parse(row.id),
     userId: row.userId,
     createdAt: row.createdAt,
     convertedAt: row.convertedAt,
@@ -30,11 +33,21 @@ function toGuestSession(row: typeof guestSessions.$inferSelect): GuestSession {
  * built from that id, not the bare string, so every repository function —
  * including this one — takes an Actor as its first parameter without
  * exception.
+ *
+ * Re-parses `actor.sessionId` before inserting even though the type is
+ * already the branded `GuestSessionId` — the brand is a compile-time
+ * guarantee only, and is erased by a forced cast (`as GuestSessionId`) at
+ * whatever boundary eventually builds a `GuestActor` from a cookie (KAN-9).
+ * This is the one function that turns a session id into a primary key, so
+ * it is the one place that cannot trust the type alone: a malformed or
+ * attacker-chosen id is rejected here, at runtime, rather than silently
+ * becoming a row someone else already knows the id of and can read.
  */
 export async function createGuestSession(actor: GuestActor): Promise<GuestSession> {
+  const sessionId = guestSessionIdSchema.parse(actor.sessionId);
   const [row] = await db
     .insert(guestSessions)
-    .values({ id: actor.sessionId })
+    .values({ id: sessionId })
     .returning();
   return toGuestSession(row);
 }

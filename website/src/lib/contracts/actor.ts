@@ -28,9 +28,21 @@ import { z } from 'zod';
 // — 32 lowercase hex characters. Validated here so any boundary that accepts
 // one from the outside world (a cookie, once KAN-9's session issuance lands)
 // can reject a malformed value before it ever reaches a query.
+//
+// `.brand<'GuestSessionId'>()` matters as much as the regex does. Without
+// it, `z.infer` on a regex-refined string schema is still plain `string` —
+// any string type-checks as a `GuestSessionId`, so a raw, unvalidated cookie
+// value could be assigned straight into a `GuestActor` with no compiler
+// complaint and no parse ever running. The brand makes that assignment a
+// type error: the only way to produce a `GuestSessionId` is through
+// `guestSessionIdSchema.parse`/`.safeParse`, so every value that reaches
+// `createGuestSession` (the function that inserts it as a primary key) has
+// already been through the regex — closing the session-fixation route where
+// someone plants a cookie value and gets to choose their own session id.
 export const guestSessionIdSchema = z
   .string()
-  .regex(/^[0-9a-f]{32}$/, 'must be a 32-character lowercase hex string (128 bits)');
+  .regex(/^[0-9a-f]{32}$/, 'must be a 32-character lowercase hex string (128 bits)')
+  .brand<'GuestSessionId'>();
 
 export type GuestSessionId = z.infer<typeof guestSessionIdSchema>;
 
