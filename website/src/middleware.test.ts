@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from './middleware';
+import { NextRequest } from 'next/server';
+import middleware, { config } from './middleware';
 import { routing } from './i18n/routing';
+import { generateGuestSessionId } from '@/lib/domain/session-id';
+import { guestSessionIdSchema } from '@/lib/contracts/actor';
+import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
 
 /**
  * KAN-9 — a review found the middleware matcher is a hand-maintained
@@ -109,5 +113,79 @@ describe('middleware matcher covers every guest route in every locale (KAN-9)', 
       /Write the matcher entry by hand/,
     );
     expect(() => assertNoDynamicSegments(['/practice'])).not.toThrow();
+  });
+});
+
+function requestWithCookie(path: string, cookieValue?: string): NextRequest {
+  const headers = cookieValue ? { cookie: `${GUEST_SESSION_COOKIE_NAME}=${cookieValue}` } : undefined;
+  return new NextRequest(new URL(`http://localhost:3000${path}`), { headers });
+}
+
+describe('middleware — KAN-10 guest session cookie, composed onto KAN-9 locale routing', () => {
+  it('a first visit (no cookie) gets a session cookie minted at the edge', () => {
+    const response = middleware(requestWithCookie('/practice'));
+
+    const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
+    expect(cookie).toBeDefined();
+    expect(guestSessionIdSchema.safeParse(cookie?.value).success).toBe(true);
+  });
+
+  it('the cookie carries HttpOnly, Secure, SameSite=Lax and Path=/ — a bearer credential, never readable by client JavaScript', () => {
+    const response = middleware(requestWithCookie('/practice'));
+
+    const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
+    expect(cookie?.httpOnly).toBe(true);
+    expect(cookie?.secure).toBe(true);
+    expect(cookie?.sameSite).toBe('lax');
+    expect(cookie?.path).toBe('/');
+  });
+
+  it('a returning guest with a valid cookie keeps it — no Set-Cookie at all', () => {
+    const existing = generateGuestSessionId();
+
+    const response = middleware(requestWithCookie('/practice', existing));
+
+    expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
+  });
+
+  it('a malformed or forged cookie value is never carried forward — a fresh one replaces it', () => {
+    const forged = 'attacker-supplied-value';
+
+    const response = middleware(requestWithCookie('/practice', forged));
+
+    const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
+    expect(cookie?.value).not.toBe(forged);
+    expect(guestSessionIdSchema.safeParse(cookie?.value).success).toBe(true);
+  });
+
+  it('rejects a well-formed-length but uppercase cookie the same way — the format is lowercase hex only', () => {
+    const uppercase = generateGuestSessionId().toUpperCase();
+
+    const response = middleware(requestWithCookie('/practice', uppercase));
+
+    const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
+    expect(cookie?.value).not.toBe(uppercase);
+  });
+
+  it('still issues a session cookie on a locale redirect (/en/practice -> /practice) — the two jobs compose rather than one replacing the other', () => {
+    const response = middleware(requestWithCookie('/en/practice'));
+
+    // KAN-9's own behaviour survives unchanged: the prefixed default-locale
+    // path still redirects to the unprefixed canonical one.
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe('http://localhost:3000/practice');
+    // ...and KAN-10's cookie still gets set on that same redirect response,
+    // proving this wraps next-intl's response rather than only handling
+    // the plain pass-through case.
+    const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
+    expect(guestSessionIdSchema.safeParse(cookie?.value).success).toBe(true);
+  });
+
+  it('still issues a session cookie on a locale rewrite (/de/practice) alongside next-intl’s own NEXT_LOCALE cookie', () => {
+    const response = middleware(requestWithCookie('/de/practice'));
+
+    expect(response.cookies.get('NEXT_LOCALE')?.value).toBe('de');
+    const sessionCookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
+    expect(guestSessionIdSchema.safeParse(sessionCookie?.value).success).toBe(true);
   });
 });

@@ -1,9 +1,23 @@
 /** @vitest-environment node */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { generateGuestSessionId } from './session-id';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 
 describe('generateGuestSessionId', () => {
+  it('draws its entropy from the Web Crypto global, not node:crypto — the source src/middleware.ts (Edge runtime) can also call', () => {
+    // The whole reason for this generator to exist on the Web Crypto API
+    // rather than node:crypto is that KAN-10's issuance middleware runs at
+    // the edge, where node:crypto isn't available. Spying on the global
+    // proves the implementation actually draws from it rather than merely
+    // claiming to in a comment — a regression back to node:crypto would
+    // leave this spy uncalled while every other assertion in this file
+    // still passed.
+    const spy = vi.spyOn(globalThis.crypto, 'getRandomValues');
+    generateGuestSessionId();
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
   it('produces a 32-character lowercase hex string — 128 bits, matching the contract schema', () => {
     const id = generateGuestSessionId();
 
