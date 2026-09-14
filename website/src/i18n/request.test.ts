@@ -63,7 +63,7 @@ describe('src/i18n/request.ts — server-side request config (KAN-9)', () => {
     const config = await getRequestConfigForLocale(requestLocale('en'));
     expect(() =>
       config.onError!(new IntlError(IntlErrorCode.MISSING_MESSAGE, 'chrome.guest.progressLabel')),
-    ).toThrow();
+    ).toThrow('chrome.guest.progressLabel');
   });
 
   it('onError does NOT throw for ENVIRONMENT_FALLBACK — the exact bug that 500\'d the first guest request to a fresh server process', async () => {

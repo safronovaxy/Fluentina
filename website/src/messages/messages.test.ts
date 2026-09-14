@@ -41,6 +41,20 @@ describe('message catalogues stay in sync (KAN-9)', () => {
     expect(deKeys).toEqual(enKeys);
   });
 
+  it('no message value leaks an internal ticket id to guests', () => {
+    // Round 2 removed "(KAN-13/KAN-14)" from the landing copy by hand. This
+    // stops the next author pasting one back in: catalogue values are
+    // guest-facing text on a publicly reachable URL.
+    for (const [locale, messages] of [['en', en], ['de', de]] as const) {
+      for (const key of flattenKeys(messages)) {
+        expect(
+          getMessage(messages, key),
+          `${locale}.${key} contains an internal ticket reference`,
+        ).not.toMatch(/KAN-\d+/);
+      }
+    }
+  });
+
   it('no message value is an empty string (an untranslated key left as a placeholder)', () => {
     for (const [locale, messages] of [['en', en], ['de', de]] as const) {
       for (const key of flattenKeys(messages)) {

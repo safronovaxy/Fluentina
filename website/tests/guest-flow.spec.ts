@@ -79,7 +79,9 @@ for (const fx of LOCALE_FIXTURES) {
   test.describe(`KAN-8/KAN-9 — ${fx.path} guest flow landing (${fx.locale})`, () => {
     test('loads with no horizontal overflow at the current viewport', async ({ page }) => {
       await gotoOk(page, fx.path);
-      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      // Asserted by text, not just presence: `heading` is per-locale, so a
+      // page that rendered the wrong language would otherwise pass here.
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText(fx.heading);
 
       const { scrollWidth, clientWidth } = await page.evaluate(() => ({
         scrollWidth: document.documentElement.scrollWidth,

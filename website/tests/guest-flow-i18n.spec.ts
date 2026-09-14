@@ -129,6 +129,10 @@ test.describe('KAN-9 — guest flow renders in both locales', () => {
     const pathnames = [...body.matchAll(/<loc>(.*?)<\/loc>/g)].map(
       (m) => new URL(m[1]).pathname,
     );
+    // Without this the two assertions below hold vacuously on an empty or
+    // broken sitemap. That it is non-empty is guaranteed in sitemap.spec.ts,
+    // but a test should not depend on a guarantee living in another file.
+    expect(pathnames.length).toBeGreaterThan(0);
     expect(pathnames).not.toContain('/practice');
     expect(pathnames).not.toContain('/de/practice');
   });
@@ -155,10 +159,21 @@ test.describe('KAN-9 — a URL names its locale, the browser does not', () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Practice a B2-style essay');
   });
 
-  test('the German URL still serves German to an English browser', async ({ page }) => {
-    // The other direction: the URL decides, in both directions.
+});
+
+test.describe('KAN-9 — the other direction: an English browser on the German URL', () => {
+  // A separate block on purpose. The one above sets a German browser for all
+  // its tests, so asserting there that /de/practice serves German would have
+  // proved nothing about the URL winning over the header — the header agreed.
+  test.use({ locale: 'en-US' });
+
+  test('the German URL serves German to an English browser', async ({ page }) => {
     const response = await page.goto('/de/practice');
     expect(response?.ok()).toBe(true);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Übe einen B2-Aufsatz');
+    // The tab title comes from generateMetadata, which resolves the locale on
+    // its own path — separate from the page body. A German page with an
+    // English title would otherwise ship green.
+    await expect(page).toHaveTitle(/B2-Aufsatz üben/);
   });
 });
