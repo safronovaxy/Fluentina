@@ -145,9 +145,13 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: website
-        # Desktop + mobile Chromium only in CI (Test Strategy §5) — WebKit
-        # stays available locally via `npm run test:e2e` but isn't required
-        # to gate every PR.
+        # Desktop + mobile Chromium only in CI (Test Strategy §5). WebKit is
+        # installable locally (`npx playwright test --project=webkit-desktop`)
+        # but isn't required to gate every PR, and — as of the KAN-10 guest
+        # session cookie spec — a default `npm run test:e2e` run now SKIPS all
+        # five of its tests on WebKit over plain HTTP (see
+        # tests/guest-session.spec.ts's own comment); only `npm run
+        # test:e2e:live`, against real HTTPS, exercises WebKit there.
         run: npx playwright install --with-deps chromium
 
       - name: Start built app

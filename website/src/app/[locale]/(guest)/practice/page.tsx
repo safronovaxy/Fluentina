@@ -3,6 +3,7 @@ import { PenTool, Clock, ShieldCheck } from 'lucide-react';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
 import { Button } from '@/components/ui/button';
 import { GuestFlowShell } from '@/components/guest/chrome/GuestFlowShell';
+import { GuestSessionBootstrap } from '@/components/guest/GuestSessionBootstrap';
 import { GUEST_FLOW_STEPS } from '@/components/guest/flow-steps';
 
 export async function generateMetadata({
@@ -51,6 +52,13 @@ export async function generateMetadata({
  * reading the locale from request headers, which bails the whole route to
  * fully dynamic rendering — verified on a clean build (no prerender-
  * manifest entry for either locale, empty locale output directories).
+ *
+ * `<GuestSessionBootstrap>` (KAN-10) is the trigger for the guest session
+ * row that everything from KAN-13 onward needs to exist — it renders
+ * nothing and is a Client Component, so it doesn't touch this page's own
+ * Server Component rendering or its static prerendering; see that
+ * component's own comment for why it lives here rather than in
+ * `GuestFlowShell` or `(guest)/layout.tsx`.
  */
 export default async function GuestPracticeLandingPage({
   params,
@@ -63,6 +71,7 @@ export default async function GuestPracticeLandingPage({
 
   return (
     <GuestFlowShell steps={GUEST_FLOW_STEPS} currentStepId="none">
+      <GuestSessionBootstrap />
       <div className="mx-auto max-w-xl text-center">
         <PenTool className="mx-auto h-10 w-10 text-primary" aria-hidden />
         <h1 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl">
