@@ -19,8 +19,8 @@
  * row ownership takes `OwnerActor`, so a `SystemActor` is a compile error at
  * the call site — it cannot silently take the "owns everything" branch of an
  * if/else. System code calls the separately named `*Unscoped` function next
- * to the scoped one instead (see lib/db/essays.ts, lib/db/essays.ts),
- * so every deliberate bypass of ownership is findable by grepping "Unscoped".
+ * to the scoped one instead (see lib/db/essays.ts), so every deliberate
+ * bypass of ownership is findable by grepping "Unscoped".
  */
 import { z } from 'zod';
 

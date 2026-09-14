@@ -73,7 +73,7 @@ export function buildOwnershipCondition(conditions: readonly (SQL | undefined)[]
  * never a plain `Actor` — so a `SystemActor` cannot be passed here at all;
  * see the type-level exclusion asserted in `ownership.typecheck.ts`. System
  * code that genuinely needs to bypass ownership calls a separately named
- * `*Unscoped` function (see lib/db/essays.ts, lib/db/essays.ts).
+ * `*Unscoped` function (see lib/db/essays.ts).
  */
 export function ownedBy(actor: OwnerActor, columns: OwnedColumns): SQL {
   if (actor.kind === 'guest') {

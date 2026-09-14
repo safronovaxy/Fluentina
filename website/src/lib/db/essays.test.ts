@@ -1,6 +1,7 @@
 /** @vitest-environment node */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { Client } from 'pg';
 import { createEssay, getEssayById, getEssayByIdUnscoped } from './essays';
 import { createGuestSession, convertGuestSessionToUser } from './guest-sessions';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
@@ -85,6 +86,55 @@ describe('createEssay', () => {
     const readAsStaleGuestSession = await getEssayById(actor, essay.id);
     expect(readAsUser?.id).toBe(essay.id);
     expect(readAsStaleGuestSession).toBeNull();
+  });
+
+  it('blocks a concurrent write behind the session row lock, rather than merely racing it', async () => {
+    // The race test above ("does not leave an essay unattached...") proves
+    // the *outcome* holds under either interleaving the lock allows, but the
+    // window it races is sub-millisecond against a local database, so it
+    // cannot actually land inside the gap `.for('update')` closes — deleting
+    // that clause (and the transaction around it) still leaves it green.
+    // This test instead observes the lock directly: a second connection
+    // holds the exact row lock `convertGuestSessionToUser`'s UPDATE takes,
+    // and we assert `createEssay` is still pending while that lock is held.
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+
+    const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+    await blocker.connect();
+    let settled = false;
+    try {
+      await blocker.query('BEGIN');
+      // FOR NO KEY UPDATE, not FOR UPDATE: that's the lock strength a plain
+      // UPDATE (convertGuestSessionToUser's real adversary) takes. FOR
+      // UPDATE would also be blocked by the insert's own FK check against
+      // the parent row, so the test would pass whether or not `createEssay`
+      // takes its own lock — proving nothing about the code under test.
+      await blocker.query(
+        'SELECT 1 FROM fluentina.guest_sessions WHERE id = $1 FOR NO KEY UPDATE',
+        [actor.sessionId],
+      );
+
+      const pending = createEssay(actor, 'Written while the session row is locked by another connection.').then(
+        (e) => {
+          settled = true;
+          return e;
+        },
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(settled).toBe(false); // still waiting on the row lock
+
+      await blocker.query('COMMIT');
+      const essay = await pending;
+      expect(essay.sessionId).toBe(actor.sessionId);
+    } finally {
+      // If the assertion above throws, the transaction is still open and
+      // still holding the lock — without this, the next test's
+      // `resetDatabase` TRUNCATE hangs behind it for ~10s.
+      await blocker.query('COMMIT').catch(() => {});
+      await blocker.end();
+    }
   });
 });
 
