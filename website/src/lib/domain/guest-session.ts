@@ -38,10 +38,16 @@ export interface ResolvedGuestSession {
   readonly actor: GuestActor;
   readonly session: GuestSession;
   /**
-   * True exactly when this call minted a fresh id and/or wrote its row —
-   * the only case the calling route handler needs to (re)set the cookie in.
-   * False is the "returning guest" path: a valid cookie whose row already
-   * existed, resolved with a single read and no write at all.
+   * True whenever this call wrote a row rather than merely reading one back
+   * — ordinary first use (id unchanged) as much as a fresh mint (id
+   * changed, e.g. a malformed cookie or one naming an already-converted
+   * session). It is NOT, on its own, "the calling route handler needs to
+   * (re)set the cookie": that's only true when the id actually changed —
+   * compare `actor.sessionId` against whatever raw value was presented, the
+   * way `src/app/api/guest-session/route.ts` does, rather than branching on
+   * this flag alone. False is the "returning guest" path: a valid cookie
+   * whose row already existed, resolved with a single read and no write at
+   * all.
    */
   readonly isNew: boolean;
 }
@@ -70,9 +76,25 @@ export async function resolveGuestSession(rawCookieValue: string | undefined): P
     if (existing) {
       return { actor, session: existing, isNew: false };
     }
-    return { actor, session: await createSessionTolerably(actor), isNew: true };
+    try {
+      return { actor, session: await createSessionTolerably(actor), isNew: true };
+    } catch (err) {
+      if (!(err instanceof ConvertedSessionIdCollisionError)) throw err;
+      // The cookie named a real id, but one that already belongs to a
+      // converted session (see the error's own comment below) — that id can
+      // never authorise a guest session again. Recover exactly the way a
+      // malformed/forged cookie already does: mint a completely different
+      // one. This is the fix for the guest who registers, still holds the
+      // old cookie, and would otherwise hit a duplicate-key error on every
+      // subsequent guest-flow page load.
+      return mintFreshGuestSession();
+    }
   }
 
+  return mintFreshGuestSession();
+}
+
+async function mintFreshGuestSession(): Promise<ResolvedGuestSession> {
   const actor: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
   return { actor, session: await createSessionTolerably(actor), isNew: true };
 }
@@ -85,6 +107,11 @@ export async function resolveGuestSession(rawCookieValue: string | undefined): P
  * effect, or two tabs opened from the same fresh cookie) — and without
  * this, the loser surfaces Postgres's unique-violation to the guest instead
  * of quietly reusing the row the winner just committed.
+ *
+ * Throws `ConvertedSessionIdCollisionError` instead of the raw
+ * unique-violation when the reread below comes back empty — see that
+ * error's own comment for why that specific outcome is never the "something
+ * other than the expected race" case the comment used to worry about.
  */
 async function createSessionTolerably(actor: GuestActor): Promise<GuestSession> {
   try {
@@ -92,16 +119,54 @@ async function createSessionTolerably(actor: GuestActor): Promise<GuestSession> 
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
     const existing = await getGuestSessionById(actor, actor.sessionId);
-    // A unique-violation on this exact id can only mean another call's
-    // insert already committed it — if a read right after still can't find
-    // it, something other than the expected race happened, and swallowing
-    // that would hide a real failure.
-    if (!existing) throw err;
-    return existing;
+    if (existing) return existing;
+    // The ownership-scoped read above applies ownedBy()'s isNull(userId)
+    // conjunct (lib/db/ownership.ts), which a guest actor's own,
+    // just-inserted-by-someone-else row would always satisfy — its
+    // sessionId matches by construction (we tried to insert this exact id)
+    // and it cannot have been converted between the insert and this read.
+    // A unique-violation whose reread still can't find the row therefore
+    // means the row was never ours to begin with: this id belongs to a
+    // session that had already converted to a registered account before
+    // this call ever ran.
+    throw new ConvertedSessionIdCollisionError(actor.sessionId);
   }
 }
 
-/** Postgres's `unique_violation` SQLSTATE — see the `pg` driver's `DatabaseError`. */
+/**
+ * Distinguishes "this id already belongs to a converted session" from a
+ * genuine, unexpected failure during the race-tolerant insert above — see
+ * `createSessionTolerably`'s comment for why the reread it follows can only
+ * mean this. `resolveGuestSession` catches it, specifically, to recover by
+ * minting a different id rather than surfacing the duplicate-key error to
+ * the guest as a 500.
+ */
+class ConvertedSessionIdCollisionError extends Error {
+  constructor(sessionId: string) {
+    super(`guest session id "${sessionId}" already belongs to a converted session`);
+    this.name = 'ConvertedSessionIdCollisionError';
+  }
+}
+
+/**
+ * Postgres's `unique_violation` SQLSTATE — see the `pg` driver's
+ * `DatabaseError`. Checked at two levels because Drizzle never lets that
+ * `DatabaseError` reach a caller directly: every query it runs is wrapped in
+ * its own `DrizzleQueryError`, whose `code` is undefined — the SQLSTATE only
+ * ever shows up one level down, on `.cause`, which is the original driver
+ * error. Probed against a real conflict: `err.code` is `undefined` and
+ * `err.cause.code` is `'23505'`. Checking only the top level (the original,
+ * broken implementation) never matches a real conflict at all — it always
+ * rethrows, which is the duplicate-key 500 this function exists to prevent.
+ */
 function isUniqueViolation(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && 'code' in err && err.code === '23505';
+  return hasSqlState(err, '23505') || hasSqlState(getCause(err), '23505');
+}
+
+function hasSqlState(err: unknown, code: string): boolean {
+  return typeof err === 'object' && err !== null && 'code' in err && err.code === code;
+}
+
+function getCause(err: unknown): unknown {
+  return typeof err === 'object' && err !== null && 'cause' in err ? err.cause : undefined;
 }

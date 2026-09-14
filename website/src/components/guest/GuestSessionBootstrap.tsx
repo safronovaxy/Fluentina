@@ -25,10 +25,18 @@ import { useEffect, useRef } from 'react';
  * Renders nothing. The request's own `Set-Cookie` header (issued by the
  * route handler, HttpOnly — never read back here) is the only observable
  * effect, so there is deliberately no loading or error UI: a guest never
- * needs to know this ran, and a failed attempt costs nothing beyond that
- * one screen — every read/write path that actually needs the row (KAN-14
- * onward) still enforces ownership server-side regardless of whether this
- * succeeded first.
+ * needs to know this ran.
+ *
+ * Review correction: a failed attempt does NOT "cost nothing" (an earlier
+ * version of this comment said so, and was wrong) — ownership isn't the
+ * risk here, the `essays.session_id` foreign key is. If this POST never
+ * lands (an ad blocker, disabled JavaScript, a transient server error) the
+ * guest has a cookie with no `guest_sessions` row behind it, and their
+ * first essay submission dies on a foreign-key violation after they've
+ * written up to 300 words. KAN-14's submission path must not assume this
+ * component ran; it has to call `resolveGuestSession` itself before
+ * inserting an essay — which is safe, because that function is already
+ * idempotent (see its own comment in lib/domain/guest-session.ts).
  */
 export function GuestSessionBootstrap() {
   const firedRef = useRef(false);

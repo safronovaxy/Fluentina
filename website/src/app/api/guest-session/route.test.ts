@@ -3,17 +3,17 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST } from './route';
 import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
-import { getGuestSessionById } from '@/lib/db/guest-sessions';
+import { getGuestSessionById, createGuestSession, convertGuestSessionToUser } from '@/lib/db/guest-sessions';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
-import { resetDatabase, closePool } from '@/test/db-fixtures';
+import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import type { GuestSessionId } from '@/lib/contracts/actor';
 
-function postWithCookie(cookieValue?: string): NextRequest {
-  const headers = cookieValue ? { cookie: `${GUEST_SESSION_COOKIE_NAME}=${cookieValue}` } : undefined;
+function postWithCookie(cookieValue?: string, headers?: Record<string, string>): NextRequest {
+  const cookieHeader = cookieValue ? { cookie: `${GUEST_SESSION_COOKIE_NAME}=${cookieValue}` } : undefined;
   return new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
     method: 'POST',
-    headers,
+    headers: { ...cookieHeader, ...headers },
   });
 }
 
@@ -29,82 +29,131 @@ afterAll(async () => {
   await closePool();
 });
 
-describe('POST /api/guest-session — first visit (no cookie)', () => {
-  it('sets a session cookie and creates the corresponding row', async () => {
+describe('POST /api/guest-session — missing or malformed cookie', () => {
+  // Review: this route used to mint a fresh session for anyone who called
+  // it with no cookie or a malformed one — including a cross-site page with
+  // credentials, in a loop, with no rate limit and no ownership check.
+  // Middleware is now the only issuer; this route requires an
+  // already-well-formed cookie and rejects outright otherwise.
+
+  it('rejects a request with no cookie at all — 400, no session resolved, no row created', async () => {
     const response = await POST(postWithCookie());
 
-    const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
-    expect(cookie).toBeDefined();
-    expect(guestSessionIdSchema.safeParse(cookie?.value).success).toBe(true);
-
-    const sessionId = guestSessionIdSchema.parse(cookie?.value);
-    const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
-    expect(persisted?.id).toBe(sessionId);
+    expect(response.status).toBe(400);
+    expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
   });
 
-  it('sets the cookie with HttpOnly, Secure, SameSite=Lax and Path=/ — never readable by client JavaScript', async () => {
-    const response = await POST(postWithCookie());
+  it('rejects a malformed or forged cookie the same way — 400, and the forged value never becomes a row', async () => {
+    const forged = 'attacker-supplied-value';
 
-    const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
-    expect(cookie?.httpOnly).toBe(true);
-    expect(cookie?.secure).toBe(true);
-    expect(cookie?.sameSite).toBe('lax');
-    expect(cookie?.path).toBe('/');
+    const response = await POST(postWithCookie(forged));
+
+    expect(response.status).toBe(400);
+    const forgedActor = { kind: 'guest' as const, sessionId: forged as GuestSessionId };
+    expect(await getGuestSessionById(forgedActor, forged)).toBeNull();
+  });
+});
+
+describe('POST /api/guest-session — well-formed cookie, no row yet (ordinary first use)', () => {
+  it('creates the row under the presented id — src/middleware.ts having minted it moments earlier on the same navigation, indistinguishable at this layer from an attacker\'s lucky guess; entropy, not a denylist, is what makes trusting it safe (see session-id.test.ts)', async () => {
+    const mintedByEdge = generateGuestSessionId();
+
+    const response = await POST(postWithCookie(mintedByEdge));
+
+    expect(response.status).toBe(200);
+    const persisted = await getGuestSessionById({ kind: 'guest', sessionId: mintedByEdge }, mintedByEdge);
+    expect(persisted?.id).toBe(mintedByEdge);
+  });
+
+  it('sets no cookie at all — the id did not change, so there is nothing to reissue', async () => {
+    const mintedByEdge = generateGuestSessionId();
+
+    const response = await POST(postWithCookie(mintedByEdge));
+
+    // Deterministic, not conditional: this scenario's id never changes, so
+    // asserting the cookie is absent is always the right check here, not
+    // merely "if present, check its value" (which would pass just as well
+    // whether or not a cookie ever got weakened into being (re)sent).
+    expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
   });
 
   it('never leaks the session id into the JSON response body', async () => {
-    const response = await POST(postWithCookie());
+    const mintedByEdge = generateGuestSessionId();
+
+    const response = await POST(postWithCookie(mintedByEdge));
     const body: unknown = await response.json();
 
     expect(JSON.stringify(body)).not.toMatch(/[0-9a-f]{32}/);
   });
 });
 
-describe('POST /api/guest-session — second visit with a valid, already-persisted cookie', () => {
+describe('POST /api/guest-session — well-formed cookie, row already exists (returning guest)', () => {
   it('reuses the existing session: no Set-Cookie, no second row', async () => {
-    const first = await POST(postWithCookie());
-    const issuedId = guestSessionIdSchema.parse(first.cookies.get(GUEST_SESSION_COOKIE_NAME)?.value);
+    const issuedId = generateGuestSessionId();
+    await POST(postWithCookie(issuedId));
 
     const second = await POST(postWithCookie(issuedId));
 
+    expect(second.status).toBe(200);
     expect(second.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId: issuedId }, issuedId);
     expect(persisted?.id).toBe(issuedId);
   });
 });
 
-describe('POST /api/guest-session — malformed or forged cookie', () => {
-  it('does not let the presented value become the session id — issues and persists a fresh one instead', async () => {
-    const forged = 'attacker-supplied-value';
+describe('POST /api/guest-session — the cookie names an already-converted session', () => {
+  it('mints a fresh id, reissues the cookie, and creates a new row rather than colliding with the converted one', async () => {
+    const oldSessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId: oldSessionId });
+    const userId = await createTestUser();
+    await convertGuestSessionToUser({ kind: 'guest', sessionId: oldSessionId }, userId);
 
-    const response = await POST(postWithCookie(forged));
+    const response = await POST(postWithCookie(oldSessionId));
 
+    expect(response.status).toBe(200);
     const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
-    expect(cookie?.value).not.toBe(forged);
+    expect(cookie).toBeDefined();
+    expect(cookie?.value).not.toBe(oldSessionId);
     expect(guestSessionIdSchema.safeParse(cookie?.value).success).toBe(true);
 
-    const forgedActor = { kind: 'guest' as const, sessionId: forged as GuestSessionId };
-    expect(await getGuestSessionById(forgedActor, forged)).toBeNull();
+    const newSessionId = guestSessionIdSchema.parse(cookie?.value);
+    const persisted = await getGuestSessionById({ kind: 'guest', sessionId: newSessionId }, newSessionId);
+    expect(persisted?.id).toBe(newSessionId);
+    expect(persisted?.userId).toBeNull();
   });
 
-  it('a syntactically valid but never-issued id is still accepted and given a row under that same id — entropy, not a denylist, is what makes that safe (see session-id.test.ts)', async () => {
-    // Not the "forged" case above: this is the ordinary first-use path
-    // (src/middleware.ts having minted this id moments earlier and not
-    // being able to persist it itself) — indistinguishable, at this
-    // layer, from an attacker's lucky guess. What actually makes trusting
-    // it safe is the 128 bits of entropy the id space draws on, not
-    // anything this route checks.
-    const neverIssued = generateGuestSessionId();
+  it('the reissued cookie carries HttpOnly, Secure, SameSite=Lax, Path=/ and a 30-day lifetime, the same as the original', async () => {
+    const oldSessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId: oldSessionId });
+    const userId = await createTestUser();
+    await convertGuestSessionToUser({ kind: 'guest', sessionId: oldSessionId }, userId);
 
-    const response = await POST(postWithCookie(neverIssued));
+    const response = await POST(postWithCookie(oldSessionId));
 
-    // A cookie may or may not be re-sent for this case (the id didn't
-    // change), but it must never become a DIFFERENT id than the one
-    // presented.
     const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
-    if (cookie) expect(cookie.value).toBe(neverIssued);
+    expect(cookie?.httpOnly).toBe(true);
+    expect(cookie?.secure).toBe(true);
+    expect(cookie?.sameSite).toBe('lax');
+    expect(cookie?.path).toBe('/');
+    expect(cookie?.maxAge).toBe(30 * 24 * 60 * 60);
+  });
+});
 
-    const persisted = await getGuestSessionById({ kind: 'guest', sessionId: neverIssued }, neverIssued);
-    expect(persisted?.id).toBe(neverIssued);
+describe('POST /api/guest-session — cross-origin requests', () => {
+  it('rejects a mismatched Origin header with 400, even with an otherwise valid cookie', async () => {
+    const validCookie = generateGuestSessionId();
+
+    const response = await POST(postWithCookie(validCookie, { origin: 'https://evil.example' }));
+
+    expect(response.status).toBe(400);
+    expect(await getGuestSessionById({ kind: 'guest', sessionId: validCookie }, validCookie)).toBeNull();
+  });
+
+  it('accepts a same-origin Origin header', async () => {
+    const validCookie = generateGuestSessionId();
+
+    const response = await POST(postWithCookie(validCookie, { origin: 'http://localhost:3000' }));
+
+    expect(response.status).toBe(200);
   });
 });

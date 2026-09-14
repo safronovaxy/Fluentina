@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveGuestSession } from '@/lib/domain/guest-session';
+import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
 
 /**
@@ -29,20 +30,61 @@ import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/g
  * The response body carries nothing about the session — the id is
  * HttpOnly and stays that way; there is no reason for client JavaScript to
  * ever see it, in the response body any more than in `document.cookie`.
+ *
+ * Review: this route used to mint a brand-new session for anyone who called
+ * it with no cookie, or a malformed one — including a cross-site page, with
+ * credentials, in a loop. Same-site rules stop the browser from attaching a
+ * visitor's OWN cookie to a cross-site request, but never stop the request
+ * itself, so that was a second, unauthenticated cookie issuer reachable by
+ * anyone: no rate limit, no ownership check, one new `guest_sessions` row
+ * per call, and — worse — for a real guest mid-essay, a forged call like
+ * that would silently replace their session cookie with a fresh one,
+ * severing whatever they'd already written under the old one.
+ *
+ * Middleware is now the only issuer. This route requires an
+ * already-well-formed cookie to do anything at all, and rejects same-origin
+ * requests too, rather than mint one of its own: by the time
+ * `GuestSessionBootstrap`'s fetch actually reaches here, middleware has
+ * already run on this exact navigation and put a valid cookie on the
+ * browser — that's the only real path, and it always presents a cookie that
+ * already passes `guestSessionIdSchema`. `src/middleware.ts`'s own mint
+ * branch (malformed/missing cookie → fresh id) is left alone; that is its
+ * contract, not this route's.
  */
 export async function POST(request: NextRequest) {
+  const origin = request.headers.get('origin');
+  if (origin !== null && origin !== request.nextUrl.origin) {
+    // A same-origin fetch either omits Origin (older browsers, some
+    // same-origin requests) or sends the page's own origin; a cross-site
+    // caller sends its own. Only reject when it's present and WRONG, not
+    // merely absent — absence alone isn't evidence of anything here.
+    return NextResponse.json({ error: 'cross-origin request rejected' }, { status: 400 });
+  }
+
   const raw = request.cookies.get(GUEST_SESSION_COOKIE_NAME)?.value;
-  const { actor, isNew } = await resolveGuestSession(raw);
+  if (!guestSessionIdSchema.safeParse(raw).success) {
+    // No legitimate caller on the real path reaches this without a cookie
+    // middleware already set moments earlier on the same navigation — see
+    // the comment above. Reject outright rather than resolving a session
+    // (which would mean minting one) for whoever this actually is.
+    return NextResponse.json({ error: 'missing or invalid guest session cookie' }, { status: 400 });
+  }
+
+  const { actor } = await resolveGuestSession(raw);
 
   const response = NextResponse.json({ ok: true });
-  if (isNew) {
-    // Either there was no cookie, or the one presented didn't parse as a
-    // GuestSessionId (malformed or forged) — either way, `resolveGuestSession`
-    // already minted a fresh id rather than trusting it, and that fresh id
-    // has to replace whatever the guest's browser was holding.
+  if (actor.sessionId !== raw) {
+    // The only way resolveGuestSession can hand back an id different from
+    // the well-formed one just presented: `raw` named a session that had
+    // already converted to a registered account, and a fresh id had to be
+    // minted in its place (see lib/domain/guest-session.ts's
+    // ConvertedSessionIdCollisionError recovery) — the fix for a converted
+    // guest otherwise colliding with their own, now-attached row on every
+    // subsequent page load. That's the one case this adapter still has to
+    // reissue the cookie for; every other outcome (ordinary first use,
+    // returning guest) resolves under the exact id middleware already set,
+    // so there is nothing to reissue.
     response.cookies.set(GUEST_SESSION_COOKIE_NAME, actor.sessionId, GUEST_SESSION_COOKIE_OPTIONS);
   }
-  // A returning guest (valid cookie, row already existed) gets no
-  // Set-Cookie at all — nothing to reissue, nothing written.
   return response;
 }

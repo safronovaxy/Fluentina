@@ -130,7 +130,7 @@ describe('middleware — KAN-10 guest session cookie, composed onto KAN-9 locale
     expect(guestSessionIdSchema.safeParse(cookie?.value).success).toBe(true);
   });
 
-  it('the cookie carries HttpOnly, Secure, SameSite=Lax and Path=/ — a bearer credential, never readable by client JavaScript', () => {
+  it('the cookie carries HttpOnly, Secure, SameSite=Lax, Path=/ and a 30-day lifetime — a bearer credential, never readable by client JavaScript, that outlives the browser session to match the guest data retention window', () => {
     const response = middleware(requestWithCookie('/practice'));
 
     const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
@@ -138,6 +138,14 @@ describe('middleware — KAN-10 guest session cookie, composed onto KAN-9 locale
     expect(cookie?.secure).toBe(true);
     expect(cookie?.sameSite).toBe('lax');
     expect(cookie?.path).toBe('/');
+    expect(cookie?.maxAge).toBe(30 * 24 * 60 * 60);
+  });
+
+  it('is named with the __Host- prefix — the browser itself refuses to store it without Secure, no Domain, and Path=/, closing the fixation route a signature would not', () => {
+    const response = middleware(requestWithCookie('/practice'));
+
+    expect(GUEST_SESSION_COOKIE_NAME.startsWith('__Host-')).toBe(true);
+    expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeDefined();
   });
 
   it('a returning guest with a valid cookie keeps it — no Set-Cookie at all', () => {
@@ -163,8 +171,17 @@ describe('middleware — KAN-10 guest session cookie, composed onto KAN-9 locale
 
     const response = middleware(requestWithCookie('/practice', uppercase));
 
+    // Same shape as the forged-value test above, deliberately: asserting
+    // only `cookie?.value !== uppercase` holds trivially when no cookie is
+    // set at all (`undefined !== uppercase`) — precisely the regression this
+    // test exists to catch. A mutant that lowercases the input before
+    // validating (so the uppercase cookie "passes" and is carried forward
+    // unchanged, defeating the case-sensitivity check) satisfied that
+    // weaker assertion on every one of this file's nine tests.
     const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
+    expect(cookie).toBeDefined();
     expect(cookie?.value).not.toBe(uppercase);
+    expect(guestSessionIdSchema.safeParse(cookie?.value).success).toBe(true);
   });
 
   it('still issues a session cookie on a locale redirect (/en/practice -> /practice) — the two jobs compose rather than one replacing the other', () => {
