@@ -4,6 +4,41 @@ import reactHooks from "eslint-plugin-react-hooks";
 import tsPlugin from "@typescript-eslint/eslint-plugin";
 import tsParser from "@typescript-eslint/parser";
 
+// Shared so every layering block below can include them. ESLint flat config
+// REPLACES a rule's options when a later block supplies its own — it does not
+// merge them — so a block that lists only its own patterns silently drops
+// these. That is exactly what the KAN-9/KAN-10 merge did: the i18n
+// restriction survived only in lib/db, the one directory that will never
+// import it, while the directory KAN-14 and KAN-16 will build in lost it.
+const ADAPTER_LAYERING_GROUPS = [
+  {
+    group: ["@/lib/db", "@/lib/db/**"],
+    message:
+      "Adapters import lib/domain, never lib/db directly — SQL and the database client only exist inside lib/db. See CONTRIBUTING.md.",
+  },
+  {
+    group: ["pg", "drizzle-orm", "drizzle-orm/**"],
+    message:
+      "Adapters never import the driver or the query builder directly — SQL and the database client only exist inside lib/db. See CONTRIBUTING.md.",
+  },
+  {
+    group: ["@/test", "@/test/**"],
+    message:
+      "src/test is test-only fixture code and must never be imported from production code. See CONTRIBUTING.md.",
+  },
+];
+
+const I18N_RESTRICTED_GROUPS = [
+  {
+    group: ["next-intl", "next-intl/*"],
+    message: "UI-chrome-only (KAN-9) — see the next-intl override in eslint.config.js.",
+  },
+  {
+    group: ["use-intl", "use-intl/*"],
+    message: "UI-chrome-only (KAN-9) — use-intl underlies next-intl and exports the same translator/formatter primitives; it is restricted for the same reason. See the next-intl override in eslint.config.js.",
+  },
+];
+
 export default [
   { ignores: ["dist", ".next"] },
   {
@@ -43,47 +78,7 @@ export default [
       // `use-intl/*`) catch every subpath of both packages, present and
       // future, not just the five call sites this codebase happens to use
       // today.
-      "no-restricted-imports": ["error", {
-        patterns: [
-          {
-            group: ["next-intl", "next-intl/*"],
-            message: "UI-chrome-only (KAN-9) — see the next-intl override in eslint.config.js.",
-          },
-          {
-            group: ["use-intl", "use-intl/*"],
-            message: "UI-chrome-only (KAN-9) — use-intl underlies next-intl and exports the same translator/formatter primitives; it is restricted for the same reason. See the next-intl override in eslint.config.js.",
-          },
-        ],
-      }],
-    },
-  },
-  {
-    // Allow-list for the rule above. Bracket-escaped because ESLint's file
-    // matcher treats `[locale]` as a character class otherwise, matching
-    // single characters instead of the literal directory name.
-    //
-    // `src/components/guest/chrome/**`, not the whole `src/components/
-    // guest/**` tree: a review found that allow-listing the entire guest
-    // directory also allow-listed every future non-chrome file under it —
-    // exactly where KAN-14's essay entry and KAN-16/18's grading and
-    // preview components are going to live — so a component that
-    // interpolates graded essay feedback through next-intl would lint
-    // clean. `chrome/` is only the shell/step-indicator/locale-switcher
-    // components that render labels, not essay content; `flow-steps.ts`
-    // (step ids/labels metadata, no next-intl import) deliberately stays
-    // one level up, outside the allow-list, since future non-chrome guest
-    // screens need to import it too without inheriting next-intl access.
-    files: [
-      "next.config.ts",
-      "src/middleware.ts",
-      "src/i18n/**",
-      "src/components/IntlProvider.tsx",
-      "src/components/guest/chrome/**",
-      "src/app/\\[locale\\]/**",
-      "src/test/**",
-    ],
-    rules: {
-      "no-restricted-imports": "off",
+      "no-restricted-imports": ["error", { patterns: I18N_RESTRICTED_GROUPS }],
     },
   },
   {
@@ -126,6 +121,7 @@ export default [
         "error",
         {
           patterns: [
+            ...I18N_RESTRICTED_GROUPS,
             {
               group: ["@/lib/db", "@/lib/db/**", "@/lib/domain", "@/lib/domain/**"],
               message:
@@ -153,6 +149,7 @@ export default [
         "error",
         {
           patterns: [
+            ...I18N_RESTRICTED_GROUPS,
             {
               group: ["@/lib/db/client"],
               message:
@@ -194,6 +191,7 @@ export default [
         "error",
         {
           patterns: [
+            ...I18N_RESTRICTED_GROUPS,
             {
               group: ["@/lib/db", "@/lib/db/**"],
               message:
@@ -212,6 +210,52 @@ export default [
           ],
         },
       ],
+    },
+  },
+  {
+    // Allow-list for the rule above. Bracket-escaped because ESLint's file
+    // matcher treats `[locale]` as a character class otherwise, matching
+    // single characters instead of the literal directory name.
+    //
+    // `src/components/guest/chrome/**`, not the whole `src/components/
+    // guest/**` tree: a review found that allow-listing the entire guest
+    // directory also allow-listed every future non-chrome file under it —
+    // exactly where KAN-14's essay entry and KAN-16/18's grading and
+    // preview components are going to live — so a component that
+    // interpolates graded essay feedback through next-intl would lint
+    // clean. `chrome/` is only the shell/step-indicator/locale-switcher
+    // components that render labels, not essay content; `flow-steps.ts`
+    // (step ids/labels metadata, no next-intl import) deliberately stays
+    // one level up, outside the allow-list, since future non-chrome guest
+    // screens need to import it too without inheriting next-intl access.
+    files: [
+      "next.config.ts",
+      "src/middleware.ts",
+      "src/i18n/**",
+      "src/components/IntlProvider.tsx",
+      "src/components/guest/chrome/**",
+      "src/app/\\[locale\\]/**",
+    ],
+    rules: {
+      // Restates the layering groups deliberately. This block MUST stay last:
+      // flat config replaces a rule's options rather than merging them, so
+      // whichever block matches last decides everything. Turning the rule
+      // fully "off" here would also switch off the database and driver
+      // restrictions for these paths — "allowed to translate" is not "allowed
+      // to reach the database".
+      //
+      // Being early rather than last is exactly how the KAN-9/KAN-10 merge
+      // lost the i18n restriction everywhere except lib/db: the layering
+      // blocks below overwrote this one.
+      "no-restricted-imports": ["error", { patterns: ADAPTER_LAYERING_GROUPS }],
+    },
+  },
+  {
+    // Test fixtures and test files are exempt from all of it: they exist to
+    // reach the database, and none of them ships.
+    files: ["src/test/**", "src/**/*.test.{ts,tsx}", "src/**/*.typecheck.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": "off",
     },
   },
 ];

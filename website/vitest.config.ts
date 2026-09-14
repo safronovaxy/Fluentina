@@ -28,7 +28,7 @@ export default defineConfig({
     // add to them rather than replacing the list.
     exclude: ['**/node_modules/**', '**/.next/**', 'tests/**'],
     // KAN-10's lib/db test files all share one real Postgres database and
-    // TRUNCATE it between tests (test-helpers.ts::resetDatabase). Running
+    // TRUNCATE it between tests (src/test/db-fixtures.ts::resetDatabase). Running
     // test files in parallel (Vitest's default) lets one file's reset race
     // another file's still-running assertions against the same tables —
     // observed directly as spurious FK-violation failures before this was
