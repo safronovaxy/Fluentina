@@ -43,7 +43,9 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        # Exact version, matching docker-compose.yml. See
+        # website/src/lib/db/postgres-version.ts.
+        image: postgres:16.10-alpine
         env:
           POSTGRES_DB: fluentina
           POSTGRES_USER: fluentina
@@ -80,6 +82,49 @@ jobs:
       - name: Typecheck
         working-directory: website
         run: npm run typecheck
+
+      # The data-layer tests query a real Postgres, so the schema has to exist
+      # before they run. KAN-10 added the first migration; without this step the
+      # suite fails with "schema does not exist" rather than on anything about
+      # the code.
+      - name: Apply database migrations
+        working-directory: website
+        run: npm run db:migrate
+
+      # Fails the build when someone edits the schema and does not generate the
+      # matching migration. Without it the two drift, CI stays green because the
+      # tests run against whatever the migrations produced, and the divergence
+      # is found in production.
+      #
+      # Two failure modes this used to miss, both closed below:
+      #   - `drizzle-kit generate` exits 0 even when it bails out. A rename it
+      #     can't resolve unambiguously normally prompts interactively; with no
+      #     TTY (every CI runner) that prompt throws internally instead, but the
+      #     process still exits 0 — and `git diff --exit-code` on an untouched
+      #     working tree then also passes, green, having generated nothing and
+      #     checked nothing. Stdin is piped from /dev/null so a stray prompt
+      #     fails fast instead of hanging, and the log is grepped for the
+      #     failure instead of trusting the exit code.
+      #   - `git diff` only ever sees drift in files git already tracks. A
+      #     genuinely new migration and its snapshot are untracked, so a real
+      #     schema change with no matching migration at all produced an empty
+      #     `git diff` and this step still passed. `git status --porcelain`
+      #     covers untracked files too.
+      - name: Migrations match the schema
+        working-directory: website
+        timeout-minutes: 2
+        run: |
+          set -o pipefail
+          npx drizzle-kit generate < /dev/null 2>&1 | tee /tmp/drizzle-generate.log
+          if grep -qi '^Error' /tmp/drizzle-generate.log; then
+            echo "::error::drizzle-kit generate did not complete cleanly (see log above) — treating as drift rather than trusting its exit code."
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain drizzle)" ]; then
+            echo "::error::Schema and checked-in migrations have drifted — drizzle-kit generate produced changes (tracked or untracked) that are not committed:"
+            git status --porcelain drizzle
+            exit 1
+          fi
 
       - name: Unit & integration tests
         working-directory: website
