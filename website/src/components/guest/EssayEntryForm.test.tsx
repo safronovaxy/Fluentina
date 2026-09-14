@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EssayEntryForm, type EssayEntryFormStrings } from './EssayEntryForm';
+import { MAX_ESSAY_CONTENT_CHARS } from '@/lib/contracts/essay-submission';
 
 const STRINGS: EssayEntryFormStrings = {
   textareaLabel: 'Your essay',
@@ -59,6 +60,12 @@ describe('EssayEntryForm — text entry (KAN-14 AC: "accepts typed or pasted tex
     expect(pasteEvent.defaultPrevented).toBe(false);
   });
 
+  it('sets a maxLength on the textarea matching the character safety cap — the client-side half of essaySubmissionRequestSchema\'s own cap, so they can never quietly disagree', () => {
+    renderForm();
+
+    expect(screen.getByLabelText(STRINGS.textareaLabel)).toHaveAttribute('maxlength', String(MAX_ESSAY_CONTENT_CHARS));
+  });
+
   it('never renders any file, camera or upload control — text entry only (KAN-14 AC)', () => {
     const { container } = renderForm();
 
@@ -93,6 +100,26 @@ describe('EssayEntryForm — submitting without content', () => {
 
     const textarea = screen.getByLabelText(STRINGS.textareaLabel);
     fireEvent.change(textarea, { target: { value: '    \n\t  ' } });
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.requiredError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('EssayEntryForm — content over the character safety cap (round-1 review: previously untested client-side)', () => {
+  it('refuses to submit content over the character cap and never calls the API — proven with a scripted over-cap value, which bypasses the native maxLength the way a determined caller could', () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    renderForm();
+    // fireEvent.change sets the textarea's value directly, the same way a
+    // native maxLength constrains user typing/pasting but not a scripted
+    // assignment — this is what proves the JS-level check (isValid, via
+    // essaySubmissionRequestSchema) still blocks submission on its own,
+    // not merely the browser's maxLength attribute.
+    const overCapContent = 'a'.repeat(MAX_ESSAY_CONTENT_CHARS + 1);
+
+    fireEvent.change(screen.getByLabelText(STRINGS.textareaLabel), { target: { value: overCapContent } });
     fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
 
     expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.requiredError);

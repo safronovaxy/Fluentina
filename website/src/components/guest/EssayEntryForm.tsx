@@ -28,7 +28,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { essaySubmissionRequestSchema } from '@/lib/contracts/essay-submission';
+import { essaySubmissionRequestSchema, MAX_ESSAY_CONTENT_CHARS } from '@/lib/contracts/essay-submission';
 
 export interface EssayEntryFormStrings {
   readonly textareaLabel: string;
@@ -105,6 +105,13 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
         placeholder={strings.placeholder}
         rows={14}
         className="mt-2"
+        // The browser's own defence against a huge paste — the client-side
+        // half of `essaySubmissionRequestSchema`'s `.max()`, so they can
+        // never quietly disagree. A native `maxLength` only constrains user
+        // input (typing/pasting), not a scripted `.value` assignment, which
+        // is why `isValid` below still checks the schema itself rather than
+        // relying on this alone.
+        maxLength={MAX_ESSAY_CONTENT_CHARS}
         aria-invalid={showRequiredError}
         aria-describedby={showRequiredError ? 'essay-content-error' : undefined}
       />

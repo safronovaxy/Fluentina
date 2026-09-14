@@ -18,13 +18,37 @@ const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 // Same known WebKit limitation guest-session.spec.ts already documents and
 // skips for: WebKit refuses to store a __Host--prefixed cookie over plain
 // HTTP, even on localhost, which is exactly what this suite's local
-// webServer serves. Every test below either goes through the guest
-// session cookie directly or through /api/essays, which resolves it —
-// skip the same combination here rather than let it fail on an
-// environment limitation unrelated to KAN-14. Runs against HTTPS
-// (test:e2e:live) are not skipped.
+// webServer serves. Runs against HTTPS (test:e2e:live) are not skipped.
+//
+// Round-1 review: this used to be a blanket `test.beforeEach` skip covering
+// every test in this file, on the claim that "every test below either goes
+// through the guest session cookie directly or through /api/essays". That
+// was false for two of the four tests per locale: "never renders a file,
+// camera or upload control" and "accepts pasted text" touch neither — with
+// the skip removed, six of eight ran and passed on webkit-desktop over
+// plain HTTP, including "no account or login is required", which submitted
+// successfully. `/api/essays` minting a session for a caller presenting no
+// cookie (since fixed — see route.ts's own comment) is what made that
+// submission succeed even though the browser never stored one: the request
+// still got a 201, the response body was all the client ever checked. Now
+// that a missing cookie is rejected (400) instead, a WebKit-over-HTTP guest
+// genuinely cannot submit at all — no cookie is ever stored, so
+// `/api/essays` rejects every attempt — so BOTH tests that actually submit
+// an essay need the skip, in both locales: the click-count test (which also
+// asserts the cookie directly) and "no account or login is required" (which
+// doesn't touch the cookie, but does require a successful submission). The
+// other two tests per locale need no skip and now run for real WebKit
+// coverage of their acceptance criteria (no upload/camera control; pasted
+// text accepted).
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3000';
 const isPlainHttp = BASE_URL.startsWith('http://');
+
+function skipIfWebkitCannotStoreTheSessionCookie(testInfo: { project: { name: string } }) {
+  test.skip(
+    testInfo.project.name === 'webkit-desktop' && isPlainHttp,
+    'WebKit refuses to store a __Host--prefixed cookie over plain HTTP, even on localhost, so no essay submission can succeed here — see the comment above isPlainHttp.',
+  );
+}
 
 async function gotoOk(page: Page, path: string) {
   const response = await page.goto(path);
@@ -40,6 +64,7 @@ interface LocaleFixture {
   readonly submitName: string;
   readonly essayText: string;
   readonly successTitle: string;
+  readonly writeHeading: string;
 }
 
 const LOCALE_FIXTURES: readonly LocaleFixture[] = [
@@ -51,6 +76,7 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     submitName: 'Submit essay',
     essayText: 'This is a sample essay written directly in the browser text box for the end-to-end test.',
     successTitle: 'Essay received',
+    writeHeading: 'Write your essay',
   },
   {
     locale: 'de',
@@ -60,22 +86,30 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     submitName: 'Aufsatz einreichen',
     essayText: 'Dies ist ein Beispielaufsatz, der direkt im Textfeld des Browsers für den End-to-End-Test geschrieben wurde.',
     successTitle: 'Aufsatz erhalten',
+    writeHeading: 'Schreibe deinen Aufsatz',
   },
 ];
 
 for (const fx of LOCALE_FIXTURES) {
   test.describe(`KAN-14 — essay entry (${fx.locale})`, () => {
-    test.beforeEach(async ({}, testInfo) => {
-      test.skip(
-        testInfo.project.name === 'webkit-desktop' && isPlainHttp,
-        'WebKit refuses to store a __Host--prefixed cookie over plain HTTP, even on localhost — see the comment above SESSION_COOKIE_NAME (same skip as guest-session.spec.ts). Runs against HTTPS (test:e2e:live) are not skipped.',
-      );
-    });
-
-    test('a first-time visitor reaches the text box and submits an essay in under 3 clicks from landing', async ({
+    test('a first-time visitor reaches the text box and submits an essay in exactly 2 clicks from landing — under the 3-click acceptance criterion', async ({
       page,
       context,
-    }) => {
+    }, testInfo) => {
+      skipIfWebkitCannotStoreTheSessionCookie(testInfo);
+      // Round-1 review: `clicks` is incremented twice in straight-line code
+      // below, with no branching, so it is 2 on every run this test can
+      // possibly complete — it can never actually observe a third click
+      // being needed. What DOES fail, on all eight locale/project
+      // combinations, if a future change makes this path need more
+      // interaction, is the flow itself: an added required step (a
+      // confirmation dialog, an extra screen) means `page.getByRole('status')`
+      // below never appears, because nothing here drives that extra step.
+      // The count is a document of the two interactions this known-good
+      // path takes today, not independent proof of the acceptance
+      // criterion — asserted `=== 2`, not `<= 3`, because `<= 3` is a bound
+      // this counter can never approach, let alone violate, which is what
+      // made it read as a live check when it wasn't one.
       let clicks = 0;
       const click = async (locator: ReturnType<Page['getByRole']>) => {
         await locator.click();
@@ -103,10 +137,11 @@ for (const fx of LOCALE_FIXTURES) {
       await click(page.getByRole('button', { name: fx.submitName }));
 
       await expect(page.getByRole('status')).toHaveText(new RegExp(fx.successTitle));
-      expect(clicks, 'reaching the text box and submitting should take at most 3 clicks/taps from landing').toBeLessThanOrEqual(3);
+      expect(clicks, 'this known-good path takes exactly 2 clicks/taps — CTA, then submit').toBe(2);
     });
 
-    test('no account or login is required anywhere on the path from landing to a submitted essay', async ({ page }) => {
+    test('no account or login is required anywhere on the path from landing to a submitted essay', async ({ page }, testInfo) => {
+      skipIfWebkitCannotStoreTheSessionCookie(testInfo);
       await gotoOk(page, fx.landingPath);
       await page.getByRole('link', { name: fx.ctaName, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
@@ -129,6 +164,24 @@ for (const fx of LOCALE_FIXTURES) {
 
       expect(await page.locator('input[type="file"]').count()).toBe(0);
       expect(await page.locator('[capture]').count()).toBe(0);
+    });
+
+    // Round-1 review: running on multiple viewport projects (chromium-desktop,
+    // chromium-mobile, webkit-desktop) is not by itself proof of
+    // responsiveness if every assertion is viewport-independent — see
+    // tests/guest-flow.spec.ts's own comment, which states that standard for
+    // the landing page. Every assertion elsewhere in this file is
+    // viewport-independent; this is the write screen's own version of the
+    // same check guest-flow.spec.ts already runs for the landing page.
+    test('loads with no horizontal overflow at the current viewport', async ({ page }) => {
+      await gotoOk(page, fx.writePath);
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText(fx.writeHeading);
+
+      const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+      expect(scrollWidth, 'page should not scroll horizontally').toBeLessThanOrEqual(clientWidth);
     });
 
     test('accepts pasted text, not only typed text', async ({ page }) => {

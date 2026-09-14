@@ -1,64 +1,43 @@
 import 'server-only';
 
 /**
- * KAN-14 — persists a guest's essay. Storage only: grading is KAN-16's job,
- * the recommended-length/word-count UI and its server-side counterpart are
- * KAN-15's, and this function does not know either of those stories exists.
+ * KAN-14 — persists a guest's essay under an already-resolved actor.
+ * Storage only: grading is KAN-16's job, the recommended-length/word-count
+ * UI and its server-side counterpart are KAN-15's, and this function does
+ * not know either of those stories exists.
  *
- * Composes two already-reviewed primitives rather than reinventing either:
- * `resolveGuestSession` (KAN-10, lib/domain/guest-session.ts) turns whatever
- * raw cookie value the adapter read into a trustworthy `GuestActor`,
- * creating the session's row on first use; `createEssay` (lib/db/essays.ts)
- * inserts the essay under that actor, inside a transaction that locks the
- * session row so a write racing a concurrent conversion can never land
- * unattached. Neither of those concerns belongs here a second time.
+ * Round-1 review (blocking): this used to take the raw, possibly-absent
+ * cookie value itself and resolve it (via `resolveGuestSession`), which
+ * meant an adapter could call it with `undefined` and get a session minted
+ * in return — reintroducing, on this route, the exact "second,
+ * unauthenticated cookie issuer" property `/api/guest-session` spent three
+ * review rounds removing (see that route's own comment). Resolution is now
+ * the CALLER's job — `src/app/api/essays/route.ts` validates the cookie
+ * against `guestSessionIdSchema` and calls `resolveGuestSession` itself,
+ * the same as `/api/guest-session` does, before this function ever runs.
+ * That also gives the route a resolved `Actor` in hand without resolving
+ * twice, which is what KAN-25's rate limiter needs to key on (see the
+ * route's own comment).
  *
- * The one thing THIS function exists to get right: it inserts under
- * `actor.sessionId` — the id `resolveGuestSession` resolved to — never
- * under whatever raw value the adapter originally read from the cookie.
- * Those two differ exactly when `reissued` is true (see that field's own
- * doc comment): the presented cookie named a session that turned out to be
- * unavailable (most often, converted to a registered account), a fresh id
- * was minted, and the browser's cookie is now stale. Writing under the
- * stale id instead would insert an essay under a session the caller has no
- * way to set a cookie for — the row would exist, but nothing could ever
- * read it back, right up until retention quietly deletes it. There is no
- * separate branch for that case below because there doesn't need to be:
- * `actor` already IS the resolved id, reissued or not, so simply using it
- * is the fix, not a special case of one.
+ * This function's only remaining job is the insert: `createEssay`
+ * (lib/db/essays.ts), inside a transaction that locks the session row so a
+ * write racing a concurrent conversion can never land unattached. Kept as a
+ * named seam in `lib/domain` rather than the route calling `lib/db`
+ * directly, both for the ADR-14 layering (adapters talk to domain, domain
+ * talks to db) and because this is where KAN-15's real word-count check
+ * lands once it exists.
  */
-import { resolveGuestSession } from './guest-session';
 import { createEssay } from '@/lib/db/essays';
+import type { GuestActor } from '@/lib/contracts/actor';
 import type { Essay } from '@/lib/contracts/essay';
 
-export interface EssaySubmissionResult {
-  readonly essay: Essay;
-  /**
-   * Whenever true, the adapter calling this must (re)set the session
-   * cookie to `essay.sessionId` — see `resolveGuestSession`'s own
-   * `reissued` doc comment for the full case list. False for both an
-   * ordinary first write and a returning guest's later one; the cookie
-   * already in the browser names the right session either way.
-   */
-  readonly reissued: boolean;
-}
-
 /**
- * Resolves the caller's guest session from the raw cookie value the
- * adapter read (`undefined` if there wasn't one) and persists `content`
- * under it.
- *
- * `content` is taken as-is — already validated (shape, and the KAN-14
- * safety cap; KAN-15's real length rules land here eventually) by the
- * adapter's own request-schema check before this is ever called. This
- * function does not re-validate it, the same division of labour
- * `resolveGuestSession` itself has with its callers for the cookie value.
+ * Persists `content` under `actor` — the id the CALLER already resolved
+ * (and, if necessary, reissued a cookie for). `content` is taken as-is —
+ * already validated (shape, and the KAN-14 safety cap; KAN-15's real
+ * length rules land here eventually) by the adapter's own request-schema
+ * check before this is ever called.
  */
-export async function submitEssay(
-  rawCookieValue: string | undefined,
-  content: string,
-): Promise<EssaySubmissionResult> {
-  const { actor, reissued } = await resolveGuestSession(rawCookieValue);
-  const essay = await createEssay(actor, content);
-  return { essay, reissued };
+export async function submitEssay(actor: GuestActor, content: string): Promise<Essay> {
+  return createEssay(actor, content);
 }

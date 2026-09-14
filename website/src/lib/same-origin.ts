@@ -3,9 +3,16 @@
  * session cookie with no other authentication: `src/app/api/guest-session/
  * route.ts` (KAN-10) and `src/app/api/essays/route.ts` (KAN-14). Extracted
  * here, rather than left duplicated, once a second route needed the exact
- * same check — see `route.ts`'s own comment for why this exists and what it
- * does and doesn't actually guarantee; that reasoning lives there and is
- * not restated per call site.
+ * same check — see `guest-session/route.ts`'s own comment for why this
+ * exists and what it does and doesn't actually guarantee (the full
+ * "browser can't forge x-forwarded-host without an unanswered CORS
+ * preflight" argument, and the production bug reading `request.nextUrl`
+ * caused, both live there); that reasoning is not restated per call site.
+ * Named "`route.ts`'s own comment" below and in every other file that
+ * refers to it, on purpose — now that two routes share this module, "the
+ * route" would be ambiguous, so every reference below spells out
+ * `guest-session/route.ts` specifically, since that is the one file this
+ * reasoning actually lives in.
  *
  * Plain adapter-level code, deliberately outside `lib/domain`, `lib/db` and
  * `lib/contracts` (ADR-14, same reasoning as `guest-session-cookie.ts` next
@@ -14,12 +21,12 @@
  * know exists.
  *
  * `forwardedHost` is NOT a reusable trusted primitive beyond this one
- * check — see `route.ts`'s own comment on why `x-forwarded-host` is
- * client-supplied and unverified here. Do not reach for this module to
- * answer "what host did this request actually arrive on"; it only answers
- * "does the Origin this request claims agree with the Host/forwarded-host
- * it also claims", which is weaker, and is exactly the caveat this guard
- * has always carried.
+ * check — see `guest-session/route.ts`'s own comment on why
+ * `x-forwarded-host` is client-supplied and unverified here. Do not reach
+ * for this module to answer "what host did this request actually arrive
+ * on"; it only answers "does the Origin this request claims agree with the
+ * Host/forwarded-host it also claims", which is weaker, and is exactly the
+ * caveat this guard has always carried.
  */
 import type { NextRequest } from 'next/server';
 
@@ -56,11 +63,12 @@ function originHost(origin: string): string | null {
 /**
  * `x-forwarded-host` if present, else `host`. NOT "the host from the
  * proxy's point of view" — nothing proxy-side sets `x-forwarded-host` in
- * this deployment (see `route.ts`'s own comment on the load balancer in
+ * this deployment (see `guest-session/route.ts`'s own comment on the load balancer in
  * front of Cloud Run). This is a client-supplied value taken on faith.
  * Deliberately not `request.nextUrl.host`: under `output: standalone`
  * that is the container bind address, not anything a browser sent — see
- * `route.ts`'s own comment for the production bug that reading it caused.
+ * `guest-session/route.ts`'s own comment for the production bug that reading
+ * it caused.
  */
 function forwardedHost(request: NextRequest): string | null {
   return request.headers.get('x-forwarded-host') ?? request.headers.get('host');
