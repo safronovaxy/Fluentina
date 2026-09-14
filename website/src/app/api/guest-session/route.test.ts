@@ -9,9 +9,13 @@ import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import type { GuestSessionId } from '@/lib/contracts/actor';
 
-function postWithCookie(cookieValue?: string, headers?: Record<string, string>): NextRequest {
+function postWithCookie(
+  cookieValue?: string,
+  headers?: Record<string, string>,
+  url = 'http://localhost:3000/api/guest-session',
+): NextRequest {
   const cookieHeader = cookieValue ? { cookie: `${GUEST_SESSION_COOKIE_NAME}=${cookieValue}` } : undefined;
-  return new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
+  return new NextRequest(new URL(url), {
     method: 'POST',
     headers: { ...cookieHeader, ...headers },
   });
@@ -153,6 +157,35 @@ describe('POST /api/guest-session — cross-origin requests', () => {
 
     expect(response.status).toBe(400);
     expect(await getGuestSessionById({ kind: 'guest', sessionId: validCookie }, validCookie)).toBeNull();
+  });
+
+  // Round-2 review: this suite had no test carrying a MATCHING Origin at
+  // all — the test above only exercises the reject direction, so a mutant
+  // that made this route reject anything bearing an Origin header at all
+  // left every unit test in this file green; only a browser test caught
+  // it. And separately, this route's own request in production is bound to
+  // the `output: standalone` container address (`https://0.0.0.0:8080`,
+  // see this route's own comment and lib/same-origin.ts's), not the public
+  // hostname the browser's Origin and the load balancer's forwarded Host
+  // both carry — reproduced directly here (see lib/same-origin.test.ts's
+  // equivalent unit test for the same shape against isCrossOriginRequest
+  // itself). If someone reintroduced the inline `request.nextUrl.origin`
+  // comparison this route's own comment documents as the actual production
+  // outage, this would fail: nextUrl's host in that shape is always
+  // 0.0.0.0:8080, which never equals the public hostname below.
+  it('accepts a same-origin request even when it is bound to the container address rather than the deployed public hostname — the real output:standalone/Cloud Run shape (round-2 review)', async () => {
+    const validCookie = generateGuestSessionId();
+
+    const response = await POST(
+      postWithCookie(
+        validCookie,
+        { origin: 'https://fluentina.com', 'x-forwarded-host': 'fluentina.com' },
+        'https://0.0.0.0:8080/api/guest-session',
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await getGuestSessionById({ kind: 'guest', sessionId: validCookie }, validCookie)).not.toBeNull();
   });
 });
 

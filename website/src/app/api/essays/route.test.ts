@@ -11,9 +11,14 @@ import type { GuestSessionId } from '@/lib/contracts/actor';
 import { MAX_ESSAY_CONTENT_CHARS, MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 
-function postEssay(body: unknown, cookieValue?: string, headers?: Record<string, string>): NextRequest {
+function postEssay(
+  body: unknown,
+  cookieValue?: string,
+  headers?: Record<string, string>,
+  url = 'http://localhost:3000/api/essays',
+): NextRequest {
   const cookieHeader = cookieValue ? { cookie: `${GUEST_SESSION_COOKIE_NAME}=${cookieValue}` } : undefined;
-  return new NextRequest(new URL('http://localhost:3000/api/essays'), {
+  return new NextRequest(new URL(url), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -220,13 +225,26 @@ describe('POST /api/essays — invalid submissions', () => {
   });
 
   it('rejects a body with no content field at all', async () => {
-    const response = await POST(postEssay({}));
+    // Round-2 review: the cookie check now runs before the body is ever
+    // read (see route.ts's own comment), so this needs a valid cookie —
+    // without one, this would still assert 400, but for "missing cookie",
+    // not for the missing content field its own name claims to be testing.
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    const response = await POST(postEssay({}, sessionId));
 
     expect(response.status).toBe(400);
   });
 
   it('rejects malformed JSON with 400, not a 500', async () => {
-    const response = await POST(postRaw('{ this is not valid json'));
+    // Round-2 review: same reason as the test above — a valid cookie, so
+    // this actually reaches JSON.parse and proves THAT path returns 400
+    // rather than a valid cookie being incidental to the assertion.
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    const response = await POST(postRaw('{ this is not valid json', sessionId));
 
     expect(response.status).toBe(400);
   });
@@ -291,6 +309,78 @@ describe('POST /api/essays — the raw-body transport cap (KAN-14 scope note: a 
   });
 });
 
+describe('POST /api/essays — the Content-Length pre-check (round-2 review: nothing here ever set this header before, so this branch was dead — a mutant deleting the whole block, or lowering its threshold to 1,000, left every test in this file green)', () => {
+  it('rejects a request whose Content-Length header claims to exceed the transport cap, even though the actual body is small — proves the header check fires and rejects on its own, not merely restating what the byte-length check below it would catch anyway: without this check, this small, otherwise-valid body would 201, not 413', async () => {
+    const sessionId = generateGuestSessionId(); // never persisted — proves nothing downstream ran
+    const response = await POST(
+      postEssay({ content: 'A short essay.' }, sessionId, { 'content-length': String(MAX_REQUEST_BODY_BYTES + 1) }),
+    );
+
+    expect(response.status).toBe(413);
+    const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
+    expect(persisted).toBeNull();
+  });
+
+  it('accepts a realistic essay submission with an honest, correctly-sized Content-Length header', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    // 150-200 words, roughly the B2 recommended range — one to two
+    // kilobytes, nowhere near either cap.
+    const content = 'Ein typischer Aufsatz für die B2-Prüfung. '.repeat(40);
+    const honestContentLength = String(Buffer.byteLength(JSON.stringify({ content }), 'utf8'));
+
+    const response = await POST(postEssay({ content }, sessionId, { 'content-length': honestContentLength }));
+
+    expect(response.status).toBe(201);
+  });
+});
+
+describe('POST /api/essays — the raw-body transport cap under chunked transfer, no Content-Length at all (round-2 review)', () => {
+  it('rejects a body that exceeds the transport cap when streamed with no Content-Length header — the shape a real chunked-transfer request takes, not merely a lying header — and never reads past the limit plus one chunk, so it never buffers the whole thing', async () => {
+    const chunkBytes = 10_000;
+    const chunk = new TextEncoder().encode('a'.repeat(chunkBytes));
+    let pulls = 0;
+    // An effectively unbounded source: if readBodyWithinLimit ever fell
+    // back to draining the whole stream (the request.text() shape this
+    // guard replaced), this would never terminate rather than merely being
+    // slow — a stronger failure signal than a byte-count assertion alone.
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(chunk);
+      },
+    });
+    const sessionId = generateGuestSessionId(); // never persisted — proves nothing downstream ran
+    const request = new NextRequest(new URL('http://localhost:3000/api/essays'), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'http://localhost:3000',
+        host: 'localhost:3000',
+        cookie: `${GUEST_SESSION_COOKIE_NAME}=${sessionId}`,
+      },
+      body: stream,
+      duplex: 'half',
+      // `duplex` is required by the underlying fetch implementation for a
+      // streamed body but isn't in Next's own narrower NextRequestInit type.
+    } as ConstructorParameters<typeof NextRequest>[1]);
+    // NextRequest never sets one for a stream body on its own (confirmed
+    // directly against this runtime), but delete it explicitly so the
+    // absence this test exists to cover can never depend on that.
+    request.headers.delete('content-length');
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    // Bounds resident memory at the limit plus one chunk: the reader must
+    // stop within one chunk of crossing MAX_REQUEST_BODY_BYTES, not drain
+    // toward the stream's (never-arriving) end.
+    expect(pulls).toBeLessThanOrEqual(Math.ceil(MAX_REQUEST_BODY_BYTES / chunkBytes) + 1);
+    const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
+    expect(persisted).toBeNull();
+  });
+});
+
 describe('POST /api/essays — cross-origin requests', () => {
   // One integration-level test here (round-1 review): the guard's own
   // edge cases — malformed Origin, absent Host/forwarded-host, and
@@ -314,6 +404,37 @@ describe('POST /api/essays — cross-origin requests', () => {
     expect(response.status).toBe(400);
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId: neverPersistedSessionId }, neverPersistedSessionId);
     expect(persisted).toBeNull();
+  });
+
+  // Round-2 review: this suite had no test carrying a MATCHING Origin at
+  // all — every other test here either omits Origin entirely or sends the
+  // reject-direction mismatch above, so a mutant that made this route
+  // reject anything bearing an Origin header at all left every unit test in
+  // this file green; only a browser test caught it. And separately, this
+  // route's own request in production is bound to the `output: standalone`
+  // container address (`https://0.0.0.0:8080`, see route.ts's own comment
+  // and lib/same-origin.ts's), not the public hostname the browser's Origin
+  // and the load balancer's forwarded Host both carry — reproduced directly
+  // here (see lib/same-origin.test.ts's equivalent unit test for the same
+  // shape against isCrossOriginRequest itself). If someone reintroduced the
+  // inline `request.nextUrl.origin` comparison this route's own comment
+  // documents as the actual production outage, this would fail: nextUrl's
+  // host in that shape is always 0.0.0.0:8080, which never equals the
+  // public hostname below.
+  it('accepts a same-origin submission even when the request is bound to the container address rather than the deployed public hostname — the real output:standalone/Cloud Run shape (round-2 review)', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    const response = await POST(
+      postEssay(
+        { content: 'Submitted against the real deployed request shape.' },
+        sessionId,
+        { origin: 'https://fluentina.com', 'x-forwarded-host': 'fluentina.com' },
+        'https://0.0.0.0:8080/api/essays',
+      ),
+    );
+
+    expect(response.status).toBe(201);
   });
 });
 

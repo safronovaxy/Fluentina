@@ -93,47 +93,66 @@ import { isCrossOriginRequest } from '@/lib/same-origin';
  * session cookie (now that a caller presenting none is rejected, above) is
  * what a cross-site browser request cannot attach at all. Pinning the
  * comparison to a genuinely proxy-set value is KAN-28.
+ *
+ * Round-2 review: the cookie check below now runs immediately after the
+ * cross-origin guard, ahead of every body-reading step — it used to run
+ * last, after the raw body was already buffered and parsed. An anonymous
+ * caller presenting no cookie at all now costs this route nothing beyond
+ * the two cheap header checks: no bytes read off the wire, no JSON parse.
+ * This also matters for KAN-25, which wants the actor in hand before the
+ * route does any work on an anonymous caller's behalf.
  */
+
+/**
+ * Reads `request`'s body as UTF-8 text, rejecting once the running total of
+ * bytes actually read exceeds `limitBytes` — without ever buffering more
+ * than `limitBytes` plus one chunk.
+ *
+ * Round-2 review: `request.text()` buffers the ENTIRE body into memory
+ * before handing back a single string, regardless of size — the
+ * `Content-Length` pre-check above is a cheap early exit for a caller that
+ * reports its size honestly, but a request sent with chunked transfer
+ * encoding and no `Content-Length` at all (the default when a body is
+ * streamed, not a crafted edge case) sailed straight past that check and
+ * into `request.text()`, which resident-buffers up to Cloud Run's own
+ * 32MiB request ceiling before the byte-length check below it ever saw a
+ * number. At 512Mi and the platform's default concurrency of 80, a dozen
+ * of those in parallel exhausts the instance and every other request
+ * routed to it starts failing. Reading the body's own stream reader
+ * chunk-by-chunk, and cancelling it the moment the running total crosses
+ * the limit, bounds resident memory at `limitBytes` plus one chunk no
+ * matter what any header claims or how the body is transferred.
+ */
+async function readBodyWithinLimit(
+  request: NextRequest,
+  limitBytes: number,
+): Promise<{ ok: true; text: string } | { ok: false }> {
+  const reader = request.body?.getReader();
+  if (!reader) {
+    // No body stream at all (e.g. a GET-shaped request with no body) — an
+    // empty string is exactly what request.text() would have returned too.
+    return { ok: true, text: '' };
+  }
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limitBytes) {
+      await reader.cancel();
+      return { ok: false };
+    }
+    chunks.push(value);
+  }
+
+  return { ok: true, text: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8') };
+}
+
 export async function POST(request: NextRequest) {
   if (isCrossOriginRequest(request)) {
     return NextResponse.json({ error: 'cross-origin request rejected' }, { status: 400 });
-  }
-
-  // Checked before the raw request body is ever read, so a caller that
-  // honestly reports a too-large Content-Length never gets buffered into
-  // memory at all — see the byte-length check below for why this alone
-  // isn't the whole story (a lying or absent Content-Length still reaches
-  // it).
-  const contentLength = Number(request.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
-    return NextResponse.json({ error: 'request body exceeds the safety limit' }, { status: 413 });
-  }
-
-  // A single, blunt safety cap on the raw request body — checked here,
-  // against bytes, before the body is even parsed as JSON, specifically so
-  // a pathologically large payload never reaches JSON.parse or the
-  // database. This is the authority for a body whose Content-Length is
-  // absent, wrong, or understates the truth — the check above is an
-  // optimisation for the honestly-reported case, not a replacement for
-  // this one. This is NOT the product's word-count rule (KAN-15 owns that,
-  // against `content` itself, well below this number — see
-  // essaySubmissionRequestSchema's own comment) and is deliberately far
-  // more generous than any real essay could ever need.
-  const rawBody = await request.text();
-  if (Buffer.byteLength(rawBody, 'utf8') > MAX_REQUEST_BODY_BYTES) {
-    return NextResponse.json({ error: 'request body exceeds the safety limit' }, { status: 413 });
-  }
-
-  let json: unknown;
-  try {
-    json = JSON.parse(rawBody);
-  } catch {
-    return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 });
-  }
-
-  const parsed = essaySubmissionRequestSchema.safeParse(json);
-  if (!parsed.success) {
-    return NextResponse.json({ error: 'invalid essay submission' }, { status: 400 });
   }
 
   const rawCookie = request.cookies.get(GUEST_SESSION_COOKIE_NAME)?.value;
@@ -141,8 +160,53 @@ export async function POST(request: NextRequest) {
     // No legitimate caller on the real path reaches this without a cookie
     // middleware already set moments earlier on the same navigation — see
     // this file's own comment above. Reject outright rather than resolving
-    // (which would mean minting) a session for whoever this actually is.
+    // (which would mean minting) a session for whoever this actually is —
+    // and reject before the body is even read (round-2 review, see above).
     return NextResponse.json({ error: 'missing or invalid guest session cookie' }, { status: 400 });
+  }
+
+  // Checked before the raw request body is ever read, so a caller that
+  // honestly reports a too-large Content-Length never gets buffered into
+  // memory at all — see readBodyWithinLimit below for why this alone isn't
+  // the whole story (a lying, absent, or non-numeric Content-Length still
+  // reaches it, and so does a chunked-transfer body that never sends one at
+  // all).
+  const contentLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+    return NextResponse.json({ error: 'request body exceeds the safety limit' }, { status: 413 });
+  }
+
+  // A single, blunt safety cap on the raw request body — enforced against
+  // bytes actually read off the wire, before the body is even parsed as
+  // JSON, specifically so a pathologically large payload never reaches
+  // JSON.parse or the database. This is the authority for a body whose
+  // Content-Length is absent, wrong, or understates the truth — the check
+  // above is an optimisation for the honestly-reported case, not a
+  // replacement for this one. See readBodyWithinLimit's own comment for why
+  // this reads the request as a stream rather than calling
+  // `request.text()`: a chunked body with no Content-Length header — the
+  // default shape for a streamed body, not an adversarial edge case — used
+  // to reach `request.text()` regardless of size, buffering the whole thing
+  // (up to Cloud Run's own 32MiB request ceiling) before this check ever
+  // saw a byte count (round-2 review). This is NOT the product's word-count
+  // rule (KAN-15 owns that, against `content` itself, well below this
+  // number — see essaySubmissionRequestSchema's own comment) and is
+  // deliberately far more generous than any real essay could ever need.
+  const bodyResult = await readBodyWithinLimit(request, MAX_REQUEST_BODY_BYTES);
+  if (!bodyResult.ok) {
+    return NextResponse.json({ error: 'request body exceeds the safety limit' }, { status: 413 });
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(bodyResult.text);
+  } catch {
+    return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 });
+  }
+
+  const parsed = essaySubmissionRequestSchema.safeParse(json);
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'invalid essay submission' }, { status: 400 });
   }
 
   const { actor, reissued } = await resolveGuestSession(rawCookie);

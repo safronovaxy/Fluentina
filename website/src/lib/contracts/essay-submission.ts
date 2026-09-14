@@ -41,15 +41,26 @@ export const MAX_ESSAY_CONTENT_CHARS = 20_000;
 
 /**
  * Raw-body transport guard, in bytes — a blunt safety cap, not a product
- * rule. Deliberately larger than `MAX_ESSAY_CONTENT_CHARS` UTF-8-encoded
- * bytes could ever require (worst case for a UTF-16 code unit in the Basic
- * Multilingual Plane is 3 bytes, so `MAX_ESSAY_CONTENT_CHARS * 3` plus the
- * small JSON envelope `{"content":"..."}` adds), so it never fires for
- * content that is itself within the character cap, in German or any other
- * language this product supports — see this file's own comment for the bug
- * that happened when it didn't.
+ * rule. Deliberately larger than `MAX_ESSAY_CONTENT_CHARS` characters could
+ * ever cost once actually serialised into the JSON body this guard
+ * measures.
+ *
+ * Round-2 review: the invariant used to be sized against 3 bytes per
+ * character — the worst case for a UTF-16 code unit's RAW UTF-8 encoding —
+ * which understates the worst case for the JSON-encoded body this guard
+ * actually checks. `JSON.stringify` escapes control characters other than
+ * the common whitespace ones (`\b \f \n \r \t`) as `\u00XX`: six ASCII
+ * bytes for one character. A content string entirely within
+ * `MAX_ESSAY_CONTENT_CHARS` can therefore, in the worst case, cost 6 bytes
+ * per character once JSON-encoded — not reachable by a real B2 essay
+ * (nobody pastes seventeen thousand vertical tabs), but the old 3x
+ * invariant was false as written, the same class of bug as the umlaut one
+ * above. Sized here against `MAX_ESSAY_CONTENT_CHARS * 6` plus the small
+ * JSON envelope `{"content":"..."}` adds, so the claim holds for ANY input,
+ * not merely realistic ones — see `essay-submission.test.ts` for the test
+ * pinning this exact factor.
  */
-export const MAX_REQUEST_BODY_BYTES = 100_000;
+export const MAX_REQUEST_BODY_BYTES = 128_000;
 
 export const essaySubmissionRequestSchema = z.object({
   content: z

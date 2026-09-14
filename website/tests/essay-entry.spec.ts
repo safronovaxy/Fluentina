@@ -37,9 +37,12 @@ const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 // an essay need the skip, in both locales: the click-count test (which also
 // asserts the cookie directly) and "no account or login is required" (which
 // doesn't touch the cookie, but does require a successful submission). The
-// other two tests per locale need no skip and now run for real WebKit
-// coverage of their acceptance criteria (no upload/camera control; pasted
-// text accepted).
+// other three tests per locale need no skip and now run for real WebKit
+// coverage of their acceptance criteria (no upload/camera control; no
+// horizontal overflow; pasted text accepted) — five tests per locale in
+// total now that the horizontal-overflow test below exists, not four; only
+// the two that actually submit an essay need the skip (round-2 review: this
+// comment used to still say "two of four"/"four" after that test landed).
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3000';
 const isPlainHttp = BASE_URL.startsWith('http://');
 
