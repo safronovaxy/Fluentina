@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
+import { renderWithIntl } from '@/test/renderWithIntl';
 import { StepIndicator } from './StepIndicator';
-import { GUEST_FLOW_STEPS } from './flow-steps';
+import { GUEST_FLOW_STEPS } from '../flow-steps';
 
 /**
  * Note on scope: jsdom has no layout and no media queries, so nothing here
@@ -16,7 +17,7 @@ import { GUEST_FLOW_STEPS } from './flow-steps';
  */
 describe('StepIndicator', () => {
   it('renders one item per step', () => {
-    render(<StepIndicator currentStepId="none" />);
+    renderWithIntl(<StepIndicator currentStepId="none" />);
     expect(screen.getAllByRole('listitem')).toHaveLength(GUEST_FLOW_STEPS.length);
   });
 
@@ -24,7 +25,7 @@ describe('StepIndicator', () => {
     // Compared against literals, not against GUEST_FLOW_STEPS: deriving the
     // expectation from the same constant that produced the render meant
     // dropping a step from the flow still passed.
-    render(<StepIndicator currentStepId="none" />);
+    renderWithIntl(<StepIndicator currentStepId="none" />);
     expect(
       screen.getAllByRole('listitem').map((li) => li.getAttribute('aria-label')),
     ).toEqual([
@@ -37,7 +38,7 @@ describe('StepIndicator', () => {
   });
 
   it('marks exactly the current step with aria-current', () => {
-    render(<StepIndicator currentStepId="write" />);
+    renderWithIntl(<StepIndicator currentStepId="write" />);
     const current = screen.getAllByRole('listitem').filter(
       (li) => li.getAttribute('aria-current') === 'step',
     );
@@ -50,7 +51,7 @@ describe('StepIndicator', () => {
     // The old version only ever rendered with the last step current, so no
     // fixture contained an upcoming step at all, and completion was conveyed
     // by icon and colour with nothing readable to assert.
-    render(<StepIndicator currentStepId="submit" />);
+    renderWithIntl(<StepIndicator currentStepId="submit" />);
     const items = screen.getAllByRole('listitem');
     const labels = items.map((li) => li.getAttribute('aria-label'));
     expect(labels[0]).toContain(', completed');
@@ -74,7 +75,7 @@ describe('StepIndicator', () => {
   });
 
   it('shows every step as upcoming before the flow starts', () => {
-    render(<StepIndicator currentStepId="none" />);
+    renderWithIntl(<StepIndicator currentStepId="none" />);
     const items = screen.getAllByRole('listitem');
     expect(items.some((li) => li.getAttribute('aria-current') === 'step')).toBe(false);
     for (const li of items) {
@@ -87,13 +88,13 @@ describe('StepIndicator', () => {
     // The landing page renders with no current step, so every dot is an
     // upcoming one. Without this, rendering nothing for upcoming steps — five
     // blank circles on the one screen this story ships — passed every test.
-    render(<StepIndicator currentStepId="none" />);
+    renderWithIntl(<StepIndicator currentStepId="none" />);
     const items = screen.getAllByRole('listitem');
     items.forEach((li, i) => expect(li).toHaveTextContent(String(i + 1)));
   });
 
   it('renders nothing when given an empty step list', () => {
-    const { container } = render(<StepIndicator steps={[]} currentStepId="none" />);
+    const { container } = renderWithIntl(<StepIndicator steps={[]} currentStepId="none" />);
     // An empty <ol> with a progress label is worse than no indicator for a
     // screen that wants none, e.g. an error or session-expiry page.
     expect(container.querySelector('ol')).toBeNull();
@@ -115,7 +116,7 @@ describe('StepIndicator', () => {
     ] as const;
 
     it('highlights the matching id in a caller-supplied step list', () => {
-      render(<StepIndicator steps={CUSTOM_STEPS} currentStepId="beta" />);
+      renderWithIntl(<StepIndicator steps={CUSTOM_STEPS} currentStepId="beta" />);
       expect(screen.getByRole('listitem', { name: 'Step 2 of 2: Beta' })).toHaveAttribute(
         'aria-current',
         'step',
@@ -132,7 +133,7 @@ describe('StepIndicator', () => {
       // instead (see StepIndicator.typecheck.tsx).
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const nonLiteralSteps = [{ id: 'alpha', label: 'Alpha' }];
-      const { container } = render(
+      const { container } = renderWithIntl(
         <StepIndicator steps={nonLiteralSteps} currentStepId="prompt" />,
       );
 
@@ -150,8 +151,8 @@ describe('StepIndicator', () => {
 
     it('does not warn when currentStepId is "none" or matches an actual step', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      render(<StepIndicator steps={CUSTOM_STEPS} currentStepId="none" />);
-      render(<StepIndicator steps={CUSTOM_STEPS} currentStepId="alpha" />);
+      renderWithIntl(<StepIndicator steps={CUSTOM_STEPS} currentStepId="none" />);
+      renderWithIntl(<StepIndicator steps={CUSTOM_STEPS} currentStepId="alpha" />);
       expect(warn).not.toHaveBeenCalled();
       warn.mockRestore();
     });
@@ -164,11 +165,98 @@ describe('StepIndicator', () => {
       vi.stubEnv('NODE_ENV', 'production');
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const nonLiteralSteps = [{ id: 'alpha', label: 'Alpha' }];
-      render(<StepIndicator steps={nonLiteralSteps} currentStepId="prompt" />);
+      renderWithIntl(<StepIndicator steps={nonLiteralSteps} currentStepId="prompt" />);
 
       expect(warn).not.toHaveBeenCalled();
       warn.mockRestore();
       vi.unstubAllEnvs();
     });
+  });
+});
+
+/**
+ * KAN-9 — i18n architecture. These pin the acceptance criteria directly:
+ * strings come from the message catalogue rather than being literals in the
+ * component, switching locale changes what's rendered, and a broken/missing
+ * catalogue entry fails loudly rather than rendering silently as an empty
+ * string or the raw "namespace.key".
+ */
+describe('StepIndicator — KAN-9 i18n', () => {
+  it('renders the catalogue value, not a hardcoded literal', () => {
+    // The bug this catches: hardcoding 'Guest essay flow progress' back into
+    // StepIndicator.tsx instead of calling t('progressLabel'). If that
+    // literal were still there, overriding the catalogue value below would
+    // have no effect and this assertion would fail.
+    renderWithIntl(<StepIndicator currentStepId="none" />, {
+      messages: {
+        chrome: {
+          guest: {
+            progressLabel: '__CATALOGUE_OVERRIDE__',
+            stepAriaLabel: '{label}',
+            steps: { prompt: 'Prompt', write: 'Write', submit: 'Submit', preview: 'Preview', register: 'Register' },
+          },
+        },
+      },
+    });
+    expect(screen.getByRole('list', { name: '__CATALOGUE_OVERRIDE__' })).toBeInTheDocument();
+  });
+
+  it('renders German labels when the locale is de, English when en — same component, same props', () => {
+    const { unmount } = renderWithIntl(<StepIndicator currentStepId="write" />, { locale: 'en' });
+    expect(screen.getByRole('list', { name: 'Guest essay flow progress' })).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: 'Step 2 of 5: Write' })).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
+    unmount();
+
+    renderWithIntl(<StepIndicator currentStepId="write" />, { locale: 'de' });
+    expect(
+      screen.getByRole('list', { name: 'Fortschritt im Gast-Aufsatzablauf' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: 'Schritt 2 von 5: Schreiben' })).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
+  });
+
+  it('marks the completed suffix through the German select case, not English concatenation', () => {
+    // A word-for-word ", completed" suffix bolted onto a translated label
+    // would render nonsense in German. This pins that the suffix itself
+    // comes from the same catalogue entry (an ICU `select`), not a shared
+    // English string.
+    renderWithIntl(<StepIndicator currentStepId="submit" />, { locale: 'de' });
+    expect(screen.getByRole('listitem', { name: 'Schritt 1 von 5: Thema, abgeschlossen' })).toBeInTheDocument();
+  });
+
+  it('fails loudly — throws — on a missing catalogue key, rather than rendering an empty string or the raw key', () => {
+    // Constructs the exact bug this guards: a key present in `en.json` but
+    // dropped from `de.json` (e.g. a translator missed one). Without the
+    // onError/getMessageFallback wiring in IntlProvider, next-intl's default
+    // behaviour is to log via console.error and silently render the literal
+    // string "chrome.guest.progressLabel" in its place.
+    //
+    // Matches the specific message, not a bare `toThrow()`: a bare
+    // `toThrow()` passes on ANY thrown error, including an unrelated render
+    // error that has nothing to do with the missing key this test
+    // constructs — it would still pass if the fail-loud wiring were deleted
+    // outright, as long as something else in the tree happened to throw.
+    //
+    // Asserts on the *key path*, not the exact wording: `onIntlError` (see
+    // src/i18n/errorPolicy.ts) rethrows next-intl's own `IntlError` as-is
+    // rather than replacing it with a hand-written string, since it's
+    // already both accurate and more informative (it names the locale
+    // too). `intlMessageFallback`'s own "Missing translation for ..."
+    // wording is independently tested (errorPolicy.test.ts) — it is not
+    // reachable here because `onError` always runs first, for the same
+    // error, and throws before `getMessageFallback` is ever called.
+    const messagesMissingProgressLabel = {
+      chrome: { guest: { steps: { prompt: 'Prompt' } } },
+    };
+    expect(() =>
+      renderWithIntl(<StepIndicator currentStepId="none" />, {
+        messages: messagesMissingProgressLabel,
+      }),
+    ).toThrow(/chrome\.guest\.progressLabel/);
   });
 });
