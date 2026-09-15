@@ -60,9 +60,12 @@ interface LocaleFixture {
   readonly writePath: string;
   readonly submitName: string;
   readonly successTitle: string;
+  readonly tooShortError: string;
   readonly tooLongError: string;
   readonly lengthWarning: string;
   readonly recommendedRangeGuidance: string;
+  /** The exact `wordCount` ICU-plural string this locale's catalogue renders for `n` words — see src/messages/{en,de}.json's own `wordCount` key. */
+  readonly counterText: (n: number) => string;
 }
 
 const LOCALE_FIXTURES: readonly LocaleFixture[] = [
@@ -71,18 +74,22 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     writePath: '/practice/write',
     submitName: 'Submit essay',
     successTitle: 'Essay received',
+    tooShortError: 'Your essay is too short to grade — write at least 50 words.',
     tooLongError: 'Your essay is too long — keep it to 300 words or fewer.',
     lengthWarning: "That's longer than the recommended range, but you can still submit it.",
     recommendedRangeGuidance: '150–200 words is the recommended length for a B2 essay.',
+    counterText: (n) => `${n} ${n === 1 ? 'word' : 'words'}`,
   },
   {
     locale: 'de',
     writePath: '/de/practice/write',
     submitName: 'Aufsatz einreichen',
     successTitle: 'Aufsatz erhalten',
+    tooShortError: 'Dein Aufsatz ist zu kurz zum Bewerten — schreibe mindestens 50 Wörter.',
     tooLongError: 'Dein Aufsatz ist zu lang — halte ihn auf 300 Wörter oder weniger.',
     lengthWarning: 'Das ist länger als der empfohlene Bereich, du kannst ihn aber trotzdem einreichen.',
     recommendedRangeGuidance: '150–200 Wörter sind die empfohlene Länge für einen B2-Aufsatz.',
+    counterText: (n) => `${n} ${n === 1 ? 'Wort' : 'Wörter'}`,
   },
 ];
 
@@ -118,6 +125,42 @@ for (const fx of LOCALE_FIXTURES) {
       // slow; there is no pending/network state to wait out.
       await expect(page.getByRole('status')).toHaveCount(0);
       await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
+    });
+
+    // Round-1 review (should-fix #4): the too-short error was never
+    // asserted against the REAL catalogue in either language — the locale
+    // fixtures above carried tooLongError/lengthWarning/recommendedRangeGuidance,
+    // but no tooShortError, and the unit suites (EssayEntryForm.test.tsx)
+    // only ever assert against hand-written STRINGS props, never the actual
+    // en.json/de.json this page reads from. That left the wiring on the
+    // write page itself unproven: point `tooShortError` at the wrong
+    // catalogue key and every other suite stays green while a guest under
+    // 50 words is told the wrong thing, in both languages.
+    test('blocks a 49-word essay client-side with the too-short message from the real catalogue, and never leaves the page', async ({ page }) => {
+      await gotoOk(page, fx.writePath);
+
+      await page.getByRole('textbox').fill(wordsContent(49));
+      await page.getByRole('button', { name: fx.submitName }).click();
+
+      await expect(blockingMessage(page)).toHaveText(fx.tooShortError);
+      await expect(page.getByRole('status')).toHaveCount(0);
+      await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
+    });
+
+    // Round-1 review (should-fix #4, same finding): the counter's own text
+    // is currently only ever asserted in jsdom (EssayEntryForm.test.tsx),
+    // never against a real browser rendering next-intl's ICU plural rule
+    // from the real catalogue — this is that proof, in the same run that
+    // now also covers the too-short message above.
+    test('shows the live word counter with the real catalogue text, singular and plural, in a real browser', async ({ page }) => {
+      await gotoOk(page, fx.writePath);
+      const textarea = page.getByRole('textbox');
+
+      await textarea.fill(wordsContent(1));
+      await expect(page.getByText(fx.counterText(1), { exact: true })).toBeVisible();
+
+      await textarea.fill(wordsContent(42));
+      await expect(page.getByText(fx.counterText(42), { exact: true })).toBeVisible();
     });
 
     test('shows the recommended-range guidance at 150 words and the non-blocking warning at 201, live while typing, with no submit attempt at all', async ({ page }) => {

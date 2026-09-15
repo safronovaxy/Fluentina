@@ -1,16 +1,37 @@
 /** @vitest-environment node */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { eq } from 'drizzle-orm';
 import { POST } from './route';
 import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
 import { getGuestSessionById, createGuestSession, convertGuestSessionToUser } from '@/lib/db/guest-sessions';
 import { getEssayById } from '@/lib/db/essays';
+import { db } from '@/lib/db/client';
+import { essays } from '@/lib/db/schema';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import type { GuestSessionId } from '@/lib/contracts/actor';
 import { MAX_ESSAY_CONTENT_CHARS, MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
 import { MIN_ESSAY_WORDS, MAX_ESSAY_WORDS } from '@/lib/contracts/word-count';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+
+/**
+ * Round-1 review (should-fix #9): two tests below CLAIM "creates no essay"
+ * in their own title but only ever asserted the response status — a status-
+ * only assertion would not notice a route that returns 400 after already
+ * writing the row (e.g. a transaction that inserts, then fails validation
+ * on the way back out). This queries the `essays` table directly rather
+ * than going through `getEssayById`, which needs an id neither test has —
+ * the whole point is that no id was ever returned. Test-only: `db` is
+ * otherwise `lib/db`-internal (see that module's own comment) — test files
+ * are exempt from the import restriction that enforces that (eslint.config.js),
+ * the same exemption `test/db-fixtures.ts` already relies on for its own
+ * direct `db` use.
+ */
+async function countEssaysForSession(sessionId: string): Promise<number> {
+  const rows = await db.select({ id: essays.id }).from(essays).where(eq(essays.sessionId, sessionId));
+  return rows.length;
+}
 
 function postEssay(
   body: unknown,
@@ -174,19 +195,43 @@ describe('POST /api/essays — no cookie at all', () => {
   // unauthenticated cookie issuer that route's own review closed. Mirrors
   // `/api/guest-session`'s own "missing or malformed cookie" tests
   // (route.test.ts) exactly.
+  //
+  // KAN-15 round-1 review (blocking, again): both fixtures below used to be
+  // a handful of words — seven, comfortably under the new 50-word floor
+  // this story adds. That made a 400 here ambiguous: it's the same status
+  // this route now also returns for a too-short essay from a perfectly
+  // legitimate cookie, so a mutant that widened the cookie guard to accept
+  // (and mint a session for) any non-empty or even any cookie value at all
+  // left this entire file green — the fixture's own word count was doing
+  // the rejecting, not the guard these tests exist to pin. `validLengthContent`
+  // (60 words, defined above) clears the floor, so a 400 here can only be
+  // the cookie guard; asserting the exact message (naming the cookie, not
+  // the word count) and that no session cookie is ever reissued closes the
+  // gap the padding alone wouldn't — a mutant minting a session for a forged
+  // cookie could still return 400 for some unrelated reason and pass a
+  // status-only assertion.
   it('rejects a request with no cookie at all — 400, no session resolved, no essay stored', async () => {
-    const response = await POST(postEssay({ content: 'Submitted with no guest session cookie present.' }));
+    const response = await POST(
+      postEssay({ content: validLengthContent('Submitted with no guest session cookie present.') }),
+    );
+    const body: { error: string } = await response.json();
 
     expect(response.status).toBe(400);
+    expect(body.error).toBe('missing or invalid guest session cookie');
     expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
   });
 
   it('rejects a malformed or forged cookie the same way — 400, and the forged value never becomes a row or an essay', async () => {
     const forged = 'attacker-supplied-value';
 
-    const response = await POST(postEssay({ content: 'Submitted with a malformed guest session cookie.' }, forged));
+    const response = await POST(
+      postEssay({ content: validLengthContent('Submitted with a malformed guest session cookie.') }, forged),
+    );
+    const body: { error: string } = await response.json();
 
     expect(response.status).toBe(400);
+    expect(body.error).toBe('missing or invalid guest session cookie');
+    expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
     const forgedActor = { kind: 'guest' as const, sessionId: forged as GuestSessionId };
     expect(await getGuestSessionById(forgedActor, forged)).toBeNull();
   });
@@ -683,10 +728,17 @@ describe('POST /api/essays — the KAN-15 word-count bounds, enforced independen
     await createGuestSession({ kind: 'guest', sessionId });
 
     const response = await POST(postEssay({ content: wordsContent(MIN_ESSAY_WORDS - 1) }, sessionId));
-    const body: { error: string } = await response.json();
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
     expect(body.error.toLowerCase()).toContain('short');
+    // Round-1 review (should-fix #3): `reason` travels alongside `message`
+    // in the HTTP body now, not just internally on the zod issue — this is
+    // what EssayEntryForm's postEssay reads to map onto its own translated
+    // string, rather than discarding the body and rendering the generic
+    // fallback regardless of why (see EssayEntryForm.tsx's own comment).
+    expect(body.reason).toBe('tooShort');
+    expect(await countEssaysForSession(sessionId)).toBe(0);
   });
 
   it('accepts exactly 50 words — the minimum itself is not blocked', async () => {
@@ -712,11 +764,12 @@ describe('POST /api/essays — the KAN-15 word-count bounds, enforced independen
     await createGuestSession({ kind: 'guest', sessionId });
 
     const response = await POST(postEssay({ content: wordsContent(MAX_ESSAY_WORDS + 1) }, sessionId));
-    const body: { error: string } = await response.json();
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
     expect(body.error.toLowerCase()).toMatch(/maximum|too long|exceeds/);
     expect(body.error.toLowerCase()).not.toContain('short');
+    expect(body.reason).toBe('tooLong');
   });
 
   it('a 220-word essay — the story\'s own "never blocked" verification case — is accepted end to end and persisted with its full content, bypassing any client entirely', async () => {
@@ -741,6 +794,7 @@ describe('POST /api/essays — the KAN-15 word-count bounds, enforced independen
     const response = await POST(postEssay({ content }, sessionId));
 
     expect(response.status).toBe(400);
+    expect(await countEssaysForSession(sessionId)).toBe(0);
   });
 
   it('creates no guest session row as a side effect of a length-rejected submission, the same guarantee already proven for an empty one', async () => {
@@ -774,5 +828,30 @@ describe('POST /api/essays — the KAN-15 word-count bounds, enforced independen
       errorSpy.mockRestore();
       warnSpy.mockRestore();
     }
+  });
+
+  // Round-1 review (should-fix #10): the length rejection's `error` (and,
+  // as of this same review, `reason`) travel straight into the HTTP
+  // response body — today `essaySubmissionRequestSchema`'s message is a
+  // static string with no submitted content in it, but nothing pins that
+  // invariant, so a later change that interpolated the essay itself into
+  // the message (e.g. "too long by N words, starting: <content>") would
+  // ship silently. Matches the console-output test above: the same secret
+  // must never appear anywhere in the rejection body either, and the
+  // session id — the one other value this route must never leak into a
+  // response body a caller controls (see the "never leaks the session id"
+  // success-path test) — is checked here too.
+  it('the length-rejection response body contains neither the submitted content nor the session id', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const secretToken = 'EinAndererGeheimerTokenFuerDenAntwortkoerper';
+    const content = `${secretToken} ${wordsContent(999)}`;
+
+    const response = await POST(postEssay({ content }, sessionId));
+    const rawBody = JSON.stringify(await response.json());
+
+    expect(response.status).toBe(400);
+    expect(rawBody).not.toContain(secretToken);
+    expect(rawBody).not.toContain(sessionId);
   });
 });

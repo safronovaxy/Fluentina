@@ -48,7 +48,7 @@
  * exact German case.
  */
 import { z } from 'zod';
-import { countGermanWords, MIN_ESSAY_WORDS, MAX_ESSAY_WORDS } from './word-count';
+import { countGermanWords, classifyEssayLength, isEssayLengthBlocked, MIN_ESSAY_WORDS, MAX_ESSAY_WORDS } from './word-count';
 
 /** Character cap, shared by this schema and the client (`EssayEntryForm`'s `maxLength`). Comfortably above any real essay — 300 words is roughly 2,000 characters. */
 export const MAX_ESSAY_CONTENT_CHARS = 20_000;
@@ -89,15 +89,27 @@ export const essaySubmissionRequestSchema = z.object({
     // its own specific reason — even when `.max()` above has also failed.
     // `reason` in `params` (not just the message text) is what lets a
     // caller distinguish the two cases programmatically — see route.ts.
+    //
+    // Round-1 review (consider #6): this used to re-derive the two
+    // boundaries directly (`wordCount < MIN_ESSAY_WORDS` / `> MAX_ESSAY_WORDS`)
+    // instead of calling `classifyEssayLength`/`isEssayLengthBlocked` — the
+    // exact functions `word-count.ts`'s own boundary table exists to be the
+    // one place those numbers are expressed. The two agreed today, so this
+    // was latent drift, not a live bug, but it's exactly what that file's
+    // opening comment says a second implementation risks; `isEssayLengthBlocked`
+    // also had no production caller at all until this. Routing through the
+    // classifier here means the boundaries are expressed exactly once.
     .superRefine((value, ctx) => {
       const wordCount = countGermanWords(value);
-      if (wordCount < MIN_ESSAY_WORDS) {
+      const status = classifyEssayLength(wordCount);
+      if (!isEssayLengthBlocked(status)) return;
+      if (status === 'tooShort') {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `essay is under the ${MIN_ESSAY_WORDS}-word minimum — too short to grade`,
           params: { reason: 'tooShort' },
         });
-      } else if (wordCount > MAX_ESSAY_WORDS) {
+      } else {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `essay exceeds the ${MAX_ESSAY_WORDS}-word maximum`,

@@ -76,7 +76,7 @@ describe('MAX_ESSAY_CONTENT_CHARS and MAX_REQUEST_BODY_BYTES — two different l
     // U+0001 (start of heading) is a control character outside the
     // \b \f \n \r \t set JSON.stringify escapes to 2 bytes — it costs the
     // full 6-byte \u00XX escape, the worst case this guard is sized for.
-    const content = ''.repeat(MAX_ESSAY_CONTENT_CHARS);
+    const content = '\u0001'.repeat(MAX_ESSAY_CONTENT_CHARS);
     const body = JSON.stringify({ content });
 
     expect(content.length).toBe(MAX_ESSAY_CONTENT_CHARS);
@@ -161,6 +161,65 @@ describe('essaySubmissionRequestSchema — the KAN-15 word-count bounds', () => 
       expect(shortMessage).toBeDefined();
       expect(longMessage).toBeDefined();
       expect(shortMessage).not.toBe(longMessage);
+    }
+  });
+
+  // Round-1 review (should-fix #2): every fixture above, and in every other
+  // KAN-15 suite, is single-space-separated tokens. The Test Lead proved
+  // that's not incidental — swapping this schema's own call for a naive
+  // `content.split(' ').filter(Boolean).length` left all 150 tests across
+  // three suites green, because every one of them happens to build content
+  // that a single-space split counts identically to countGermanWords. A
+  // real B2 essay is paragraphs (newlines between them) and, often, pasted
+  // word-processor text with two spaces after a full stop — content a
+  // naive split miscounts. This fixture is deliberately NOT single-space:
+  // paragraph breaks (double newline) every ten words, a tab, and a
+  // double space after a full stop, mixed through the token list.
+  function mixedWhitespaceContent(n: number): string {
+    const tokens = Array.from({ length: n }, (_, i) => `Wort${i}`);
+    return tokens
+      .map((token, i) => {
+        if (i === 0) return token;
+        if (i % 10 === 0) return `\n\n${token}`;
+        if (i % 7 === 0) return `\t${token}`;
+        if (i % 3 === 0) return `.  ${token}`;
+        return ` ${token}`;
+      })
+      .join('');
+  }
+
+  it('accepts 50 words separated by newlines, tabs and double spaces after a full stop — not the single-space fixture every other test in this suite uses', () => {
+    const content = mixedWhitespaceContent(MIN_ESSAY_WORDS);
+    expect(content).not.toMatch(/^\S+( \S+)*$/); // sanity: genuinely not single-space-only
+
+    expect(essaySubmissionRequestSchema.safeParse({ content }).success).toBe(true);
+  });
+
+  it('rejects 49 words with the same mixed whitespace as too short — pins that the server side counts real pasted-essay whitespace correctly, not merely single-space fixtures', () => {
+    const result = essaySubmissionRequestSchema.safeParse({ content: mixedWhitespaceContent(MIN_ESSAY_WORDS - 1) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.code === 'custom');
+      expect(issue?.params?.reason).toBe('tooShort');
+    }
+  });
+
+  // Round-1 review (should-fix #10): the rejection body is the schema's own
+  // message, a static string today — but the essay content itself, and any
+  // session identifier, must never end up in it regardless, matching the
+  // "never logs essay text" rule this whole route is built against (see
+  // route.test.ts's own console-output test for the same property at the
+  // HTTP layer).
+  it('the too-short rejection message contains neither the submitted content nor anything that looks like a session id', () => {
+    const secretContent = wordsContent(10);
+    const result = essaySubmissionRequestSchema.safeParse({ content: secretContent });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const message = result.error.issues.find((i) => i.code === 'custom')?.message ?? '';
+      expect(message).not.toContain(secretContent);
+      expect(message).not.toContain('Wort0');
     }
   });
 });

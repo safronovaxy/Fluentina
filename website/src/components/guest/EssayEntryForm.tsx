@@ -67,6 +67,32 @@ interface SubmitEssayResponse {
   readonly id: string;
 }
 
+/**
+ * Round-1 review (should-fix #3): `POST /api/essays` returns a structured
+ * `reason` (`'tooShort'`/`'tooLong'`) alongside its English `message` for
+ * exactly this reason — so a caller that bypassed the client-side check
+ * below (the only real way this branch is ever reached — EssayEntryForm
+ * blocks first) can still be told why in the guest's own language, by
+ * mapping `reason` onto the already-translated string this component
+ * already holds, rather than rendering the route's English prose directly
+ * (which the old `errorGeneric`-only path also correctly never did — see
+ * that history below). Only `reason` is read out of the body, and only if
+ * it's one of the two known values — the raw `error` message string itself
+ * is still never surfaced, matching the rule this route is built against
+ * (nothing server-side validation rejected is guaranteed safe to echo
+ * verbatim).
+ */
+type EssayLengthRejectionReason = 'tooShort' | 'tooLong';
+
+class EssaySubmissionError extends Error {
+  readonly reason: EssayLengthRejectionReason | undefined;
+
+  constructor(status: number, reason: EssayLengthRejectionReason | undefined) {
+    super(`essay submission failed with status ${status}`);
+    this.reason = reason;
+  }
+}
+
 async function postEssay(content: string): Promise<SubmitEssayResponse> {
   const response = await fetch('/api/essays', {
     method: 'POST',
@@ -74,11 +100,22 @@ async function postEssay(content: string): Promise<SubmitEssayResponse> {
     body: JSON.stringify({ content }),
   });
   if (!response.ok) {
-    // Never the response body in the thrown error — nothing here is
-    // guaranteed not to echo something server-side validation rejected,
-    // and this message only ever reaches `strings.errorGeneric` below, not
-    // the console or any log.
-    throw new Error(`essay submission failed with status ${response.status}`);
+    // Read only the structured `reason` field, never the `error` message
+    // text — the response body may not be JSON at all (a proxy error page,
+    // for instance), so this is deliberately best-effort and swallows a
+    // parse failure rather than letting it replace the real HTTP-status
+    // error below.
+    let reason: EssayLengthRejectionReason | undefined;
+    try {
+      const body: unknown = await response.json();
+      const candidate = (body as { reason?: unknown } | null)?.reason;
+      if (candidate === 'tooShort' || candidate === 'tooLong') reason = candidate;
+    } catch {
+      // Not JSON, or no body at all — reason stays undefined and the
+      // generic error message is shown, same as before this reason-mapping
+      // existed.
+    }
+    throw new EssaySubmissionError(response.status, reason);
   }
   return response.json();
 }
@@ -108,9 +145,21 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
   // one of the two new KAN-15 messages. `isValid` gates all three — if the
   // schema and this component's own reasons ever disagreed, none of the
   // three would show rather than showing a wrong one.
+  //
+  // Round-1 review (should-fix): showTooLongError used to be `touched`-gated
+  // the same way the other two are. That meant the ONLY signal a guest
+  // typing past 300 words had was the warning (`showLengthWarning`, below)
+  // going false the instant they crossed the ceiling — the warning is gated
+  // on `overRecommended`, which stops being true at exactly the word count
+  // where `tooLong` starts, so it disappears with nothing replacing it until
+  // they pressed submit and were told for the first time. Live is the right
+  // default for a state that's getting WORSE, not better, as they keep
+  // typing — the opposite of `showRequiredError`/`showTooShortError`, which
+  // stay `touched`-gated deliberately: a freshly empty box (the state every
+  // guest starts in) must not shout at them before they've done anything.
   const showRequiredError = touched && !isValid && (isEmpty || isOverCharCap);
   const showTooShortError = touched && !isValid && !isEmpty && !isOverCharCap && lengthStatus === 'tooShort';
-  const showTooLongError = touched && !isValid && !isEmpty && !isOverCharCap && lengthStatus === 'tooLong';
+  const showTooLongError = !isEmpty && !isOverCharCap && lengthStatus === 'tooLong';
 
   // Guidance/warning are non-blocking and live — shown while typing, not
   // gated behind a submit attempt the way the three blocking messages
@@ -142,6 +191,22 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
       : showTooLongError
         ? 'essay-content-too-long'
         : undefined;
+
+  // Round-1 review (should-fix #3): maps the server's structured `reason`
+  // (see postEssay/EssaySubmissionError above) onto the SAME translated
+  // strings the live client-side check already uses — a guest who somehow
+  // bypassed that check and reached the server's independent enforcement
+  // now sees the specific, correctly-localised reason rather than the
+  // generic fallback every server rejection used to render regardless of
+  // why. Anything else (a 500, a network failure, a body with no
+  // recognised `reason`) still falls back to `errorGeneric`.
+  const submissionError = mutation.error instanceof EssaySubmissionError ? mutation.error : undefined;
+  const submissionErrorMessage =
+    submissionError?.reason === 'tooShort'
+      ? strings.tooShortError
+      : submissionError?.reason === 'tooLong'
+        ? strings.tooLongError
+        : strings.errorGeneric;
 
   return (
     <form onSubmit={handleSubmit} noValidate>
@@ -188,7 +253,7 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
       )}
       {mutation.isError && (
         <p role="alert" className="mt-3 text-sm text-destructive">
-          {strings.errorGeneric}
+          {submissionErrorMessage}
         </p>
       )}
       <Button type="submit" className="mt-4" disabled={mutation.isPending}>

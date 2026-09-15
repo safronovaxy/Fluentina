@@ -222,11 +222,35 @@ export async function POST(request: NextRequest) {
     // character safety cap) keeps the generic message below, unchanged
     // from KAN-14 — this route doesn't have a distinct guest-facing case
     // for either of those the way it does for the two length ones.
+    //
+    // Round-1 review (should-fix): `reason` used to stop here — the English
+    // `message` went out, `reason` itself never left this function. The
+    // client discarded the body entirely and rendered its own generic
+    // `errorGeneric` string, so nothing about "a guest is told why" was
+    // actually true of the shipped response; it only held in this route's
+    // own tests, which read `parsed.error.issues` directly rather than the
+    // HTTP body a real client gets. No user-visible effect today because
+    // EssayEntryForm's identical client-side check blocks first — the only
+    // way a real guest reaches this branch at all is a bypass — but a
+    // German guest who DID reach it got an English sentence, and the
+    // contract this route claims to expose was fiction past its own return
+    // statement. Returning `reason` alongside `message` lets the caller
+    // (EssayEntryForm) map it onto the already-translated string it
+    // already holds (`strings.tooShortError`/`strings.tooLongError`)
+    // instead of re-parsing English prose — the same shape KAN-16's own
+    // grading failure reasons will need, cheaper to add now than to retrofit
+    // once that lands.
     const lengthIssue = parsed.error.issues.find(
       (issue) => issue.code === 'custom' && (issue.params?.reason === 'tooShort' || issue.params?.reason === 'tooLong'),
     );
-    if (lengthIssue) {
-      return NextResponse.json({ error: lengthIssue.message }, { status: 400 });
+    // `.find`'s predicate narrows `issue` to the `custom` variant inside its
+    // own closure, but that narrowing doesn't survive the assignment back
+    // to `lengthIssue` — re-checking `.code` here (now against the single
+    // found issue, not the whole union) is what lets `.params` typecheck
+    // below without an `as` cast.
+    if (lengthIssue && lengthIssue.code === 'custom') {
+      const reason = lengthIssue.params?.reason as 'tooShort' | 'tooLong' | undefined;
+      return NextResponse.json({ error: lengthIssue.message, reason }, { status: 400 });
     }
     return NextResponse.json({ error: 'invalid essay submission' }, { status: 400 });
   }

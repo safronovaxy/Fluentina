@@ -214,14 +214,56 @@ describe('EssayEntryForm — a failed submission', () => {
     // half-written essay just because the request failed once.
     expect(screen.getByLabelText(STRINGS.textareaLabel)).toHaveValue(content);
   });
+
+  // Round-1 review (should-fix #3): the server's rejection reason used to
+  // die at the HTTP boundary — every server-side rejection rendered
+  // `errorGeneric`, regardless of why, because the response body was
+  // discarded entirely. Content here clears every CLIENT-side check (60
+  // words, well within bounds) specifically so the request is actually
+  // sent — this proves the MAPPING (server `reason` -> the already-
+  // translated string), not the client-side block, which is covered
+  // elsewhere and would prevent this fetch from ever firing.
+  it('shows the specific too-short message, not the generic one, when the server rejects with reason "tooShort" — the bypass case', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'essay is under the 50-word minimum — too short to grade', reason: 'tooShort' }), {
+        status: 400,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    renderForm();
+
+    fillEssay(words(60));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.tooShortError));
+    expect(screen.queryByText(STRINGS.errorGeneric)).toBeNull();
+  });
+
+  it('shows the specific too-long message, not the generic one, when the server rejects with reason "tooLong" — the bypass case', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'essay exceeds the 300-word maximum', reason: 'tooLong' }), { status: 400 }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    renderForm();
+
+    fillEssay(words(60));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.tooLongError));
+    expect(screen.queryByText(STRINGS.errorGeneric)).toBeNull();
+  });
 });
 
 /**
- * KAN-15 (BR-1.4) — the live counter itself. Deliberately never asserts
- * against an empty textarea (the story's own warning against a test that
- * "asserts some number appears on screen while the page is empty proves
- * nothing") — every assertion below drives real content through the
- * textarea first and checks the counter tracks it.
+ * KAN-15 (BR-1.4) — the live counter itself. Round-1 review (item #12): this
+ * comment used to claim the block "deliberately never asserts against an
+ * empty textarea", which its own first test below contradicts — it does,
+ * on purpose, to pin the starting state a guest actually sees. What the
+ * suite genuinely avoids is stopping there: the story's own warning is
+ * against a test that "asserts some number appears on screen while the page
+ * is empty proves nothing" as its ONLY evidence the counter is live — every
+ * test after the first one drives real content through the textarea and
+ * checks the counter tracks it, which is what actually proves "live".
  */
 describe('EssayEntryForm — the live word counter (KAN-15)', () => {
   it('shows "0 words" before anything is typed', () => {
@@ -355,6 +397,53 @@ describe('EssayEntryForm — the two hard blocks (KAN-15, BR-1.7)', () => {
     expect(screen.queryByText(STRINGS.tooShortError)).toBeNull();
   });
 
+  // Round-1 review (should-fix #2): every other fixture in this file (and
+  // in word-count.test.ts, essay-submission.test.ts) is single-space
+  // tokens. The Test Lead proved that's load-bearing, not incidental —
+  // swapping this component's own countGermanWords call for a naive
+  // `content.split(' ').filter(Boolean).length` left all 150 tests across
+  // three suites green. Real pasted-essay content has paragraph breaks and
+  // sentences with two spaces after the full stop, both of which a naive
+  // split miscounts; this fixture is built the same mixed-whitespace way
+  // essay-submission.test.ts's server-side counterpart is, so the two sides
+  // are proven against the SAME kind of input, not just the same number.
+  function mixedWhitespaceWords(n: number): string {
+    const tokens = Array.from({ length: n }, (_, i) => `Wort${i}`);
+    return tokens
+      .map((token, i) => {
+        if (i === 0) return token;
+        if (i % 10 === 0) return `\n\n${token}`;
+        if (i % 7 === 0) return `\t${token}`;
+        if (i % 3 === 0) return `.  ${token}`;
+        return ` ${token}`;
+      })
+      .join('');
+  }
+
+  it('blocks 49 words built with newlines, tabs and double spaces (real pasted-essay whitespace) with the too-short message', () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    renderForm();
+
+    fillEssay(mixedWhitespaceWords(MIN_ESSAY_WORDS - 1));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.tooShortError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('allows submission at exactly 50 words built with the same mixed whitespace — the client counts it the same way the server does', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'x' }), { status: 201 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    renderForm();
+
+    fillEssay(mixedWhitespaceWords(MIN_ESSAY_WORDS));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(screen.queryByText(STRINGS.tooShortError)).toBeNull();
+  });
+
   it('allows submission at exactly 300 words — the hard ceiling itself is not blocked', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'x' }), { status: 201 }));
     vi.stubGlobal('fetch', fetchSpy);
@@ -365,6 +454,21 @@ describe('EssayEntryForm — the two hard blocks (KAN-15, BR-1.7)', () => {
 
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     expect(screen.queryByText(STRINGS.tooLongError)).toBeNull();
+  });
+
+  it('round-1 review: shows the too-long block live, with no submit attempt needed — unlike too-short, this one must not wait for touch, because the warning it replaces has already gone false', () => {
+    renderForm();
+
+    // 305, not the 301 boundary the next test pins — this is specifically
+    // the "already well past the ceiling, still typing" case the review
+    // named: at 305 words `showLengthWarning` (overRecommended) is already
+    // false, so the block message is the ONLY signal a guest still typing
+    // gets. Before this fix that message was `touched`-gated, so nothing
+    // was shown here at all until they pressed submit.
+    fillEssay(words(305));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.tooLongError);
+    expect(screen.queryByText(STRINGS.lengthWarning)).toBeNull();
   });
 
   it('blocks submission at 301 words with the too-long message, distinct from the too-short one, and never calls the API', () => {
