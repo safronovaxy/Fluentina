@@ -15,6 +15,19 @@
  * `src/app/api/essays/route.ts`'s own comment on why, and its test for
  * what a body that tries anyway is proven to do.
  *
+ * KAN-15: the `.superRefine` below is exactly that seam, filled. It does
+ * NOT replace `.max()` — the character cap stays exactly what it was, a
+ * blunt safety limit, not the product rule — it adds the real word-count
+ * bounds (50-300, BR-1.4 through BR-1.7) alongside it, reading off
+ * `countGermanWords`/`classifyEssayLength` from `lib/contracts/word-count`,
+ * the SAME functions `EssayEntryForm`'s live counter calls client-side. One
+ * shared implementation is the whole point: a guest the client told "you're
+ * fine" must never be rejected by a server running a different rule. Each
+ * failure carries a `reason` (`'tooShort'`/`'tooLong'`) in its issue
+ * `params`, not just a message string, so a caller (`route.ts`) can build a
+ * specific, non-generic response for each case rather than string-matching
+ * the message — see this schema's own test for both.
+ *
  * `MAX_ESSAY_CONTENT_CHARS` (the cap below, shared by this schema and the
  * client — see `EssayEntryForm`) and `MAX_REQUEST_BODY_BYTES` (the raw-body
  * transport guard `src/app/api/essays/route.ts` checks, against bytes,
@@ -35,6 +48,7 @@
  * exact German case.
  */
 import { z } from 'zod';
+import { countGermanWords, MIN_ESSAY_WORDS, MAX_ESSAY_WORDS } from './word-count';
 
 /** Character cap, shared by this schema and the client (`EssayEntryForm`'s `maxLength`). Comfortably above any real essay — 300 words is roughly 2,000 characters. */
 export const MAX_ESSAY_CONTENT_CHARS = 20_000;
@@ -67,7 +81,30 @@ export const essaySubmissionRequestSchema = z.object({
     .string()
     .trim()
     .min(1, 'essay content must not be empty')
-    .max(MAX_ESSAY_CONTENT_CHARS, `essay content exceeds the ${MAX_ESSAY_CONTENT_CHARS}-character safety cap`),
+    .max(MAX_ESSAY_CONTENT_CHARS, `essay content exceeds the ${MAX_ESSAY_CONTENT_CHARS}-character safety cap`)
+    // KAN-15 (BR-1.4 through BR-1.7) — the real product rule, independent of
+    // (and evaluated regardless of) the character-cap check above: zod runs
+    // every check in a ZodString's chain and collects all issues, it does
+    // not stop at the first failure, so this still runs — and still reports
+    // its own specific reason — even when `.max()` above has also failed.
+    // `reason` in `params` (not just the message text) is what lets a
+    // caller distinguish the two cases programmatically — see route.ts.
+    .superRefine((value, ctx) => {
+      const wordCount = countGermanWords(value);
+      if (wordCount < MIN_ESSAY_WORDS) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `essay is under the ${MIN_ESSAY_WORDS}-word minimum — too short to grade`,
+          params: { reason: 'tooShort' },
+        });
+      } else if (wordCount > MAX_ESSAY_WORDS) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `essay exceeds the ${MAX_ESSAY_WORDS}-word maximum`,
+          params: { reason: 'tooLong' },
+        });
+      }
+    }),
 });
 
 export type EssaySubmissionRequest = z.infer<typeof essaySubmissionRequestSchema>;

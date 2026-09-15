@@ -4,7 +4,11 @@ import 'server-only';
  * KAN-14 — persists a guest's essay under an already-resolved actor.
  * Storage only: grading is KAN-16's job, the recommended-length/word-count
  * UI and its server-side counterpart are KAN-15's, and this function does
- * not know either of those stories exists.
+ * not know either of those stories exists — KAN-15 landed its check in
+ * `essaySubmissionRequestSchema` (`lib/contracts/essay-submission.ts`), not
+ * here: `lib/domain` is `server-only`, and the same word-count rule has to
+ * run in the browser too, for the live counter — see that schema's own
+ * comment, and `lib/contracts/word-count.ts`.
  *
  * Round-1 review (blocking): this used to take the raw, possibly-absent
  * cookie value itself and resolve it (via `resolveGuestSession`), which
@@ -23,9 +27,8 @@ import 'server-only';
  * (lib/db/essays.ts), inside a transaction that locks the session row so a
  * write racing a concurrent conversion can never land unattached. Kept as a
  * named seam in `lib/domain` rather than the route calling `lib/db`
- * directly, both for the ADR-14 layering (adapters talk to domain, domain
- * talks to db) and because this is where KAN-15's real word-count check
- * lands once it exists.
+ * directly, for the ADR-14 layering (adapters talk to domain, domain talks
+ * to db).
  */
 import { createEssay } from '@/lib/db/essays';
 import type { GuestActor } from '@/lib/contracts/actor';
@@ -34,9 +37,10 @@ import type { Essay } from '@/lib/contracts/essay';
 /**
  * Persists `content` under `actor` — the id the CALLER already resolved
  * (and, if necessary, reissued a cookie for). `content` is taken as-is —
- * already validated (shape, and the KAN-14 safety cap; KAN-15's real
- * length rules land here eventually) by the adapter's own request-schema
- * check before this is ever called.
+ * already validated (shape, the KAN-14 character-cap safety limit, and
+ * KAN-15's real 50-300 word-count bounds) by the adapter's own
+ * request-schema check (`essaySubmissionRequestSchema`) before this is ever
+ * called.
  */
 export async function submitEssay(actor: GuestActor, content: string): Promise<Essay> {
   return createEssay(actor, content);

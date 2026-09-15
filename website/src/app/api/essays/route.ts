@@ -7,12 +7,14 @@ import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/g
 import { isCrossOriginRequest } from '@/lib/same-origin';
 
 /**
- * POST /api/essays — KAN-14, guest essay submission. Storage only: this
- * route persists the essay and reports its id back, nothing more. Grading
- * (KAN-16) and the recommended-length/word-count UI and its server-side
- * counterpart (KAN-15) are both separate stories that build on this
- * endpoint rather than being part of it — see `essaySubmissionRequestSchema`'s
- * own comment for the one seam KAN-15 extends here.
+ * POST /api/essays — KAN-14, guest essay submission; word-count enforcement
+ * added by KAN-15. Storage only: this route persists the essay and reports
+ * its id back, nothing more. Grading (KAN-16) is a separate story that
+ * builds on this endpoint rather than being part of it. The word-count
+ * bounds themselves (50-300 words, BR-1.4 through BR-1.7) live entirely in
+ * `essaySubmissionRequestSchema` (see that schema's own comment for the
+ * seam this filled) — this route's only KAN-15-specific job is turning a
+ * length-based rejection into its own distinguishable message, below.
  *
  * Never logs the request body — see the `never log essay text` rule this
  * route is built against; nothing in this file (or anything it calls)
@@ -206,6 +208,26 @@ export async function POST(request: NextRequest) {
 
   const parsed = essaySubmissionRequestSchema.safeParse(json);
   if (!parsed.success) {
+    // KAN-15 (BR-1.7): "a blocked guest is told why, clearly, and never by
+    // a generic error" — the two length-based failures (too short to
+    // grade; over the 300-word hard ceiling) get their own message, read
+    // off the schema's own `reason` (see essaySubmissionRequestSchema's
+    // `.superRefine`), not a string match against its message text. In the
+    // real guest flow this branch should never actually fire for a length
+    // reason — EssayEntryForm runs the identical check client-side and
+    // blocks the request before it's ever sent — so reaching it means the
+    // request bypassed the browser; this is that independent server-side
+    // enforcement, proven directly in route.test.ts with a request built
+    // the same way. Every other rejection (empty content, over the
+    // character safety cap) keeps the generic message below, unchanged
+    // from KAN-14 — this route doesn't have a distinct guest-facing case
+    // for either of those the way it does for the two length ones.
+    const lengthIssue = parsed.error.issues.find(
+      (issue) => issue.code === 'custom' && (issue.params?.reason === 'tooShort' || issue.params?.reason === 'tooLong'),
+    );
+    if (lengthIssue) {
+      return NextResponse.json({ error: lengthIssue.message }, { status: 400 });
+    }
     return NextResponse.json({ error: 'invalid essay submission' }, { status: 400 });
   }
 

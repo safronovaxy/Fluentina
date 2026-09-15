@@ -9,6 +9,7 @@ import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import type { GuestSessionId } from '@/lib/contracts/actor';
 import { MAX_ESSAY_CONTENT_CHARS, MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
+import { MIN_ESSAY_WORDS, MAX_ESSAY_WORDS } from '@/lib/contracts/word-count';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 
 function postEssay(
@@ -46,6 +47,45 @@ function postRaw(text: string, cookieValue?: string): NextRequest {
   });
 }
 
+/** `n` distinct, single-space-separated tokens — countGermanWords(wordsContent(n)) === n. */
+function wordsContent(n: number): string {
+  return Array.from({ length: n }, (_, i) => `Wort${i}`).join(' ');
+}
+
+/**
+ * KAN-15: most tests below use a short, human-readable sentence standing in
+ * for "some essay" — none of them are testing length, they're testing
+ * cookie/session/cross-origin/ownership behaviour, with essay text as
+ * incidental content. That content used to be a handful of words; the real
+ * 50-word minimum this story adds means a submission actually has to clear
+ * it to keep exercising the success path these tests exist to cover, rather
+ * than silently starting to hit the (also real, also correct) rejection
+ * path instead — which would have made several of them pass vacuously
+ * rather than fail loudly. `label` stays human-readable at the front (a
+ * failing assertion is still legible), padded with generic filler tokens
+ * comfortably clear of 50 and nowhere near 300.
+ */
+function validLengthContent(label: string): string {
+  return `${label} ${wordsContent(60)}`;
+}
+
+/**
+ * Builds a string of exactly `totalChars` characters, split into exactly
+ * `wordCount` whitespace-separated tokens — the same technique
+ * essay-submission.test.ts uses, needed here for the same reason: a single
+ * giant `'x'.repeat(N)` token is one "word" by countGermanWords' own rule,
+ * and would now also trip the <50-word block the character-cap tests below
+ * are not testing.
+ */
+function contentOfExactLength(totalChars: number, wordCount: number, fillerChar = 'a'): string {
+  const spaceChars = wordCount - 1;
+  const charsForWords = totalChars - spaceChars;
+  const baseLen = Math.floor(charsForWords / wordCount);
+  const remainder = charsForWords - baseLen * wordCount;
+  const tokens = Array.from({ length: wordCount }, (_, i) => fillerChar.repeat(baseLen + (i < remainder ? 1 : 0)));
+  return tokens.join(' ');
+}
+
 beforeAll(async () => {
   await resetDatabase();
 });
@@ -63,14 +103,15 @@ describe('POST /api/essays — well-formed cookie, row already exists (returning
     const sessionId = generateGuestSessionId();
     await createGuestSession({ kind: 'guest', sessionId });
 
-    const response = await POST(postEssay({ content: 'A perfectly ordinary essay submission.' }, sessionId));
+    const content = validLengthContent('A perfectly ordinary essay submission.');
+    const response = await POST(postEssay({ content }, sessionId));
     const body: { id: string } = await response.json();
 
     expect(response.status).toBe(201);
     expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
 
     const persisted = await getEssayById({ kind: 'guest', sessionId }, body.id);
-    expect(persisted?.content).toBe('A perfectly ordinary essay submission.');
+    expect(persisted?.content).toBe(content);
     expect(persisted?.sessionId).toBe(sessionId);
   });
 
@@ -78,7 +119,8 @@ describe('POST /api/essays — well-formed cookie, row already exists (returning
     const sessionId = generateGuestSessionId();
     await createGuestSession({ kind: 'guest', sessionId });
 
-    const response = await POST(postEssay({ content: 'Nothing here should reveal the session id.' }, sessionId));
+    const content = validLengthContent('Nothing here should reveal the session id.');
+    const response = await POST(postEssay({ content }, sessionId));
     const body: unknown = await response.json();
 
     expect(JSON.stringify(body)).not.toContain(sessionId);
@@ -90,7 +132,7 @@ describe('POST /api/essays — well-formed cookie, row already exists (returning
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const secretPhrase = 'a very particular sentence nobody should ever see logged';
+    const secretPhrase = validLengthContent('a very particular sentence nobody should ever see logged');
 
     try {
       await POST(postEssay({ content: secretPhrase }, sessionId));
@@ -112,7 +154,9 @@ describe('POST /api/essays — well-formed cookie, no row yet (bootstrap never l
   it('creates the session row under the presented id and stores the essay there', async () => {
     const mintedByMiddleware = generateGuestSessionId();
 
-    const response = await POST(postEssay({ content: 'Submitted before the bootstrap POST completed.' }, mintedByMiddleware));
+    const response = await POST(
+      postEssay({ content: validLengthContent('Submitted before the bootstrap POST completed.') }, mintedByMiddleware),
+    );
 
     expect(response.status).toBe(201);
     expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
@@ -212,7 +256,9 @@ describe('POST /api/essays — the presented cookie names an already-converted s
     const userId = await createTestUser();
     await convertGuestSessionToUser({ kind: 'guest', sessionId: staleSessionId }, userId);
 
-    const response = await POST(postEssay({ content: 'Written by a guest whose browser still has the old cookie.' }, staleSessionId));
+    const response = await POST(
+      postEssay({ content: validLengthContent('Written by a guest whose browser still has the old cookie.') }, staleSessionId),
+    );
     const body: { id: string } = await response.json();
 
     expect(response.status).toBe(201);
@@ -232,9 +278,19 @@ describe('POST /api/essays — the presented cookie names an already-converted s
     const userId = await createTestUser();
     await convertGuestSessionToUser({ kind: 'guest', sessionId: staleSessionId }, userId);
 
-    const response = await POST(postEssay({ content: 'Must never be readable through the stale session.' }, staleSessionId));
+    const response = await POST(
+      postEssay({ content: validLengthContent('Must never be readable through the stale session.') }, staleSessionId),
+    );
     const body: { id: string } = await response.json();
 
+    // KAN-15 round: this used to assert nothing about `response.status`, so
+    // a submission that started being rejected for an unrelated reason
+    // would still pass here — `body.id` would be `undefined`, and
+    // `getEssayById(..., undefined)` returns null trivially, the exact
+    // outcome asserted below, with nothing about the actual leak this test
+    // exists to close ever exercised. Asserting 201 first is what makes the
+    // assertion after it mean what it claims.
+    expect(response.status).toBe(201);
     const readableUnderStaleCookie = await getEssayById({ kind: 'guest', sessionId: staleSessionId }, body.id);
     expect(readableUnderStaleCookie).toBeNull();
   });
@@ -245,8 +301,11 @@ describe('POST /api/essays — the presented cookie names an already-converted s
     const userId = await createTestUser();
     await convertGuestSessionToUser({ kind: 'guest', sessionId: staleSessionId }, userId);
 
-    const response = await POST(postEssay({ content: 'Checking the reissued cookie attributes.' }, staleSessionId));
+    const response = await POST(
+      postEssay({ content: validLengthContent('Checking the reissued cookie attributes.') }, staleSessionId),
+    );
 
+    expect(response.status).toBe(201);
     const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
     expect(cookie?.httpOnly).toBe(true);
     expect(cookie?.secure).toBe(true);
@@ -337,7 +396,11 @@ describe('POST /api/essays — the raw-body transport cap (KAN-14 scope note: a 
   it('accepts content right at the character cap — the transport guard, sized well above it, never fires for a legitimately maximal submission', async () => {
     const sessionId = generateGuestSessionId();
     await createGuestSession({ kind: 'guest', sessionId });
-    const content = 'a'.repeat(MAX_ESSAY_CONTENT_CHARS);
+    // KAN-15: a single giant token is one "word" by countGermanWords' own
+    // rule, and would now also trip the unrelated <50-word block —
+    // contentOfExactLength keeps this pinned at the exact character
+    // boundary while landing word count safely inside the KAN-15 bounds.
+    const content = contentOfExactLength(MAX_ESSAY_CONTENT_CHARS, 250);
 
     const response = await POST(postEssay({ content }, sessionId));
 
@@ -351,8 +414,10 @@ describe('POST /api/essays — the raw-body transport cap (KAN-14 scope note: a 
     // — but 22,000 UTF-8 bytes, since an umlaut is 2 bytes. That byte count
     // used to exceed the single MAX_ESSAY_CONTENT_BYTES=20,000, read as
     // bytes by the old (pre-split) transport check, and 413 a submission
-    // the character cap itself would happily accept.
-    const content = 'ü'.repeat(11_000);
+    // the character cap itself would happily accept. Split across 200 words
+    // (see contentOfExactLength's own comment) so the KAN-15 word-count
+    // check this test isn't about doesn't also reject it.
+    const content = contentOfExactLength(11_000, 200, 'ü');
 
     const response = await POST(postEssay({ content }, sessionId));
 
@@ -532,7 +597,7 @@ describe('POST /api/essays — cross-origin requests', () => {
 
     const response = await POST(
       postEssay(
-        { content: 'Submitted against the real deployed request shape.' },
+        { content: validLengthContent('Submitted against the real deployed request shape.') },
         sessionId,
         { origin: 'https://fluentina.com', 'x-forwarded-host': 'fluentina.com' },
         'https://0.0.0.0:8080/api/essays',
@@ -562,7 +627,7 @@ describe('POST /api/essays — the session comes from the cookie, never the body
     const response = await POST(
       postEssay(
         {
-          content: 'Must be attributed to whoever the cookie says, never whoever the body claims.',
+          content: validLengthContent('Must be attributed to whoever the cookie says, never whoever the body claims.'),
           sessionId: otherSessionId,
           userId: 'attacker-chosen-user-id',
         },
@@ -593,5 +658,121 @@ describe('POST /api/essays — preflight surface', () => {
     const routeModule: Record<string, unknown> = await import('./route');
 
     expect(routeModule.OPTIONS).toBeUndefined();
+  });
+});
+
+/**
+ * KAN-15 (BR-1.4 through BR-1.7) — the word-count bounds, enforced
+ * server-side. Every test in this file already calls `POST()` directly with
+ * a hand-built `NextRequest` — no `EssayEntryForm`, no browser, nothing
+ * client-side runs at all — so this describe block is exactly the
+ * "independently revalidated and blocked server-side... a request that
+ * bypasses the browser entirely" proof the story asks for, not a special
+ * case: a request built this way could never have gone through the
+ * client-side check in EssayEntryForm.test.tsx, and the server rejects it
+ * anyway. Boundaries only (49/50, 300/301), plus the story's own two named
+ * verification cases (220 never blocked, 1000 blocked) — the full 49-301
+ * boundary matrix is already pinned once, at the schema level
+ * (essay-submission.test.ts), and repeating all eight points here would
+ * test zod's own dispatch, not this route.
+ */
+describe('POST /api/essays — the KAN-15 word-count bounds, enforced independently of the client', () => {
+
+  it('rejects 49 words with 400, a "too short" message, and creates no essay', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    const response = await POST(postEssay({ content: wordsContent(MIN_ESSAY_WORDS - 1) }, sessionId));
+    const body: { error: string } = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error.toLowerCase()).toContain('short');
+  });
+
+  it('accepts exactly 50 words — the minimum itself is not blocked', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    const response = await POST(postEssay({ content: wordsContent(MIN_ESSAY_WORDS) }, sessionId));
+
+    expect(response.status).toBe(201);
+  });
+
+  it('accepts exactly 300 words — the hard ceiling itself is not blocked', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    const response = await POST(postEssay({ content: wordsContent(MAX_ESSAY_WORDS) }, sessionId));
+
+    expect(response.status).toBe(201);
+  });
+
+  it('rejects 301 words with 400 and a "too long"/"maximum" message, distinct from the too-short message above', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    const response = await POST(postEssay({ content: wordsContent(MAX_ESSAY_WORDS + 1) }, sessionId));
+    const body: { error: string } = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error.toLowerCase()).toMatch(/maximum|too long|exceeds/);
+    expect(body.error.toLowerCase()).not.toContain('short');
+  });
+
+  it('a 220-word essay — the story\'s own "never blocked" verification case — is accepted end to end and persisted with its full content, bypassing any client entirely', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const content = wordsContent(220);
+
+    const response = await POST(postEssay({ content }, sessionId));
+    const body: { id: string } = await response.json();
+
+    expect(response.status).toBe(201);
+    const persisted = await getEssayById({ kind: 'guest', sessionId }, body.id);
+    expect(persisted?.content).toBe(content);
+  });
+
+  it('a 1000-word essay — the story\'s own "blocked" verification case — is rejected with 400 and creates no essay, even though it is comfortably under both the character cap and the transport cap', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const content = wordsContent(1000);
+    expect(content.length).toBeLessThan(MAX_ESSAY_CONTENT_CHARS);
+
+    const response = await POST(postEssay({ content }, sessionId));
+
+    expect(response.status).toBe(400);
+  });
+
+  it('creates no guest session row as a side effect of a length-rejected submission, the same guarantee already proven for an empty one', async () => {
+    const sessionId = generateGuestSessionId(); // never persisted
+
+    await POST(postEssay({ content: wordsContent(1000) }, sessionId));
+
+    const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
+    expect(persisted).toBeNull();
+  });
+
+  it('never writes the rejected essay text to the console, the same "never log essay text" guarantee proven for a successful submission', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const secretToken = 'EinBesonderesWortDasNieGeloggtWerdenDarf';
+    const content = `${secretToken} ${wordsContent(999)}`;
+
+    try {
+      await POST(postEssay({ content }, sessionId));
+
+      for (const spy of [logSpy, errorSpy, warnSpy]) {
+        for (const call of spy.mock.calls) {
+          expect(JSON.stringify(call)).not.toContain(secretToken);
+        }
+      }
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 });
