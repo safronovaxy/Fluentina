@@ -5,28 +5,7 @@ import {
   MAX_REQUEST_BODY_BYTES,
 } from './essay-submission';
 import { MIN_ESSAY_WORDS, MAX_ESSAY_WORDS, RECOMMENDED_MIN_WORDS, RECOMMENDED_MAX_WORDS } from './word-count';
-
-/**
- * Builds a string of exactly `totalChars` characters, split into exactly
- * `wordCount` whitespace-separated tokens.
- *
- * KAN-15: the character-cap tests below used to build content with a
- * single giant `'a'.repeat(N)` token — one "word" by `countGermanWords`'s
- * own rule. Now that the schema also enforces the 50-300 word-count bound
- * in the same pass (see essaySubmissionRequestSchema's own comment), that
- * single-token construction trips the NEW <50-word block too, which is not
- * what these tests exist to pin. This builds content that hits an exact
- * character length while keeping word count wherever the caller wants it,
- * so the character-cap boundary can still be tested in isolation.
- */
-function contentOfExactLength(totalChars: number, wordCount: number, fillerChar = 'a'): string {
-  const spaceChars = wordCount - 1;
-  const charsForWords = totalChars - spaceChars;
-  const baseLen = Math.floor(charsForWords / wordCount);
-  const remainder = charsForWords - baseLen * wordCount;
-  const tokens = Array.from({ length: wordCount }, (_, i) => fillerChar.repeat(baseLen + (i < remainder ? 1 : 0)));
-  return tokens.join(' ');
-}
+import { contentOfExactLength, wordsContent, mixedWhitespaceContent } from '@/test/essay-content-fixtures';
 
 // Round-1 review (should-fix): there was no contract test file at all before
 // this — the boundary was asserted only at the route level
@@ -44,10 +23,35 @@ describe('essaySubmissionRequestSchema — the character cap', () => {
     expect(essaySubmissionRequestSchema.safeParse({ content }).success).toBe(true);
   });
 
-  it('rejects content one character over the cap', () => {
-    const content = 'a'.repeat(MAX_ESSAY_CONTENT_CHARS + 1);
+  // Round-2 review (Test Lead, blocking): this used to build content with a
+  // single giant `'a'.repeat(N)` token — one "word" by `countGermanWords`'s
+  // own rule, so it was ALSO under the 50-word floor. Raising the character
+  // cap a hundredfold (or deleting `.max()` entirely) left this test green
+  // regardless, because the word-count floor rejected the fixture anyway —
+  // it never actually exercised the character cap. Fixed the same way the
+  // accept-side test above is: `contentOfExactLength` pins the character
+  // length at exactly one over the cap while keeping word count safely
+  // inside the KAN-15 bounds, so the ONLY thing this fixture fails is the
+  // character cap — and asserts the specific `too_big` issue on `content`
+  // fired, not merely that parsing failed for some reason or other, so a
+  // widened or deleted cap is caught even if something else in the chain
+  // still happened to reject this exact content.
+  it('rejects content one character over the cap, specifically on the character-cap issue — not merely because parsing failed for some other reason', () => {
+    const content = contentOfExactLength(MAX_ESSAY_CONTENT_CHARS + 1, 250);
 
-    expect(essaySubmissionRequestSchema.safeParse({ content }).success).toBe(false);
+    const result = essaySubmissionRequestSchema.safeParse({ content });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const tooBigIssue = result.error.issues.find((issue) => issue.code === 'too_big' && issue.path[0] === 'content');
+      expect(tooBigIssue).toBeDefined();
+      // And, distinctly, no word-count-based rejection fired — 250 words is
+      // safely inside the 50-300 bounds, so this proves the failure is the
+      // character cap alone, isolated from the guard this file's other
+      // describe block exists to pin.
+      const lengthIssue = result.error.issues.find((issue) => issue.code === 'custom');
+      expect(lengthIssue).toBeUndefined();
+    }
   });
 
   it('counts UTF-16 code units, not UTF-8 bytes — 11,000 German umlauts (22,000 bytes) is comfortably under the 20,000-character cap', () => {
@@ -93,10 +97,6 @@ describe('MAX_ESSAY_CONTENT_CHARS and MAX_REQUEST_BODY_BYTES — two different l
  * instruction — 49/50/51, 150, 200/201, 300/301 — not the middles.
  */
 describe('essaySubmissionRequestSchema — the KAN-15 word-count bounds', () => {
-  function wordsContent(n: number): string {
-    return Array.from({ length: n }, (_, i) => `Wort${i}`).join(' ');
-  }
-
   it('rejects 49 words — one under the 50-word minimum — as too short to grade', () => {
     const result = essaySubmissionRequestSchema.safeParse({ content: wordsContent(MIN_ESSAY_WORDS - 1) });
 
@@ -174,20 +174,9 @@ describe('essaySubmissionRequestSchema — the KAN-15 word-count bounds', () => 
   // word-processor text with two spaces after a full stop — content a
   // naive split miscounts. This fixture is deliberately NOT single-space:
   // paragraph breaks (double newline) every ten words, a tab, and a
-  // double space after a full stop, mixed through the token list.
-  function mixedWhitespaceContent(n: number): string {
-    const tokens = Array.from({ length: n }, (_, i) => `Wort${i}`);
-    return tokens
-      .map((token, i) => {
-        if (i === 0) return token;
-        if (i % 10 === 0) return `\n\n${token}`;
-        if (i % 7 === 0) return `\t${token}`;
-        if (i % 3 === 0) return `.  ${token}`;
-        return ` ${token}`;
-      })
-      .join('');
-  }
-
+  // double space after a full stop, mixed through the token list — see
+  // `@/test/essay-content-fixtures`'s own comment for why this builder lives
+  // there now, shared verbatim with route.test.ts and EssayEntryForm.test.tsx.
   it('accepts 50 words separated by newlines, tabs and double spaces after a full stop — not the single-space fixture every other test in this suite uses', () => {
     const content = mixedWhitespaceContent(MIN_ESSAY_WORDS);
     expect(content).not.toMatch(/^\S+( \S+)*$/); // sanity: genuinely not single-space-only

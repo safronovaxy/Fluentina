@@ -6,6 +6,7 @@ import enMessages from '@/messages/en.json';
 import { EssayEntryForm, type EssayEntryFormStrings } from './EssayEntryForm';
 import { MAX_ESSAY_CONTENT_CHARS } from '@/lib/contracts/essay-submission';
 import { MIN_ESSAY_WORDS, RECOMMENDED_MIN_WORDS, RECOMMENDED_MAX_WORDS, MAX_ESSAY_WORDS } from '@/lib/contracts/word-count';
+import { wordsContent as words, mixedWhitespaceContent as mixedWhitespaceWords } from '@/test/essay-content-fixtures';
 
 const STRINGS: EssayEntryFormStrings = {
   textareaLabel: 'Your essay',
@@ -21,11 +22,6 @@ const STRINGS: EssayEntryFormStrings = {
   successBody: "Your essay has been submitted. We're working on the next steps of the guest flow.",
   errorGeneric: 'Something went wrong submitting your essay. Please try again.',
 };
-
-/** `n` distinct, single-space-separated tokens — countGermanWords(words(n)) === n. */
-function words(n: number): string {
-  return Array.from({ length: n }, (_, i) => `Wort${i}`).join(' ');
-}
 
 function renderForm() {
   // A fresh QueryClient per render — react-query caches mutations/queries
@@ -107,6 +103,21 @@ describe('EssayEntryForm — text entry (KAN-14 AC: "accepts typed or pasted tex
 });
 
 describe('EssayEntryForm — submitting without content', () => {
+  // Round-2 review (Test Lead, blocking): the required-field message's
+  // `touched` gate (see EssayEntryForm.tsx's own comment on why an empty
+  // box — the state every guest starts in — must not shout at them before
+  // they've done anything) was asserted only in a comment, never in a test.
+  // Removing `touched &&` from `showRequiredError`'s definition survived
+  // every other test in this file, because none of them render the form and
+  // then check for ABSENCE of this message before any interaction — this is
+  // that missing case, the same shape as its too-short sibling below
+  // ("does not show the too-short error before a submit attempt").
+  it('does not show the required-field error before any submit attempt — the empty box every guest starts in must not be shown it unprompted', () => {
+    renderForm();
+
+    expect(screen.queryByText(STRINGS.requiredError)).toBeNull();
+  });
+
   it('shows the required-field error and never calls the API', () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
@@ -406,20 +417,10 @@ describe('EssayEntryForm — the two hard blocks (KAN-15, BR-1.7)', () => {
   // sentences with two spaces after the full stop, both of which a naive
   // split miscounts; this fixture is built the same mixed-whitespace way
   // essay-submission.test.ts's server-side counterpart is, so the two sides
-  // are proven against the SAME kind of input, not just the same number.
-  function mixedWhitespaceWords(n: number): string {
-    const tokens = Array.from({ length: n }, (_, i) => `Wort${i}`);
-    return tokens
-      .map((token, i) => {
-        if (i === 0) return token;
-        if (i % 10 === 0) return `\n\n${token}`;
-        if (i % 7 === 0) return `\t${token}`;
-        if (i % 3 === 0) return `.  ${token}`;
-        return ` ${token}`;
-      })
-      .join('');
-  }
-
+  // are proven against the SAME kind of input, not just the same number —
+  // see `@/test/essay-content-fixtures`'s own comment for why this builder
+  // (`mixedWhitespaceContent` there) lives there now, shared verbatim with
+  // essay-submission.test.ts.
   it('blocks 49 words built with newlines, tabs and double spaces (real pasted-essay whitespace) with the too-short message', () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);

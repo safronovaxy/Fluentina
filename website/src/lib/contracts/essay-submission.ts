@@ -50,6 +50,33 @@
 import { z } from 'zod';
 import { countGermanWords, classifyEssayLength, isEssayLengthBlocked, MIN_ESSAY_WORDS, MAX_ESSAY_WORDS } from './word-count';
 
+/**
+ * The two length-based rejection reasons a caller can distinguish
+ * programmatically — see the `.superRefine` below, and this schema's own
+ * top-of-file comment on why `reason` travels in `params`, not just prose.
+ *
+ * Round-2 review (Architect, KAN-15): `route.ts` used to read this reason
+ * back off a zod issue with `lengthIssue.params?.reason as 'tooShort' |
+ * 'tooLong' | undefined` — a cast, sound only because of a predicate a few
+ * lines above it happening to check the same two strings. A third reason
+ * (grading, rate limiting) added to that predicate and not the cast would
+ * compile cleanly and put a value on the wire neither the route's own type
+ * nor `EssayEntryForm`'s narrowing recognised — silently dropped to the
+ * generic error client-side, the exact failure round-1 review spent a round
+ * removing (see EssayEntryForm.tsx's own history). Exporting the list here,
+ * once, and narrowing against it (not casting) in both the route and the
+ * client — `isEssayLengthRejectionReason` below — means a reason this array
+ * doesn't know about can't compile as one of the two known cases on either
+ * side of the wire; it has to be added here first.
+ */
+export const ESSAY_LENGTH_REJECTION_REASONS = ['tooShort', 'tooLong'] as const;
+export type EssayLengthRejectionReason = (typeof ESSAY_LENGTH_REJECTION_REASONS)[number];
+
+/** Narrows `value` to `EssayLengthRejectionReason` — the one place that check happens, shared by the route and the client (see the type's own comment). */
+export function isEssayLengthRejectionReason(value: unknown): value is EssayLengthRejectionReason {
+  return (ESSAY_LENGTH_REJECTION_REASONS as readonly unknown[]).includes(value);
+}
+
 /** Character cap, shared by this schema and the client (`EssayEntryForm`'s `maxLength`). Comfortably above any real essay — 300 words is roughly 2,000 characters. */
 export const MAX_ESSAY_CONTENT_CHARS = 20_000;
 
@@ -107,13 +134,13 @@ export const essaySubmissionRequestSchema = z.object({
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `essay is under the ${MIN_ESSAY_WORDS}-word minimum — too short to grade`,
-          params: { reason: 'tooShort' },
+          params: { reason: 'tooShort' satisfies EssayLengthRejectionReason },
         });
       } else {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `essay exceeds the ${MAX_ESSAY_WORDS}-word maximum`,
-          params: { reason: 'tooLong' },
+          params: { reason: 'tooLong' satisfies EssayLengthRejectionReason },
         });
       }
     }),

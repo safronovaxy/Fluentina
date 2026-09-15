@@ -41,7 +41,12 @@ import { useMutation } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { WordCountLabel } from '@/components/guest/chrome/WordCountLabel';
-import { essaySubmissionRequestSchema, MAX_ESSAY_CONTENT_CHARS } from '@/lib/contracts/essay-submission';
+import {
+  essaySubmissionRequestSchema,
+  MAX_ESSAY_CONTENT_CHARS,
+  isEssayLengthRejectionReason,
+  type EssayLengthRejectionReason,
+} from '@/lib/contracts/essay-submission';
 import { countGermanWords, classifyEssayLength } from '@/lib/contracts/word-count';
 
 export interface EssayEntryFormStrings {
@@ -81,9 +86,17 @@ interface SubmitEssayResponse {
  * is still never surfaced, matching the rule this route is built against
  * (nothing server-side validation rejected is guaranteed safe to echo
  * verbatim).
+ *
+ * Round-2 review (Architect, blocking): `EssayLengthRejectionReason` used to
+ * be redeclared locally here (`'tooShort' | 'tooLong'`), a second copy of
+ * the exact type `route.ts` also redeclared, agreeing only because both
+ * were hand-typed to the same two strings today — a third reason added to
+ * one and not the other would compile cleanly on both sides and desync
+ * silently. Both now import the same type (and the same
+ * `isEssayLengthRejectionReason` narrowing function) from
+ * `lib/contracts/essay-submission` — the layer this pair of literals always
+ * actually belonged to, being the schema's own `reason` values.
  */
-type EssayLengthRejectionReason = 'tooShort' | 'tooLong';
-
 class EssaySubmissionError extends Error {
   readonly reason: EssayLengthRejectionReason | undefined;
 
@@ -109,7 +122,7 @@ async function postEssay(content: string): Promise<SubmitEssayResponse> {
     try {
       const body: unknown = await response.json();
       const candidate = (body as { reason?: unknown } | null)?.reason;
-      if (candidate === 'tooShort' || candidate === 'tooLong') reason = candidate;
+      if (isEssayLengthRejectionReason(candidate)) reason = candidate;
     } catch {
       // Not JSON, or no body at all — reason stays undefined and the
       // generic error message is shown, same as before this reason-mapping
@@ -142,9 +155,20 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
   // -> word count — see essaySubmissionRequestSchema): an empty box or a
   // scripted over-cap paste keeps the existing KAN-14 message, and only a
   // content that clears BOTH of those but still fails on word count gets
-  // one of the two new KAN-15 messages. `isValid` gates all three — if the
-  // schema and this component's own reasons ever disagreed, none of the
-  // three would show rather than showing a wrong one.
+  // one of the two new KAN-15 messages.
+  //
+  // Round-2 review (Architect, blocking): this comment used to claim
+  // "`isValid` gates all three" — it gates two. `showRequiredError` and
+  // `showTooShortError` both check `!isValid` explicitly; `showTooLongError`
+  // (below) does not, and was never meant to: it needs no gate of its own
+  // because `lengthStatus === 'tooLong'` and `!isValid` are the SAME
+  // computation once content is non-empty and under the character cap —
+  // both `classifyEssayLength` here and `essaySubmissionRequestSchema`'s
+  // `.superRefine` server-side read off `word-count.ts`'s one shared
+  // boundary table, so a `tooLong` classification and a failed schema parse
+  // can never disagree for that content. Checking `!isValid` there too would
+  // be a second way of asking the same question, not a safety property this
+  // component would otherwise lack.
   //
   // Round-1 review (should-fix): showTooLongError used to be `touched`-gated
   // the same way the other two are. That meant the ONLY signal a guest

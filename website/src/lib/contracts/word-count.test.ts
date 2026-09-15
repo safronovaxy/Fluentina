@@ -8,11 +8,7 @@ import {
   RECOMMENDED_MAX_WORDS,
   MAX_ESSAY_WORDS,
 } from './word-count';
-
-/** Builds a string of exactly `n` distinct, single-space-separated words. */
-function words(n: number): string {
-  return Array.from({ length: n }, (_, i) => `Wort${i}`).join(' ');
-}
+import { wordsContent as words } from '@/test/essay-content-fixtures';
 
 describe('countGermanWords — the counting rule itself (KAN-15)', () => {
   it('counts an empty string as zero words', () => {
@@ -89,6 +85,22 @@ describe('classifyEssayLength — the boundaries themselves, not the middles (KA
 
   it('200 words is still recommended — the recommended range ends here, inclusive', () => {
     expect(classifyEssayLength(RECOMMENDED_MAX_WORDS)).toBe('recommended');
+  });
+
+  // Round-2 review (Architect, blocking): every boundary test in this file
+  // reads `RECOMMENDED_MAX_WORDS` back off the constant it's pinning, so
+  // code and test move together — changing the constant to 199 survived all
+  // 257 unit tests and all 366 browser tests, because nothing ever compared
+  // it against the actual number the guidance banner's own catalogue text
+  // ("150–200 words") names in both languages (see src/messages/en.json and
+  // de.json's own `recommendedRangeGuidance`). A guest at exactly 200 words
+  // would be told they're over the recommended range while the banner says
+  // 200 is the top of it. This is the one literal pin that was missing —
+  // MIN_ESSAY_WORDS and MAX_ESSAY_WORDS (the two hard, enforced bounds) and
+  // RECOMMENDED_MIN_WORDS are all exercised the same indirect way above, but
+  // genuinely die under the equivalent mutation, so only this edge needed one.
+  it('RECOMMENDED_MAX_WORDS is literally 200, not merely whatever this constant happens to be — the guidance banner\'s own text is hardcoded to that number in both locales', () => {
+    expect(RECOMMENDED_MAX_WORDS).toBe(200);
   });
 
   it('201 words is overRecommended — one over the recommended range, warning zone starts', () => {

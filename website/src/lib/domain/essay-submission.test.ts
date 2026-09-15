@@ -56,6 +56,14 @@ describe('submitEssay', () => {
     // logic of its own.
     const neverPersistedActor: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
 
-    await expect(submitEssay(neverPersistedActor, 'Should never be persisted.')).rejects.toThrow();
+    // Round-2 review sweep: a bare `.rejects.toThrow()` (no argument) passes
+    // for ANY thrown error, so it wouldn't distinguish this specific FK
+    // guard from, say, a connection error or an unrelated bug in this
+    // codepath — matching the message `createEssay` actually throws (see
+    // `lib/db/essays.ts`'s own equivalent test, `essays.test.ts`, which
+    // already pins this same string) is what proves THIS guard fired.
+    await expect(submitEssay(neverPersistedActor, 'Should never be persisted.')).rejects.toThrow(
+      /no guest session found/,
+    );
   });
 });

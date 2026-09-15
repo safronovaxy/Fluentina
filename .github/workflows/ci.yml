@@ -192,7 +192,10 @@ jobs:
 
       # Named for what it actually runs: the marketing regression suite, plus
       # — as of KAN-14 — the first funnel spec (tests/essay-entry.spec.ts,
-      # guest essay entry end to end; see CONTRIBUTING.md's own note on this).
+      # guest essay entry end to end; see CONTRIBUTING.md's own note on this)
+      # — and, as of KAN-15, the second: tests/word-count.spec.ts, the live
+      # word-count guidance/warning/block states end to end. Neither is
+      # tagged @cms, so both run here alongside everything else.
       # MOCK_GRADING_PROVIDER has no consumer in the repo today.
       #
       # @cms specs are excluded: they need a reachable Strapi with published

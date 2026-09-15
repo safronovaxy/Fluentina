@@ -14,6 +14,7 @@ import type { GuestSessionId } from '@/lib/contracts/actor';
 import { MAX_ESSAY_CONTENT_CHARS, MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
 import { MIN_ESSAY_WORDS, MAX_ESSAY_WORDS } from '@/lib/contracts/word-count';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import { wordsContent, validLengthContent, contentOfExactLength } from '@/test/essay-content-fixtures';
 
 /**
  * Round-1 review (should-fix #9): two tests below CLAIM "creates no essay"
@@ -68,44 +69,16 @@ function postRaw(text: string, cookieValue?: string): NextRequest {
   });
 }
 
-/** `n` distinct, single-space-separated tokens — countGermanWords(wordsContent(n)) === n. */
-function wordsContent(n: number): string {
-  return Array.from({ length: n }, (_, i) => `Wort${i}`).join(' ');
-}
-
-/**
- * KAN-15: most tests below use a short, human-readable sentence standing in
- * for "some essay" — none of them are testing length, they're testing
- * cookie/session/cross-origin/ownership behaviour, with essay text as
- * incidental content. That content used to be a handful of words; the real
- * 50-word minimum this story adds means a submission actually has to clear
- * it to keep exercising the success path these tests exist to cover, rather
- * than silently starting to hit the (also real, also correct) rejection
- * path instead — which would have made several of them pass vacuously
- * rather than fail loudly. `label` stays human-readable at the front (a
- * failing assertion is still legible), padded with generic filler tokens
- * comfortably clear of 50 and nowhere near 300.
- */
-function validLengthContent(label: string): string {
-  return `${label} ${wordsContent(60)}`;
-}
-
-/**
- * Builds a string of exactly `totalChars` characters, split into exactly
- * `wordCount` whitespace-separated tokens — the same technique
- * essay-submission.test.ts uses, needed here for the same reason: a single
- * giant `'x'.repeat(N)` token is one "word" by countGermanWords' own rule,
- * and would now also trip the <50-word block the character-cap tests below
- * are not testing.
- */
-function contentOfExactLength(totalChars: number, wordCount: number, fillerChar = 'a'): string {
-  const spaceChars = wordCount - 1;
-  const charsForWords = totalChars - spaceChars;
-  const baseLen = Math.floor(charsForWords / wordCount);
-  const remainder = charsForWords - baseLen * wordCount;
-  const tokens = Array.from({ length: wordCount }, (_, i) => fillerChar.repeat(baseLen + (i < remainder ? 1 : 0)));
-  return tokens.join(' ');
-}
+// KAN-15: most tests below use `validLengthContent`, a short, human-readable
+// sentence standing in for "some essay", padded to clear the 50-word floor —
+// none of them are testing length, they're testing cookie/session/
+// cross-origin/ownership behaviour, with essay text as incidental content.
+// `wordsContent` and `contentOfExactLength` build content that pins an
+// EXACT word count or character length instead, for the tests that are
+// testing length (or need to hold it fixed while a different axis is the
+// one under test) — see `@/test/essay-content-fixtures`'s own comment for
+// why all three now live there, shared with essay-submission.test.ts and
+// EssayEntryForm.test.tsx, rather than redefined per file.
 
 beforeAll(async () => {
   await resetDatabase();
@@ -361,25 +334,45 @@ describe('POST /api/essays — the presented cookie names an already-converted s
 });
 
 describe('POST /api/essays — invalid submissions', () => {
-  it('rejects empty content with 400 and creates no essay', async () => {
+  // Round-2 review (Test Lead, blocking): this test's own title used to
+  // claim "creates no essay" while asserting only `response.status` — a
+  // status-only assertion would not notice a route that inserted the row
+  // before failing on the way back out. It also predates KAN-15's 50-word
+  // floor: an empty string is 0 words, which the floor rejects on its own
+  // terms (reason `tooShort`) — the schema's separate `.min(1)` "must not be
+  // empty" issue still fires too (zod collects every issue in the chain, not
+  // just the first), but `route.ts`'s own lookup prefers the length-specific
+  // custom issue when one exists (see its own comment), so the response this
+  // test actually observes is indistinguishable from any other too-short
+  // essay's. Asserting `reason: 'tooShort'` (not just a bare 400) and the
+  // persisted-row count (via `countEssaysForSession`, the helper round-1
+  // review's should-fix #9 added for exactly this) is what makes this test's
+  // own claim true, and what a mutant weakening either guard would now fail.
+  it('rejects empty content with 400, reason "tooShort", and creates no essay', async () => {
     const sessionId = generateGuestSessionId();
     await createGuestSession({ kind: 'guest', sessionId });
 
     const response = await POST(postEssay({ content: '' }, sessionId));
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
+    expect(body.reason).toBe('tooShort');
+    expect(await countEssaysForSession(sessionId)).toBe(0);
   });
 
-  it('rejects whitespace-only content with 400 — trimmed, not merely non-empty', async () => {
+  it('rejects whitespace-only content with 400, reason "tooShort", and creates no essay — trimmed, not merely non-empty', async () => {
     const sessionId = generateGuestSessionId();
     await createGuestSession({ kind: 'guest', sessionId });
 
     const response = await POST(postEssay({ content: '     \n\t  ' }, sessionId));
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
+    expect(body.reason).toBe('tooShort');
+    expect(await countEssaysForSession(sessionId)).toBe(0);
   });
 
-  it('rejects a body with no content field at all', async () => {
+  it('rejects a body with no content field at all, with the generic message — never a length-specific reason for a field that was never a string to count words in', async () => {
     // Round-2 review: the cookie check now runs before the body is ever
     // read (see route.ts's own comment), so this needs a valid cookie —
     // without one, this would still assert 400, but for "missing cookie",
@@ -388,11 +381,24 @@ describe('POST /api/essays — invalid submissions', () => {
     await createGuestSession({ kind: 'guest', sessionId });
 
     const response = await POST(postEssay({}, sessionId));
+    const body: { error: string; reason?: string } = await response.json();
 
+    // Round-2 review (Test Lead, blocking): a status-only assertion here
+    // cannot tell "content is required" apart from the 400 the 50-word
+    // floor also returns. `content` missing entirely fails zod's base
+    // `string()` type check (an `invalid_type` issue), which short-circuits
+    // the rest of the chain — `.superRefine` never runs, so no `tooShort`/
+    // `tooLong` custom issue exists for route.ts to find, and this falls
+    // through to the one generic message left in that branch. Asserting
+    // that message (and the absence of `reason`) is what proves this 400
+    // came from the missing field, not a coincidental length rejection.
     expect(response.status).toBe(400);
+    expect(body.error).toBe('invalid essay submission');
+    expect(body.reason).toBeUndefined();
+    expect(await countEssaysForSession(sessionId)).toBe(0);
   });
 
-  it('rejects malformed JSON with 400, not a 500', async () => {
+  it('rejects malformed JSON with 400, not a 500, and with the dedicated "invalid JSON body" message', async () => {
     // Round-2 review: same reason as the test above — a valid cookie, so
     // this actually reaches JSON.parse and proves THAT path returns 400
     // rather than a valid cookie being incidental to the assertion.
@@ -400,8 +406,16 @@ describe('POST /api/essays — invalid submissions', () => {
     await createGuestSession({ kind: 'guest', sessionId });
 
     const response = await POST(postRaw('{ this is not valid json', sessionId));
+    const body: { error: string } = await response.json();
 
+    // Round-2 review (Test Lead, blocking): a bare 400 here is also what the
+    // missing-cookie guard, the schema-validation branch and (with a small
+    // enough body) nothing else in this file returns — asserting the exact
+    // message this branch alone produces is what proves JSON.parse's own
+    // catch fired, not some other 400 path this malformed-but-small body
+    // happened to also satisfy.
     expect(response.status).toBe(400);
+    expect(body.error).toBe('invalid JSON body');
   });
 
   it('does not create a guest session row as a side effect of a rejected submission', async () => {
@@ -471,10 +485,21 @@ describe('POST /api/essays — the raw-body transport cap (KAN-14 scope note: a 
 });
 
 describe('POST /api/essays — the Content-Length pre-check (round-2 review: nothing here ever set this header before, so this branch was dead — a mutant deleting the whole block, or lowering its threshold to 1,000, left every test in this file green)', () => {
+  // Round-2 review sweep: this title's own claim ("this small, otherwise-
+  // valid body would 201, not 413") used to be false — 'A short essay.' is
+  // three words, under KAN-15's 50-word floor, so with this header check
+  // removed the body would still 400 (too short), never 201, and the title
+  // asserted an outcome this fixture couldn't actually produce.
+  // `validLengthContent` clears the floor, so the claim in the title is now
+  // literally what this test would observe if the guard it names were gone.
   it('rejects a request whose Content-Length header claims to exceed the transport cap, even though the actual body is small — proves the header check fires and rejects on its own, not merely restating what the byte-length check below it would catch anyway: without this check, this small, otherwise-valid body would 201, not 413', async () => {
     const sessionId = generateGuestSessionId(); // never persisted — proves nothing downstream ran
     const response = await POST(
-      postEssay({ content: 'A short essay.' }, sessionId, { 'content-length': String(MAX_REQUEST_BODY_BYTES + 1) }),
+      postEssay(
+        { content: validLengthContent('A short essay.') },
+        sessionId,
+        { 'content-length': String(MAX_REQUEST_BODY_BYTES + 1) },
+      ),
     );
 
     expect(response.status).toBe(413);
@@ -587,12 +612,18 @@ describe('POST /api/essays — no body stream at all', () => {
     });
 
     const response = await POST(request);
+    const body: { error: string } = await response.json();
 
     // Empty text fails JSON.parse the same way a truly empty string body
     // would ('' is not valid JSON), so this lands on the "invalid JSON
     // body" 400 — the same status request.text() would have produced for
-    // this exact shape.
+    // this exact shape. Asserting the exact message (round-2 review,
+    // Test Lead, blocking) is what proves it's THIS branch, not merely any
+    // 400 — a mutant that made the no-reader early return `{ ok: false }`
+    // (readBodyWithinLimit's own comment names this exact mutant) would
+    // still 400 here, for the transport-cap message instead.
     expect(response.status).toBe(400);
+    expect(body.error).toBe('invalid JSON body');
   });
 });
 
@@ -603,6 +634,18 @@ describe('POST /api/essays — cross-origin requests', () => {
   // `isCrossOriginRequest` in `lib/same-origin.test.ts`, so this file only
   // needs to prove the guard is actually wired into THIS route, ahead of
   // session resolution.
+  //
+  // Round-2 review (Test Lead, blocking): this fixture used to be a
+  // four-word body ('Should never be stored.') — under the KAN-15 50-word
+  // floor on top of being cross-origin. Disabling the cross-origin guard
+  // entirely (`isCrossOriginRequest` always returning `false`) left this
+  // test, and all 257 others, green: the schema's own word-count check
+  // ALSO rejects a four-word body, and runs before session resolution
+  // either way, so the "left uncreated" assertion below held for the wrong
+  // reason. `validLengthContent` clears the floor, so a 400 here can only
+  // be the cross-origin guard — and asserting the exact message (round-2
+  // review) is what tells that guard's 400 apart from the word-count one,
+  // now that the fixture alone no longer does.
   it('rejects a mismatched Origin header with 400 before ever reaching session resolution — a cookie naming no existing session is left uncreated, an existing one untouched', async () => {
     // A fresh, never-persisted id: if the origin check actually
     // short-circuits before resolveGuestSession runs, nothing creates this
@@ -613,10 +656,16 @@ describe('POST /api/essays — cross-origin requests', () => {
     const neverPersistedSessionId = generateGuestSessionId();
 
     const response = await POST(
-      postEssay({ content: 'Should never be stored.' }, neverPersistedSessionId, { origin: 'https://evil.example' }),
+      postEssay(
+        { content: validLengthContent('Should never be stored.') },
+        neverPersistedSessionId,
+        { origin: 'https://evil.example' },
+      ),
     );
+    const body: { error: string } = await response.json();
 
     expect(response.status).toBe(400);
+    expect(body.error).toBe('cross-origin request rejected');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId: neverPersistedSessionId }, neverPersistedSessionId);
     expect(persisted).toBeNull();
   });
@@ -792,8 +841,10 @@ describe('POST /api/essays — the KAN-15 word-count bounds, enforced independen
     expect(content.length).toBeLessThan(MAX_ESSAY_CONTENT_CHARS);
 
     const response = await POST(postEssay({ content }, sessionId));
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
+    expect(body.reason).toBe('tooLong');
     expect(await countEssaysForSession(sessionId)).toBe(0);
   });
 

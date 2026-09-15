@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { submitEssay } from '@/lib/domain/essay-submission';
 import { resolveGuestSession } from '@/lib/domain/guest-session';
-import { essaySubmissionRequestSchema, MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
+import { essaySubmissionRequestSchema, MAX_REQUEST_BODY_BYTES, isEssayLengthRejectionReason } from '@/lib/contracts/essay-submission';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
 import { isCrossOriginRequest } from '@/lib/same-origin';
@@ -241,16 +241,22 @@ export async function POST(request: NextRequest) {
     // grading failure reasons will need, cheaper to add now than to retrofit
     // once that lands.
     const lengthIssue = parsed.error.issues.find(
-      (issue) => issue.code === 'custom' && (issue.params?.reason === 'tooShort' || issue.params?.reason === 'tooLong'),
+      (issue) => issue.code === 'custom' && isEssayLengthRejectionReason(issue.params?.reason),
     );
-    // `.find`'s predicate narrows `issue` to the `custom` variant inside its
-    // own closure, but that narrowing doesn't survive the assignment back
-    // to `lengthIssue` — re-checking `.code` here (now against the single
-    // found issue, not the whole union) is what lets `.params` typecheck
-    // below without an `as` cast.
-    if (lengthIssue && lengthIssue.code === 'custom') {
-      const reason = lengthIssue.params?.reason as 'tooShort' | 'tooLong' | undefined;
-      return NextResponse.json({ error: lengthIssue.message, reason }, { status: 400 });
+    // Round-2 review (Architect, blocking): this used to re-check `.code ===
+    // 'custom'` here and then `as`-cast `.params?.reason` to the two known
+    // reason strings — sound only because the `.find` predicate above
+    // happened to check the same two strings inline, a fact the cast itself
+    // could never verify. A third reason (grading, rate limiting) added to
+    // the predicate above and not to the cast would compile cleanly and put
+    // a value on the wire `EssayEntryForm`'s own narrowing doesn't recognise
+    // either, silently dropped to the generic error. Narrowing against
+    // `isEssayLengthRejectionReason` again here — the SAME exported check
+    // the `.find` predicate above used, from `lib/contracts/essay-submission`
+    // — replaces the cast with a real type guard: `reason` below is
+    // `EssayLengthRejectionReason`, not `unknown` asserted into shape.
+    if (lengthIssue && lengthIssue.code === 'custom' && isEssayLengthRejectionReason(lengthIssue.params?.reason)) {
+      return NextResponse.json({ error: lengthIssue.message, reason: lengthIssue.params?.reason }, { status: 400 });
     }
     return NextResponse.json({ error: 'invalid essay submission' }, { status: 400 });
   }
