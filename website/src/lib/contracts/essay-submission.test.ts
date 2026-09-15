@@ -145,8 +145,14 @@ describe('essaySubmissionRequestSchema — the KAN-15 word-count bounds', () => 
     expect(essaySubmissionRequestSchema.safeParse({ content: wordsContent(220) }).success).toBe(true);
   });
 
-  it('rejects 1000 words — the story\'s own "blocked" verification case', () => {
-    expect(essaySubmissionRequestSchema.safeParse({ content: wordsContent(1000) }).success).toBe(false);
+  it('rejects 1000 words — the story\'s own "blocked" verification case — specifically as "tooLong"', () => {
+    const result = essaySubmissionRequestSchema.safeParse({ content: wordsContent(1000) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.code === 'custom');
+      expect(issue?.params?.reason).toBe('tooLong');
+    }
   });
 
   it('the too-short and too-long messages are distinct — never a generic error for either (BR-1.7)', () => {
