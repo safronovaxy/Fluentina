@@ -146,6 +146,57 @@ describe('POST /api/essays — no cookie at all', () => {
     const forgedActor = { kind: 'guest' as const, sessionId: forged as GuestSessionId };
     expect(await getGuestSessionById(forgedActor, forged)).toBeNull();
   });
+
+  // Round-2 review: the cookie check moved back ahead of every body-reading
+  // step specifically so a caller presenting no cookie never costs this
+  // route a buffer or a JSON parse — see route.ts's own comment. Nothing
+  // proved that ordering; a mutant restoring the old order (cookie check
+  // after the body is read and parsed) left the whole suite green, because
+  // every other "no cookie" test above sends a small, already-buffered body
+  // that reads instantly either way. An effectively unbounded stream is the
+  // only shape that tells the two orderings apart within a test timeout.
+  it('never pulls a single chunk off the body stream for a missing cookie — rejected on the header checks alone, before the body is read at all', async () => {
+    let pulls = 0;
+    const chunk = new TextEncoder().encode('a'.repeat(10_000));
+    // Never closes on its own — if the cookie check ran after the body were
+    // read, this route would have to drain (or cap-reject) this stream
+    // first, which pulls at least once. Zero pulls is only possible if the
+    // cookie check runs first and the body is never touched.
+    //
+    // highWaterMark: 0 is deliberate — a default ReadableStream (hwm 1)
+    // eagerly calls `pull` once at construction to fill its queue,
+    // regardless of whether anything ever reads from it, which would make
+    // "0 pulls" unreachable no matter how this route behaves. hwm 0 keeps
+    // desiredSize at 0 until something actually calls read(), so a pull
+    // count of 0 here means what it claims: nothing pulled anything.
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulls += 1;
+          controller.enqueue(chunk);
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const request = new NextRequest(new URL('http://localhost:3000/api/essays'), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'http://localhost:3000',
+        host: 'localhost:3000',
+        // deliberately no cookie header
+      },
+      body: stream,
+      duplex: 'half',
+      // `duplex` is required by the underlying fetch implementation for a
+      // streamed body but isn't in Next's own narrower NextRequestInit type.
+    } as ConstructorParameters<typeof NextRequest>[1]);
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    expect(pulls).toBe(0);
+  });
 });
 
 describe('POST /api/essays — the presented cookie names an already-converted session (the reissue trap)', () => {
@@ -340,6 +391,7 @@ describe('POST /api/essays — the raw-body transport cap under chunked transfer
     const chunkBytes = 10_000;
     const chunk = new TextEncoder().encode('a'.repeat(chunkBytes));
     let pulls = 0;
+    let cancelled = false;
     // An effectively unbounded source: if readBodyWithinLimit ever fell
     // back to draining the whole stream (the request.text() shape this
     // guard replaced), this would never terminate rather than merely being
@@ -348,6 +400,9 @@ describe('POST /api/essays — the raw-body transport cap under chunked transfer
       pull(controller) {
         pulls += 1;
         controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
       },
     });
     const sessionId = generateGuestSessionId(); // never persisted — proves nothing downstream ran
@@ -372,12 +427,62 @@ describe('POST /api/essays — the raw-body transport cap under chunked transfer
     const response = await POST(request);
 
     expect(response.status).toBe(413);
-    // Bounds resident memory at the limit plus one chunk: the reader must
-    // stop within one chunk of crossing MAX_REQUEST_BODY_BYTES, not drain
-    // toward the stream's (never-arriving) end.
-    expect(pulls).toBeLessThanOrEqual(Math.ceil(MAX_REQUEST_BODY_BYTES / chunkBytes) + 1);
+    // Cancelling the reader stops us pulling more bytes off a request we've
+    // already decided to reject. It is NOT what returns the underlying
+    // socket to Cloud Run's pool — measured directly against the deployed
+    // build with an identical client, 30 requests each way: cancelling here
+    // left 28 of 30 sockets sitting in a wait state, where the no-cookie
+    // path above (which never reads the body at all) left zero. See KAN-25
+    // for those measurements and the actual, verified fix for that
+    // retention — this assertion only pins that we stop pulling, not that
+    // the connection is freed.
+    expect(cancelled).toBe(true);
+    // Exact pull count, derived from the limit and the chunk size: correct
+    // code stops the instant the running total first exceeds
+    // MAX_REQUEST_BODY_BYTES (128,000 / 10,000 = 12.8, so the 13th pull is
+    // the one that crosses it) and bounds resident memory at the limit plus
+    // ONE chunk, not one more. A mutant that compares the running total
+    // BEFORE adding the new chunk, rather than after, crosses the threshold
+    // one pull late and lands on 14 — the old `toBeLessThanOrEqual(...+ 1)`
+    // bound let that mutant through; only other tests in the suite caught it.
+    expect(pulls).toBe(Math.floor(MAX_REQUEST_BODY_BYTES / chunkBytes) + 1);
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
+  });
+});
+
+describe('POST /api/essays — no body stream at all', () => {
+  // readBodyWithinLimit's own early-return branch (`request.body?.getReader()`
+  // undefined) exists purely to preserve the behaviour `request.text()` had
+  // for this shape — an empty string, not a rejection. Nothing here proved
+  // that: a mutant turning that branch into `{ ok: false }` (the same
+  // shape the over-the-cap case returns) left the whole suite green, because
+  // every other test in this file sends a real body. This is the one
+  // request shape that reaches readBodyWithinLimit with `request.body`
+  // itself null — no reader to get — so it's the only test that can tell
+  // the early return apart from the rejection case.
+  it('returns 400 for a request with no body at all — the same outcome request.text() gave an empty body, not the 413 a rejection would produce', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const request = new NextRequest(new URL('http://localhost:3000/api/essays'), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'http://localhost:3000',
+        host: 'localhost:3000',
+        cookie: `${GUEST_SESSION_COOKIE_NAME}=${sessionId}`,
+      },
+      // no `body` at all — `request.body` is `null`, unlike an empty string
+      // body, which would still produce a stream.
+    });
+
+    const response = await POST(request);
+
+    // Empty text fails JSON.parse the same way a truly empty string body
+    // would ('' is not valid JSON), so this lands on the "invalid JSON
+    // body" 400 — the same status request.text() would have produced for
+    // this exact shape.
+    expect(response.status).toBe(400);
   });
 });
 
