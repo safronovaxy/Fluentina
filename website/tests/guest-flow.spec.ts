@@ -157,11 +157,13 @@ for (const fx of LOCALE_FIXTURES) {
       // meaning the same thing once a screen adds any other list.
       await expect(progress.getByRole('listitem')).toHaveCount(5);
 
-      const cta = page.getByRole('button', { name: fx.ctaName, exact: true });
+      // KAN-14: the CTA now links straight to essay entry (rendered as a
+      // link styled as a button — see (guest)/practice/page.tsx) rather
+      // than sitting disabled with nothing to link to yet.
+      const cta = page.getByRole('link', { name: fx.ctaName, exact: true });
       await expect(cta).toBeVisible();
-      // Intentionally disabled — see (guest)/practice/page.tsx: prompt
-      // selection/essay entry (KAN-13/KAN-14) don't exist yet to link to.
-      await expect(cta).toBeDisabled();
+      await expect(cta).toBeEnabled();
+      await expect(cta).toHaveAttribute('href', `${fx.path}/write`);
     });
 
     test('brand link in the flow header returns to the marketing homepage', async ({ page }) => {

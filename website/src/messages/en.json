@@ -23,8 +23,21 @@
         "fastFeedbackBody": "Your score and one worked example, usually within a minute.",
         "noInstallTitle": "Nothing to install",
         "noInstallBody": "Works right in your phone or desktop browser.",
-        "cta": "Start practicing",
-        "ctaHint": "Prompt selection and essay entry are launching next."
+        "cta": "Start practicing"
+      },
+      "write": {
+        "metaTitle": "Write your essay",
+        "metaDescription": "Write or paste your B2-level German essay — no account needed to submit it.",
+        "title": "Write your essay",
+        "description": "Type or paste your German-language essay below, then submit it. No account needed.",
+        "textareaLabel": "Your essay",
+        "placeholder": "Write or paste your essay here...",
+        "requiredError": "Please write something before submitting.",
+        "submitCta": "Submit essay",
+        "submittingCta": "Submitting...",
+        "successTitle": "Essay received",
+        "successBody": "Your essay has been submitted. We're working on the next steps of the guest flow.",
+        "errorGeneric": "Something went wrong submitting your essay. Please try again."
       }
     },
     "localeSwitcher": {

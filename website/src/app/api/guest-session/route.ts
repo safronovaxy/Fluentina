@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveGuestSession } from '@/lib/domain/guest-session';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
+import { isCrossOriginRequest } from '@/lib/same-origin';
 
 /**
  * POST /api/guest-session — KAN-10 session issuance, the Node-runtime half.
@@ -91,19 +92,19 @@ import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/g
  * Pinning the comparison to a genuinely proxy-set value, or to a
  * configured origin allowlist, is KAN-28. Do not treat `forwardedHost` as
  * a reusable trusted primitive elsewhere in this codebase -- KAN-14's
- * submission path is the likeliest next place someone reaches for it.
+ * submission path (`src/app/api/essays/route.ts`) turned out to be exactly
+ * that next place, and reuses this same check via `lib/same-origin.ts`
+ * (extracted there, once a second call site needed it, rather than
+ * duplicated) -- with the same caveat carried on that module instead of
+ * repeated per call site.
  */
 export async function POST(request: NextRequest) {
-  const origin = request.headers.get('origin');
-  if (origin !== null && (originHost(origin) === null || forwardedHost(request) === null || originHost(origin) !== forwardedHost(request))) {
+  if (isCrossOriginRequest(request)) {
     // A same-origin fetch either omits Origin (older browsers, some
     // same-origin requests) or sends the page's own origin; a cross-site
-    // caller sends its own. Only reject when Origin is present and either
-    // side of the comparison is missing or WRONG — absence on ONE side
-    // (Origin itself) isn't evidence of anything, but absence on the OTHER
-    // side (a malformed Origin, or no Host/x-forwarded-host at all) must
-    // still reject: two `null`s are not a match, they're two ways of having
-    // nothing to compare.
+    // caller sends its own. See `isCrossOriginRequest`'s own doc comment
+    // for exactly what counts as a mismatch, including the "absence on
+    // both sides is not a match" case a round-2 review found missing here.
     return NextResponse.json({ error: 'cross-origin request rejected' }, { status: 400 });
   }
 
@@ -137,34 +138,4 @@ export async function POST(request: NextRequest) {
     response.cookies.set(GUEST_SESSION_COOKIE_NAME, actor.sessionId, GUEST_SESSION_COOKIE_OPTIONS);
   }
   return response;
-}
-
-/**
- * The host `Origin` claims to be from, or `null` if `Origin` isn't even a
- * parseable URL. A malformed header is always treated as a mismatch by the
- * caller and rejected, never as "absent" — the caller rejects whenever
- * either this or `forwardedHost` comes back `null`, so there's no path
- * where two `null`s cancel each other out into an accept.
- */
-function originHost(origin: string): string | null {
-  try {
-    return new URL(origin).host;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * `x-forwarded-host` if present, else `host`. NOT "the host from the
- * proxy's point of view" — nothing proxy-side sets `x-forwarded-host` here.
- * The load balancer in front of Cloud Run manages `x-forwarded-for` and
- * `x-forwarded-proto` and preserves `Host`, but never sets or strips
- * `x-forwarded-host`; this is a client-supplied value taken on faith. See
- * the route's own comment above for what the resulting guard actually
- * relies on (and doesn't). Deliberately not `request.nextUrl.host`: see the
- * route's own comment above for why that's the container bind address, not
- * this.
- */
-function forwardedHost(request: NextRequest): string | null {
-  return request.headers.get('x-forwarded-host') ?? request.headers.get('host');
 }

@@ -81,5 +81,23 @@ export default function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/practice', '/practice/:path*', '/en/practice', '/en/practice/:path*', '/de/practice', '/de/practice/:path*'],
+  // KAN-14: added the four /practice/write entries when that route landed
+  // (essay entry) — src/middleware.test.ts walks the real route tree under
+  // src/app/[locale]/(guest) and fails if this list and that tree ever
+  // disagree, specifically so adding a guest route without updating this
+  // array is a failing test here rather than a 404 in production.
+  matcher: [
+    '/practice',
+    '/practice/:path*',
+    '/en/practice',
+    '/en/practice/:path*',
+    '/de/practice',
+    '/de/practice/:path*',
+    '/practice/write',
+    '/practice/write/:path*',
+    '/en/practice/write',
+    '/en/practice/write/:path*',
+    '/de/practice/write',
+    '/de/practice/write/:path*',
+  ],
 };

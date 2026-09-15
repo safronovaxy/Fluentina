@@ -70,16 +70,19 @@ always releasable but does not itself deploy to production.
   migrations → confirm migrations match the schema → Vitest → build →
   Playwright against the locally built app.
 - **What that covers today is narrower than it sounds, but less narrow than
-  it used to be.** There are still no funnel specs — the Playwright suite is
-  the marketing regression suite. Vitest, though, is no longer only component
-  tests: KAN-10 added the data-layer integration suite (session/essay
-  row-level ownership, the conversion cutover, the Postgres major-version
-  guard) that runs against the real `postgres` service container defined
-  below, not a mock — that container is genuinely consumed now, by roughly
-  twenty tests, and removing it from CI would silently drop that whole suite
-  rather than just tidying up an unused fixture. `MOCK_GRADING_PROVIDER`
-  remains provisioned ahead of the story that will use it and is not
-  consumed by anything yet.
+  it used to be.** The Playwright suite used to be the marketing regression
+  suite only, with no funnel specs — KAN-14 added the first one
+  (`tests/essay-entry.spec.ts`, guest essay entry end to end), which this
+  same round of review also confirmed makes viewport-differential assertions
+  of its own, not just piggybacking on two viewport projects. Vitest, though,
+  is no longer only component tests: KAN-10 added the data-layer integration
+  suite (session/essay row-level ownership, the conversion cutover, the
+  Postgres major-version guard) that runs against the real `postgres` service
+  container defined below, not a mock — that container is genuinely consumed
+  now, by roughly twenty tests, and removing it from CI would silently drop
+  that whole suite rather than just tidying up an unused fixture.
+  `MOCK_GRADING_PROVIDER` remains provisioned ahead of the story that will
+  use it and is not consumed by anything yet.
 - Specs tagged `@cms` need a reachable Strapi with published content, so CI
   excludes them by tag and they run against a live site via
   `npm run test:e2e:live`. Without that exclusion the suite is red on every PR

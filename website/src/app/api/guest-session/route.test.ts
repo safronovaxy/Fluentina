@@ -9,9 +9,13 @@ import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import type { GuestSessionId } from '@/lib/contracts/actor';
 
-function postWithCookie(cookieValue?: string, headers?: Record<string, string>): NextRequest {
+function postWithCookie(
+  cookieValue?: string,
+  headers?: Record<string, string>,
+  url = 'http://localhost:3000/api/guest-session',
+): NextRequest {
   const cookieHeader = cookieValue ? { cookie: `${GUEST_SESSION_COOKIE_NAME}=${cookieValue}` } : undefined;
-  return new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
+  return new NextRequest(new URL(url), {
     method: 'POST',
     headers: { ...cookieHeader, ...headers },
   });
@@ -140,7 +144,13 @@ describe('POST /api/guest-session — the cookie names an already-converted sess
 });
 
 describe('POST /api/guest-session — cross-origin requests', () => {
-  it('rejects a mismatched Origin header with 400, even with an otherwise valid cookie', async () => {
+  // One integration-level test here (round-1 review): the guard's own edge
+  // cases — malformed Origin, absent Host/forwarded-host, forwarded-host
+  // precedence, and the `output: standalone`/Cloud Run URL shape (round 2)
+  // — are unit-tested directly against `isCrossOriginRequest` in
+  // `lib/same-origin.test.ts` now, so this file only needs to prove the
+  // guard is actually wired into THIS route, ahead of session resolution.
+  it('rejects a mismatched Origin header with 400, even with an otherwise valid cookie, and creates no row', async () => {
     const validCookie = generateGuestSessionId();
 
     const response = await POST(postWithCookie(validCookie, { origin: 'https://evil.example' }));
@@ -149,143 +159,33 @@ describe('POST /api/guest-session — cross-origin requests', () => {
     expect(await getGuestSessionById({ kind: 'guest', sessionId: validCookie }, validCookie)).toBeNull();
   });
 
-  it('accepts a same-origin Origin header, matched against the Host header rather than the request URL', async () => {
+  // Round-2 review: this suite had no test carrying a MATCHING Origin at
+  // all — the test above only exercises the reject direction, so a mutant
+  // that made this route reject anything bearing an Origin header at all
+  // left every unit test in this file green; only a browser test caught
+  // it. And separately, this route's own request in production is bound to
+  // the `output: standalone` container address (`https://0.0.0.0:8080`,
+  // see this route's own comment and lib/same-origin.ts's), not the public
+  // hostname the browser's Origin and the load balancer's forwarded Host
+  // both carry — reproduced directly here (see lib/same-origin.test.ts's
+  // equivalent unit test for the same shape against isCrossOriginRequest
+  // itself). If someone reintroduced the inline `request.nextUrl.origin`
+  // comparison this route's own comment documents as the actual production
+  // outage, this would fail: nextUrl's host in that shape is always
+  // 0.0.0.0:8080, which never equals the public hostname below.
+  it('accepts a same-origin request even when it is bound to the container address rather than the deployed public hostname — the real output:standalone/Cloud Run shape (round-2 review)', async () => {
     const validCookie = generateGuestSessionId();
 
-    const response = await POST(postWithCookie(validCookie, { origin: 'http://localhost:3000', host: 'localhost:3000' }));
+    const response = await POST(
+      postWithCookie(
+        validCookie,
+        { origin: 'https://fluentina.com', 'x-forwarded-host': 'fluentina.com' },
+        'https://0.0.0.0:8080/api/guest-session',
+      ),
+    );
 
     expect(response.status).toBe(200);
-  });
-
-  // Review (round 2): both of the tests below reproduce the actual
-  // production bug this round exists to fix, and the Test Lead confirmed
-  // the first one fails against pre-fix HEAD (a real 400, not this file's
-  // http://localhost:3000-built fixture). Next's `output: standalone`
-  // server builds `request.nextUrl` from the container bind address
-  // (`HOSTNAME`/`PORT`), not from any header — so on Cloud Run
-  // `request.nextUrl.origin` is always `https://0.0.0.0:8080`, a value no
-  // real browser can ever send as `Origin`. Comparing against
-  // `request.nextUrl.origin` therefore rejected every real guest's first
-  // POST, in production, unconditionally — see route.ts's own comment.
-  // These build the request the same broken way (a URL bound to
-  // `0.0.0.0:8080`, nothing like the browser's `Origin`) and prove the
-  // fixed comparison — Origin's host against `x-forwarded-host` — gets it
-  // right in both directions.
-  it('accepts a same-origin request even when the request URL itself is bound to a different host than the browser Origin — the real production shape (round 2 review)', async () => {
-    const validCookie = generateGuestSessionId();
-    const req = new NextRequest(new URL('https://0.0.0.0:8080/api/guest-session'), {
-      method: 'POST',
-      headers: {
-        cookie: `${GUEST_SESSION_COOKIE_NAME}=${validCookie}`,
-        origin: 'https://fluentina.com',
-        'x-forwarded-host': 'fluentina.com',
-      },
-    });
-
-    const response = await POST(req);
-
-    expect(response.status).toBe(200);
-  });
-
-  it('still rejects a genuinely foreign Origin, even with the same x-forwarded-host a legitimate request would carry — proves the fix compares hosts, not merely stops checking', async () => {
-    const validCookie = generateGuestSessionId();
-    const req = new NextRequest(new URL('https://0.0.0.0:8080/api/guest-session'), {
-      method: 'POST',
-      headers: {
-        cookie: `${GUEST_SESSION_COOKIE_NAME}=${validCookie}`,
-        origin: 'https://evil.example',
-        'x-forwarded-host': 'fluentina.com',
-      },
-    });
-
-    const response = await POST(req);
-
-    expect(response.status).toBe(400);
-    expect(await getGuestSessionById({ kind: 'guest', sessionId: validCookie }, validCookie)).toBeNull();
-  });
-
-  // Post-approval hardening (KAN-10): a malformed Origin is documented as
-  // "always a mismatch, never absent" (see originHost's own doc comment),
-  // but nothing exercised that with an actual malformed header until now.
-  it('rejects a malformed Origin header with 400, even alongside an otherwise valid Host', async () => {
-    const validCookie = generateGuestSessionId();
-    const req = new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
-      method: 'POST',
-      headers: {
-        cookie: `${GUEST_SESSION_COOKIE_NAME}=${validCookie}`,
-        origin: 'not a url',
-        host: 'localhost:3000',
-      },
-    });
-
-    const response = await POST(req);
-
-    expect(response.status).toBe(400);
-  });
-
-  // Post-approval hardening (KAN-10): originHost() and forwardedHost() both
-  // return `null` on absence/malformation, and `null !== null` is `false`
-  // — so a malformed Origin with NO host header at all used to collapse
-  // the mismatch check into a match and get accepted. Before this fix this
-  // request returned 200; the assertion below is what pins it at 400.
-  it('rejects a malformed Origin header with no Host or x-forwarded-host header at all — absence on both sides must not collapse into a match', async () => {
-    const validCookie = generateGuestSessionId();
-    const req = new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
-      method: 'POST',
-      headers: {
-        cookie: `${GUEST_SESSION_COOKIE_NAME}=${validCookie}`,
-        origin: 'not a url',
-      },
-    });
-    // NextRequest always carries some Host under the hood via the URL it's
-    // constructed from in Node; strip it explicitly so neither header this
-    // route reads is present, reproducing the real "no proxy header at
-    // all" case forwardedHost()'s doc comment describes.
-    req.headers.delete('host');
-
-    const response = await POST(req);
-
-    expect(response.status).toBe(400);
-  });
-
-  // Post-approval hardening (KAN-10): the precedence of
-  // `x-forwarded-host ?? host` in forwardedHost() is unpinned by every
-  // other test here, because none of them present both headers with
-  // different values — so silently reversing to `host ?? x-forwarded-host`
-  // would leave the rest of this suite green. This test presents both with
-  // different values and asserts the one actually compared is
-  // x-forwarded-host: an Origin matching x-forwarded-host is accepted even
-  // though it disagrees with Host, and the reverse (below) is rejected.
-  it('compares Origin against x-forwarded-host, not Host, when the two disagree', async () => {
-    const validCookie = generateGuestSessionId();
-    const acceptedReq = new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
-      method: 'POST',
-      headers: {
-        cookie: `${GUEST_SESSION_COOKIE_NAME}=${validCookie}`,
-        origin: 'https://fluentina.com',
-        'x-forwarded-host': 'fluentina.com',
-        host: 'evil.example',
-      },
-    });
-
-    const accepted = await POST(acceptedReq);
-
-    expect(accepted.status).toBe(200);
-
-    const rejectedCookie = generateGuestSessionId();
-    const rejectedReq = new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
-      method: 'POST',
-      headers: {
-        cookie: `${GUEST_SESSION_COOKIE_NAME}=${rejectedCookie}`,
-        origin: 'https://evil.example',
-        'x-forwarded-host': 'fluentina.com',
-        host: 'evil.example',
-      },
-    });
-
-    const rejected = await POST(rejectedReq);
-
-    expect(rejected.status).toBe(400);
+    expect(await getGuestSessionById({ kind: 'guest', sessionId: validCookie }, validCookie)).not.toBeNull();
   });
 });
 
