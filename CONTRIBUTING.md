@@ -74,7 +74,10 @@ always releasable but does not itself deploy to production.
   suite only, with no funnel specs — KAN-14 added the first one
   (`tests/essay-entry.spec.ts`, guest essay entry end to end), which this
   same round of review also confirmed makes viewport-differential assertions
-  of its own, not just piggybacking on two viewport projects. Vitest, though,
+  of its own, not just piggybacking on two viewport projects. KAN-15 added a
+  second: `tests/word-count.spec.ts`, the live word-count guidance/warning/
+  block states end to end (`ci.yml`'s own E2E step comment names both).
+  Vitest, though,
   is no longer only component tests: KAN-10 added the data-layer integration
   suite (session/essay row-level ownership, the conversion cutover, the
   Postgres major-version guard) that runs against the real `postgres` service

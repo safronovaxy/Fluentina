@@ -224,13 +224,28 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
   // generic fallback every server rejection used to render regardless of
   // why. Anything else (a 500, a network failure, a body with no
   // recognised `reason`) still falls back to `errorGeneric`.
+  //
+  // Round-3 review (Architect, blocking): this used to be a ternary
+  // fallback chain (`reason === 'tooShort' ? ... : reason === 'tooLong' ?
+  // ... : errorGeneric`), not an exhaustive map. A third reason — rate
+  // limiting, which both this file's own history and `essay-submission.ts`
+  // already name as coming — would compile cleanly through
+  // `ESSAY_LENGTH_REJECTION_REASONS`, `isEssayLengthRejectionReason` and
+  // this chain, and silently fall through to the generic message: a guest
+  // gets a generic error for a cause the server took the trouble to name,
+  // the exact failure round-1 review removed, relocated one layer out.
+  // Typed as `Record<EssayLengthRejectionReason, string>` instead: if the
+  // reason union ever grows, this object literal fails to COMPILE until
+  // someone supplies that reason's message, rather than silently falling
+  // back at runtime.
+  const reasonMessages: Record<EssayLengthRejectionReason, string> = {
+    tooShort: strings.tooShortError,
+    tooLong: strings.tooLongError,
+  };
   const submissionError = mutation.error instanceof EssaySubmissionError ? mutation.error : undefined;
-  const submissionErrorMessage =
-    submissionError?.reason === 'tooShort'
-      ? strings.tooShortError
-      : submissionError?.reason === 'tooLong'
-        ? strings.tooLongError
-        : strings.errorGeneric;
+  const submissionErrorMessage = submissionError?.reason
+    ? reasonMessages[submissionError.reason]
+    : strings.errorGeneric;
 
   return (
     <form onSubmit={handleSubmit} noValidate>

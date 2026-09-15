@@ -6,7 +6,11 @@ import enMessages from '@/messages/en.json';
 import { EssayEntryForm, type EssayEntryFormStrings } from './EssayEntryForm';
 import { MAX_ESSAY_CONTENT_CHARS } from '@/lib/contracts/essay-submission';
 import { MIN_ESSAY_WORDS, RECOMMENDED_MIN_WORDS, RECOMMENDED_MAX_WORDS, MAX_ESSAY_WORDS } from '@/lib/contracts/word-count';
-import { wordsContent as words, mixedWhitespaceContent as mixedWhitespaceWords } from '@/test/essay-content-fixtures';
+import {
+  wordsContent as words,
+  mixedWhitespaceContent as mixedWhitespaceWords,
+  contentOfExactLength,
+} from '@/test/essay-content-fixtures';
 
 const STRINGS: EssayEntryFormStrings = {
   textareaLabel: 'Your essay',
@@ -151,11 +155,21 @@ describe('EssayEntryForm — content over the character safety cap (round-1 revi
     // native maxLength constrains user typing/pasting but not a scripted
     // assignment — this is what proves the JS-level check (isValid, via
     // essaySubmissionRequestSchema) still blocks submission on its own,
-    // not merely the browser's maxLength attribute. A single giant token
-    // (no whitespace) also trips the KAN-15 word-count check (it's one
-    // "word"), but the char-cap message still takes precedence — see
-    // EssayEntryForm's own comment on why.
-    const overCapContent = 'a'.repeat(MAX_ESSAY_CONTENT_CHARS + 1);
+    // not merely the browser's maxLength attribute.
+    //
+    // Round-3 review (Test Lead, blocking): this used to be a single
+    // `'a'.repeat(MAX_ESSAY_CONTENT_CHARS + 1)` token — invalid on TWO axes,
+    // not one: the character cap, and the 50-word floor, since one
+    // unbroken token is one "word" by countGermanWords' own rule. The
+    // assertion below can't tell which axis fired, because both failures
+    // render the same `requiredError` string. Proven live: deleting the
+    // `.max()` character-cap check from the schema left this test (and
+    // 258 others) green — only the contract-level cap test died. Fixed by
+    // pinning the word count to 250 (comfortably inside 50-300) via the
+    // shared `contentOfExactLength` builder, so only the character-cap
+    // axis is being exercised and this test can no longer pass for the
+    // wrong reason.
+    const overCapContent = contentOfExactLength(MAX_ESSAY_CONTENT_CHARS + 1, 250);
 
     fillEssay(overCapContent);
     fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));

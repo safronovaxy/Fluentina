@@ -96,11 +96,25 @@ describe('classifyEssayLength — the boundaries themselves, not the middles (KA
   // de.json's own `recommendedRangeGuidance`). A guest at exactly 200 words
   // would be told they're over the recommended range while the banner says
   // 200 is the top of it. This is the one literal pin that was missing —
-  // MIN_ESSAY_WORDS and MAX_ESSAY_WORDS (the two hard, enforced bounds) and
-  // RECOMMENDED_MIN_WORDS are all exercised the same indirect way above, but
-  // genuinely die under the equivalent mutation, so only this edge needed one.
+  // MIN_ESSAY_WORDS and MAX_ESSAY_WORDS (the two hard, enforced bounds) are
+  // both exercised the same indirect way above but genuinely die under the
+  // equivalent mutation, so neither needed one.
+  //
+  // Round-3 review (Architect, consider): this comment used to also claim
+  // RECOMMENDED_MIN_WORDS "genuinely dies under the equivalent mutation" —
+  // false, and unverified when written. Moving RECOMMENDED_MIN_WORDS from
+  // 150 to 149 leaves every test in this suite green: the only literal
+  // fill in a browser test (tests/word-count.spec.ts's `wordsContent(150)`
+  // recommended-banner case) still classifies as `recommended` at 149,
+  // since 150 >= 149 too. A guest at exactly 150 words would be told
+  // they're inside the recommended range while the banner's own text says
+  // 150 is where it starts. Pinned below the same way the upper edge is.
   it('RECOMMENDED_MAX_WORDS is literally 200, not merely whatever this constant happens to be — the guidance banner\'s own text is hardcoded to that number in both locales', () => {
     expect(RECOMMENDED_MAX_WORDS).toBe(200);
+  });
+
+  it('RECOMMENDED_MIN_WORDS is literally 150, not merely whatever this constant happens to be — the guidance banner\'s own text is hardcoded to that number in both locales', () => {
+    expect(RECOMMENDED_MIN_WORDS).toBe(150);
   });
 
   it('201 words is overRecommended — one over the recommended range, warning zone starts', () => {

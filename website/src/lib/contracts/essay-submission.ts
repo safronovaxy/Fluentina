@@ -104,10 +104,19 @@ export const MAX_ESSAY_CONTENT_CHARS = 20_000;
 export const MAX_REQUEST_BODY_BYTES = 128_000;
 
 export const essaySubmissionRequestSchema = z.object({
+  // No `.min(1, ...)` guard here for empty content — deliberately, not an
+  // oversight. Round-3 review (consider #4): that guard used to sit here,
+  // and was unobservable — deleting it left all 259 tests green, because it
+  // genuinely cannot change any response. Empty content trims to a 0-word
+  // count, which the `.superRefine` below already rejects as `tooShort`
+  // (0 < MIN_ESSAY_WORDS), and route.ts always prefers that structured
+  // `custom` issue over a generic `.min()`/`.max()` one when both are
+  // present (see route.ts's own `lengthIssue` lookup) — so the empty case
+  // was always covered by the word floor, under both the client's and the
+  // server's checks, not by this line.
   content: z
     .string()
     .trim()
-    .min(1, 'essay content must not be empty')
     .max(MAX_ESSAY_CONTENT_CHARS, `essay content exceeds the ${MAX_ESSAY_CONTENT_CHARS}-character safety cap`)
     // KAN-15 (BR-1.4 through BR-1.7) — the real product rule, independent of
     // (and evaluated regardless of) the character-cap check above: zod runs

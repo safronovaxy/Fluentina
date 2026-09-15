@@ -212,7 +212,15 @@ describe('essaySubmissionRequestSchema — the KAN-15 word-count bounds', () => 
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      const message = result.error.issues.find((i) => i.code === 'custom')?.message ?? '';
+      // Round-3 review (consider #5): this used to fall back to `''` when no
+      // `custom` issue was found, the same way `?? ''` would — both
+      // `not.toContain` assertions below then hold trivially on an empty
+      // string, so this test would keep "passing" even if `reason` ever
+      // stopped travelling as a `custom` issue at all. The sibling test
+      // above (BR-1.7, distinct messages) gets this right by asserting the
+      // message exists first — matching that here.
+      const message = result.error.issues.find((i) => i.code === 'custom')?.message;
+      expect(message).toBeDefined();
       expect(message).not.toContain(secretContent);
       expect(message).not.toContain('Wort0');
     }
