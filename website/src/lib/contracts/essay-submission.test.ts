@@ -4,6 +4,8 @@ import {
   MAX_ESSAY_CONTENT_CHARS,
   MAX_REQUEST_BODY_BYTES,
 } from './essay-submission';
+import { MIN_ESSAY_WORDS, MAX_ESSAY_WORDS, RECOMMENDED_MIN_WORDS, RECOMMENDED_MAX_WORDS } from './word-count';
+import { contentOfExactLength, wordsContent, mixedWhitespaceContent } from '@/test/essay-content-fixtures';
 
 // Round-1 review (should-fix): there was no contract test file at all before
 // this — the boundary was asserted only at the route level
@@ -14,23 +16,49 @@ import {
 // (see this schema's own comment for the German-umlaut bug that happened
 // when they were).
 describe('essaySubmissionRequestSchema — the character cap', () => {
-  it('accepts content exactly at the character cap', () => {
-    const content = 'a'.repeat(MAX_ESSAY_CONTENT_CHARS);
+  it('accepts content exactly at the character cap, with a word count safely inside the KAN-15 bounds', () => {
+    const content = contentOfExactLength(MAX_ESSAY_CONTENT_CHARS, 250);
+    expect(content.length).toBe(MAX_ESSAY_CONTENT_CHARS);
 
     expect(essaySubmissionRequestSchema.safeParse({ content }).success).toBe(true);
   });
 
-  it('rejects content one character over the cap', () => {
-    const content = 'a'.repeat(MAX_ESSAY_CONTENT_CHARS + 1);
+  // Round-2 review (Test Lead, blocking): this used to build content with a
+  // single giant `'a'.repeat(N)` token — one "word" by `countGermanWords`'s
+  // own rule, so it was ALSO under the 50-word floor. Raising the character
+  // cap a hundredfold (or deleting `.max()` entirely) left this test green
+  // regardless, because the word-count floor rejected the fixture anyway —
+  // it never actually exercised the character cap. Fixed the same way the
+  // accept-side test above is: `contentOfExactLength` pins the character
+  // length at exactly one over the cap while keeping word count safely
+  // inside the KAN-15 bounds, so the ONLY thing this fixture fails is the
+  // character cap — and asserts the specific `too_big` issue on `content`
+  // fired, not merely that parsing failed for some reason or other, so a
+  // widened or deleted cap is caught even if something else in the chain
+  // still happened to reject this exact content.
+  it('rejects content one character over the cap, specifically on the character-cap issue — not merely because parsing failed for some other reason', () => {
+    const content = contentOfExactLength(MAX_ESSAY_CONTENT_CHARS + 1, 250);
 
-    expect(essaySubmissionRequestSchema.safeParse({ content }).success).toBe(false);
+    const result = essaySubmissionRequestSchema.safeParse({ content });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const tooBigIssue = result.error.issues.find((issue) => issue.code === 'too_big' && issue.path[0] === 'content');
+      expect(tooBigIssue).toBeDefined();
+      // And, distinctly, no word-count-based rejection fired — 250 words is
+      // safely inside the 50-300 bounds, so this proves the failure is the
+      // character cap alone, isolated from the guard this file's other
+      // describe block exists to pin.
+      const lengthIssue = result.error.issues.find((issue) => issue.code === 'custom');
+      expect(lengthIssue).toBeUndefined();
+    }
   });
 
   it('counts UTF-16 code units, not UTF-8 bytes — 11,000 German umlauts (22,000 bytes) is comfortably under the 20,000-character cap', () => {
     // An umlaut is 1 character (1 UTF-16 code unit) but 2 bytes in UTF-8.
     // 11,000 of them is half the character cap, and would have tripped the
     // old, single MAX_ESSAY_CONTENT_BYTES=20,000 read as a byte count.
-    const content = 'ü'.repeat(11_000);
+    const content = contentOfExactLength(11_000, 200, 'ü');
 
     expect(essaySubmissionRequestSchema.safeParse({ content }).success).toBe(true);
   });
@@ -57,5 +85,144 @@ describe('MAX_ESSAY_CONTENT_CHARS and MAX_REQUEST_BODY_BYTES — two different l
 
     expect(content.length).toBe(MAX_ESSAY_CONTENT_CHARS);
     expect(Buffer.byteLength(body, 'utf8')).toBeLessThan(MAX_REQUEST_BODY_BYTES);
+  });
+});
+
+/**
+ * KAN-15 (BR-1.4 through BR-1.7) — the real word-count rule, at the schema
+ * level. This is the layer route.test.ts's own "bypasses the browser
+ * entirely" tests build on: proving the RULE holds here, independent of
+ * any particular HTTP request shape, is what makes the route-level tests
+ * meaningful rather than circular. Boundaries only, per the story's own
+ * instruction — 49/50/51, 150, 200/201, 300/301 — not the middles.
+ */
+describe('essaySubmissionRequestSchema — the KAN-15 word-count bounds', () => {
+  it('rejects 49 words — one under the 50-word minimum — as too short to grade', () => {
+    const result = essaySubmissionRequestSchema.safeParse({ content: wordsContent(MIN_ESSAY_WORDS - 1) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.code === 'custom');
+      expect(issue?.params?.reason).toBe('tooShort');
+    }
+  });
+
+  it('accepts exactly 50 words — the minimum itself is allowed, not blocked', () => {
+    expect(essaySubmissionRequestSchema.safeParse({ content: wordsContent(MIN_ESSAY_WORDS) }).success).toBe(true);
+  });
+
+  it('accepts 51 words', () => {
+    expect(essaySubmissionRequestSchema.safeParse({ content: wordsContent(MIN_ESSAY_WORDS + 1) }).success).toBe(true);
+  });
+
+  it('accepts 150 words — the start of the recommended range, which is guidance only and never blocks', () => {
+    expect(essaySubmissionRequestSchema.safeParse({ content: wordsContent(RECOMMENDED_MIN_WORDS) }).success).toBe(true);
+  });
+
+  it('accepts 200 words — the end of the recommended range', () => {
+    expect(essaySubmissionRequestSchema.safeParse({ content: wordsContent(RECOMMENDED_MAX_WORDS) }).success).toBe(true);
+  });
+
+  it('accepts 201 words — over the recommended range, but only a non-blocking warning, not a rejection', () => {
+    expect(essaySubmissionRequestSchema.safeParse({ content: wordsContent(RECOMMENDED_MAX_WORDS + 1) }).success).toBe(true);
+  });
+
+  it('accepts exactly 300 words — the hard ceiling itself is allowed, not blocked', () => {
+    expect(essaySubmissionRequestSchema.safeParse({ content: wordsContent(MAX_ESSAY_WORDS) }).success).toBe(true);
+  });
+
+  it('rejects 301 words — one over the 300-word hard ceiling', () => {
+    const result = essaySubmissionRequestSchema.safeParse({ content: wordsContent(MAX_ESSAY_WORDS + 1) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.code === 'custom');
+      expect(issue?.params?.reason).toBe('tooLong');
+    }
+  });
+
+  it('accepts 220 words — the story\'s own "never blocked" verification case', () => {
+    expect(essaySubmissionRequestSchema.safeParse({ content: wordsContent(220) }).success).toBe(true);
+  });
+
+  it('rejects 1000 words — the story\'s own "blocked" verification case — specifically as "tooLong"', () => {
+    const result = essaySubmissionRequestSchema.safeParse({ content: wordsContent(1000) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.code === 'custom');
+      expect(issue?.params?.reason).toBe('tooLong');
+    }
+  });
+
+  it('the too-short and too-long messages are distinct — never a generic error for either (BR-1.7)', () => {
+    const tooShort = essaySubmissionRequestSchema.safeParse({ content: wordsContent(10) });
+    const tooLong = essaySubmissionRequestSchema.safeParse({ content: wordsContent(500) });
+
+    expect(tooShort.success).toBe(false);
+    expect(tooLong.success).toBe(false);
+    if (!tooShort.success && !tooLong.success) {
+      const shortMessage = tooShort.error.issues.find((i) => i.code === 'custom')?.message;
+      const longMessage = tooLong.error.issues.find((i) => i.code === 'custom')?.message;
+      expect(shortMessage).toBeDefined();
+      expect(longMessage).toBeDefined();
+      expect(shortMessage).not.toBe(longMessage);
+    }
+  });
+
+  // Round-1 review (should-fix #2): every fixture above, and in every other
+  // KAN-15 suite, is single-space-separated tokens. The Test Lead proved
+  // that's not incidental — swapping this schema's own call for a naive
+  // `content.split(' ').filter(Boolean).length` left all 150 tests across
+  // three suites green, because every one of them happens to build content
+  // that a single-space split counts identically to countGermanWords. A
+  // real B2 essay is paragraphs (newlines between them) and, often, pasted
+  // word-processor text with two spaces after a full stop — content a
+  // naive split miscounts. This fixture is deliberately NOT single-space:
+  // paragraph breaks (double newline) every ten words, a tab, and a
+  // double space after a full stop, mixed through the token list — see
+  // `@/test/essay-content-fixtures`'s own comment for why this builder lives
+  // there now, shared verbatim with route.test.ts and EssayEntryForm.test.tsx.
+  it('accepts 50 words separated by newlines, tabs and double spaces after a full stop — not the single-space fixture every other test in this suite uses', () => {
+    const content = mixedWhitespaceContent(MIN_ESSAY_WORDS);
+    expect(content).not.toMatch(/^\S+( \S+)*$/); // sanity: genuinely not single-space-only
+
+    expect(essaySubmissionRequestSchema.safeParse({ content }).success).toBe(true);
+  });
+
+  it('rejects 49 words with the same mixed whitespace as too short — pins that the server side counts real pasted-essay whitespace correctly, not merely single-space fixtures', () => {
+    const result = essaySubmissionRequestSchema.safeParse({ content: mixedWhitespaceContent(MIN_ESSAY_WORDS - 1) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.code === 'custom');
+      expect(issue?.params?.reason).toBe('tooShort');
+    }
+  });
+
+  // Round-1 review (should-fix #10): the rejection body is the schema's own
+  // message, a static string today — but the essay content itself, and any
+  // session identifier, must never end up in it regardless, matching the
+  // "never logs essay text" rule this whole route is built against (see
+  // route.test.ts's own console-output test for the same property at the
+  // HTTP layer).
+  it('the too-short rejection message contains neither the submitted content nor anything that looks like a session id', () => {
+    const secretContent = wordsContent(10);
+    const result = essaySubmissionRequestSchema.safeParse({ content: secretContent });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      // Round-3 review (consider #5): this used to fall back to `''` when no
+      // `custom` issue was found, the same way `?? ''` would — both
+      // `not.toContain` assertions below then hold trivially on an empty
+      // string, so this test would keep "passing" even if `reason` ever
+      // stopped travelling as a `custom` issue at all. The sibling test
+      // above (BR-1.7, distinct messages) gets this right by asserting the
+      // message exists first — matching that here.
+      const message = result.error.issues.find((i) => i.code === 'custom')?.message;
+      expect(message).toBeDefined();
+      expect(message).not.toContain(secretContent);
+      expect(message).not.toContain('Wort0');
+    }
   });
 });

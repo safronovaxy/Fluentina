@@ -40,19 +40,28 @@ describe('POST /api/guest-session — missing or malformed cookie', () => {
   // Middleware is now the only issuer; this route requires an
   // already-well-formed cookie and rejects outright otherwise.
 
-  it('rejects a request with no cookie at all — 400, no session resolved, no row created', async () => {
+  // Round-2 review sweep: this route has TWO distinct 400 branches — the
+  // cross-origin guard and this cookie guard (see route.ts) — and neither
+  // test below used to assert which one actually fired, only the shared
+  // status code. A mutant that swapped this branch's message for the
+  // cross-origin one's (or vice versa) left both suites green.
+  it('rejects a request with no cookie at all — 400, "missing or invalid guest session cookie", no session resolved, no row created', async () => {
     const response = await POST(postWithCookie());
+    const body: { error: string } = await response.json();
 
     expect(response.status).toBe(400);
+    expect(body.error).toBe('missing or invalid guest session cookie');
     expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
   });
 
-  it('rejects a malformed or forged cookie the same way — 400, and the forged value never becomes a row', async () => {
+  it('rejects a malformed or forged cookie the same way — 400, "missing or invalid guest session cookie", and the forged value never becomes a row', async () => {
     const forged = 'attacker-supplied-value';
 
     const response = await POST(postWithCookie(forged));
+    const body: { error: string } = await response.json();
 
     expect(response.status).toBe(400);
+    expect(body.error).toBe('missing or invalid guest session cookie');
     const forgedActor = { kind: 'guest' as const, sessionId: forged as GuestSessionId };
     expect(await getGuestSessionById(forgedActor, forged)).toBeNull();
   });
@@ -150,12 +159,20 @@ describe('POST /api/guest-session — cross-origin requests', () => {
   // — are unit-tested directly against `isCrossOriginRequest` in
   // `lib/same-origin.test.ts` now, so this file only needs to prove the
   // guard is actually wired into THIS route, ahead of session resolution.
-  it('rejects a mismatched Origin header with 400, even with an otherwise valid cookie, and creates no row', async () => {
+  // Round-2 review sweep: same reason as the missing-cookie tests above —
+  // a bare 400 here doesn't distinguish this guard from the cookie guard,
+  // which also 400s and which this fixture's cookie is deliberately
+  // well-formed FOR, specifically so a 400 here can only be the cross-origin
+  // guard. Asserting the exact message is what makes that true rather than
+  // merely intended.
+  it('rejects a mismatched Origin header with 400, "cross-origin request rejected", even with an otherwise valid cookie, and creates no row', async () => {
     const validCookie = generateGuestSessionId();
 
     const response = await POST(postWithCookie(validCookie, { origin: 'https://evil.example' }));
+    const body: { error: string } = await response.json();
 
     expect(response.status).toBe(400);
+    expect(body.error).toBe('cross-origin request rejected');
     expect(await getGuestSessionById({ kind: 'guest', sessionId: validCookie }, validCookie)).toBeNull();
   });
 

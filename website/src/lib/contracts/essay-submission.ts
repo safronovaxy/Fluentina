@@ -15,6 +15,19 @@
  * `src/app/api/essays/route.ts`'s own comment on why, and its test for
  * what a body that tries anyway is proven to do.
  *
+ * KAN-15: the `.superRefine` below is exactly that seam, filled. It does
+ * NOT replace `.max()` — the character cap stays exactly what it was, a
+ * blunt safety limit, not the product rule — it adds the real word-count
+ * bounds (50-300, BR-1.4 through BR-1.7) alongside it, reading off
+ * `countGermanWords`/`classifyEssayLength` from `lib/contracts/word-count`,
+ * the SAME functions `EssayEntryForm`'s live counter calls client-side. One
+ * shared implementation is the whole point: a guest the client told "you're
+ * fine" must never be rejected by a server running a different rule. Each
+ * failure carries a `reason` (`'tooShort'`/`'tooLong'`) in its issue
+ * `params`, not just a message string, so a caller (`route.ts`) can build a
+ * specific, non-generic response for each case rather than string-matching
+ * the message — see this schema's own test for both.
+ *
  * `MAX_ESSAY_CONTENT_CHARS` (the cap below, shared by this schema and the
  * client — see `EssayEntryForm`) and `MAX_REQUEST_BODY_BYTES` (the raw-body
  * transport guard `src/app/api/essays/route.ts` checks, against bytes,
@@ -35,6 +48,34 @@
  * exact German case.
  */
 import { z } from 'zod';
+import { countGermanWords, classifyEssayLength, isEssayLengthBlocked, MIN_ESSAY_WORDS, MAX_ESSAY_WORDS } from './word-count';
+
+/**
+ * The two length-based rejection reasons a caller can distinguish
+ * programmatically — see the `.superRefine` below, and this schema's own
+ * top-of-file comment on why `reason` travels in `params`, not just prose.
+ *
+ * Round-2 review (Architect, KAN-15): `route.ts` used to read this reason
+ * back off a zod issue with `lengthIssue.params?.reason as 'tooShort' |
+ * 'tooLong' | undefined` — a cast, sound only because of a predicate a few
+ * lines above it happening to check the same two strings. A third reason
+ * (grading, rate limiting) added to that predicate and not the cast would
+ * compile cleanly and put a value on the wire neither the route's own type
+ * nor `EssayEntryForm`'s narrowing recognised — silently dropped to the
+ * generic error client-side, the exact failure round-1 review spent a round
+ * removing (see EssayEntryForm.tsx's own history). Exporting the list here,
+ * once, and narrowing against it (not casting) in both the route and the
+ * client — `isEssayLengthRejectionReason` below — means a reason this array
+ * doesn't know about can't compile as one of the two known cases on either
+ * side of the wire; it has to be added here first.
+ */
+export const ESSAY_LENGTH_REJECTION_REASONS = ['tooShort', 'tooLong'] as const;
+export type EssayLengthRejectionReason = (typeof ESSAY_LENGTH_REJECTION_REASONS)[number];
+
+/** Narrows `value` to `EssayLengthRejectionReason` — the one place that check happens, shared by the route and the client (see the type's own comment). */
+export function isEssayLengthRejectionReason(value: unknown): value is EssayLengthRejectionReason {
+  return (ESSAY_LENGTH_REJECTION_REASONS as readonly unknown[]).includes(value);
+}
 
 /** Character cap, shared by this schema and the client (`EssayEntryForm`'s `maxLength`). Comfortably above any real essay — 300 words is roughly 2,000 characters. */
 export const MAX_ESSAY_CONTENT_CHARS = 20_000;
@@ -63,11 +104,55 @@ export const MAX_ESSAY_CONTENT_CHARS = 20_000;
 export const MAX_REQUEST_BODY_BYTES = 128_000;
 
 export const essaySubmissionRequestSchema = z.object({
+  // No `.min(1, ...)` guard here for empty content — deliberately, not an
+  // oversight. Round-3 review (consider #4): that guard used to sit here,
+  // and was unobservable — deleting it left all 259 tests green, because it
+  // genuinely cannot change any response. Empty content trims to a 0-word
+  // count, which the `.superRefine` below already rejects as `tooShort`
+  // (0 < MIN_ESSAY_WORDS), and route.ts always prefers that structured
+  // `custom` issue over a generic `.min()`/`.max()` one when both are
+  // present (see route.ts's own `lengthIssue` lookup) — so the empty case
+  // was always covered by the word floor, under both the client's and the
+  // server's checks, not by this line.
   content: z
     .string()
     .trim()
-    .min(1, 'essay content must not be empty')
-    .max(MAX_ESSAY_CONTENT_CHARS, `essay content exceeds the ${MAX_ESSAY_CONTENT_CHARS}-character safety cap`),
+    .max(MAX_ESSAY_CONTENT_CHARS, `essay content exceeds the ${MAX_ESSAY_CONTENT_CHARS}-character safety cap`)
+    // KAN-15 (BR-1.4 through BR-1.7) — the real product rule, independent of
+    // (and evaluated regardless of) the character-cap check above: zod runs
+    // every check in a ZodString's chain and collects all issues, it does
+    // not stop at the first failure, so this still runs — and still reports
+    // its own specific reason — even when `.max()` above has also failed.
+    // `reason` in `params` (not just the message text) is what lets a
+    // caller distinguish the two cases programmatically — see route.ts.
+    //
+    // Round-1 review (consider #6): this used to re-derive the two
+    // boundaries directly (`wordCount < MIN_ESSAY_WORDS` / `> MAX_ESSAY_WORDS`)
+    // instead of calling `classifyEssayLength`/`isEssayLengthBlocked` — the
+    // exact functions `word-count.ts`'s own boundary table exists to be the
+    // one place those numbers are expressed. The two agreed today, so this
+    // was latent drift, not a live bug, but it's exactly what that file's
+    // opening comment says a second implementation risks; `isEssayLengthBlocked`
+    // also had no production caller at all until this. Routing through the
+    // classifier here means the boundaries are expressed exactly once.
+    .superRefine((value, ctx) => {
+      const wordCount = countGermanWords(value);
+      const status = classifyEssayLength(wordCount);
+      if (!isEssayLengthBlocked(status)) return;
+      if (status === 'tooShort') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `essay is under the ${MIN_ESSAY_WORDS}-word minimum — too short to grade`,
+          params: { reason: 'tooShort' satisfies EssayLengthRejectionReason },
+        });
+      } else {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `essay exceeds the ${MAX_ESSAY_WORDS}-word maximum`,
+          params: { reason: 'tooLong' satisfies EssayLengthRejectionReason },
+        });
+      }
+    }),
 });
 
 export type EssaySubmissionRequest = z.infer<typeof essaySubmissionRequestSchema>;

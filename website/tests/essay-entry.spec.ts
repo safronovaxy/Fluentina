@@ -59,6 +59,25 @@ async function gotoOk(page: Page, path: string) {
   return response;
 }
 
+/**
+ * KAN-15: pads `sentence` with generic filler tokens up to `totalWords`.
+ * These fixtures used to be a single realistic sentence (well under 50
+ * words) standing in for "some essay" — none of these tests are testing
+ * length, they're testing the funnel (landing -> write -> submit). Now that
+ * a real 50-word minimum exists, that sentence has to actually clear it to
+ * keep submitting successfully, the same fix applied for the same reason
+ * across every other KAN-15 suite (see route.test.ts's own
+ * `validLengthContent` for the identical reasoning). The original sentence
+ * stays intact at the front so a failing assertion is still legible.
+ */
+function withFillerWords(sentence: string, totalWords: number): string {
+  const sentenceWordCount = sentence.trim().split(/\s+/).length;
+  const fillerNeeded = Math.max(0, totalWords - sentenceWordCount);
+  if (fillerNeeded === 0) return sentence;
+  const filler = Array.from({ length: fillerNeeded }, (_, i) => `Lorem${i}`).join(' ');
+  return `${sentence} ${filler}`;
+}
+
 interface LocaleFixture {
   readonly locale: 'en' | 'de';
   readonly landingPath: string;
@@ -77,7 +96,10 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     writePath: '/practice/write',
     ctaName: 'Start practicing',
     submitName: 'Submit essay',
-    essayText: 'This is a sample essay written directly in the browser text box for the end-to-end test.',
+    essayText: withFillerWords(
+      'This is a sample essay written directly in the browser text box for the end-to-end test.',
+      60,
+    ),
     successTitle: 'Essay received',
     writeHeading: 'Write your essay',
   },
@@ -87,7 +109,10 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     writePath: '/de/practice/write',
     ctaName: 'Jetzt üben',
     submitName: 'Aufsatz einreichen',
-    essayText: 'Dies ist ein Beispielaufsatz, der direkt im Textfeld des Browsers für den End-to-End-Test geschrieben wurde.',
+    essayText: withFillerWords(
+      'Dies ist ein Beispielaufsatz, der direkt im Textfeld des Browsers für den End-to-End-Test geschrieben wurde.',
+      60,
+    ),
     successTitle: 'Aufsatz erhalten',
     writeHeading: 'Schreibe deinen Aufsatz',
   },
