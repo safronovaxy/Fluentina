@@ -5,6 +5,7 @@ import { essaySubmissionRequestSchema, MAX_REQUEST_BODY_BYTES, isEssayLengthReje
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
 import { isCrossOriginRequest } from '@/lib/same-origin';
+import type { RejectionReason } from '@/lib/contracts/rejection-reason';
 
 /**
  * POST /api/essays — KAN-14, guest essay submission; word-count enforcement
@@ -15,6 +16,16 @@ import { isCrossOriginRequest } from '@/lib/same-origin';
  * `essaySubmissionRequestSchema` (see that schema's own comment for the
  * seam this filled) — this route's only KAN-15-specific job is turning a
  * length-based rejection into its own distinguishable message, below.
+ *
+ * KAN-31: every rejection below now carries a `reason` code alongside its
+ * (unchanged) status and message — drawn from the single union in
+ * `lib/contracts/rejection-reason.ts`, which also carries the full case for
+ * why this exists: a status-only test cannot tell one guard's rejection
+ * apart from another's, and KAN-15's own 50-word floor already proved that
+ * silently, firing ahead of this route's cookie guard for two tests that
+ * happened to use short fixtures. No status or message below changed for
+ * this story — see route.test.ts for the tests asserting `reason` on every
+ * branch.
  *
  * Never logs the request body — see the `never log essay text` rule this
  * route is built against; nothing in this file (or anything it calls)
@@ -154,7 +165,7 @@ async function readBodyWithinLimit(
 
 export async function POST(request: NextRequest) {
   if (isCrossOriginRequest(request)) {
-    return NextResponse.json({ error: 'cross-origin request rejected' }, { status: 400 });
+    return NextResponse.json({ error: 'cross-origin request rejected', reason: 'crossOrigin' satisfies RejectionReason }, { status: 400 });
   }
 
   const rawCookie = request.cookies.get(GUEST_SESSION_COOKIE_NAME)?.value;
@@ -164,7 +175,10 @@ export async function POST(request: NextRequest) {
     // this file's own comment above. Reject outright rather than resolving
     // (which would mean minting) a session for whoever this actually is —
     // and reject before the body is even read (round-2 review, see above).
-    return NextResponse.json({ error: 'missing or invalid guest session cookie' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'missing or invalid guest session cookie', reason: 'invalidSessionCookie' satisfies RejectionReason },
+      { status: 400 },
+    );
   }
 
   // Checked before the raw request body is ever read, so a caller that
@@ -175,7 +189,10 @@ export async function POST(request: NextRequest) {
   // all).
   const contentLength = Number(request.headers.get('content-length'));
   if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
-    return NextResponse.json({ error: 'request body exceeds the safety limit' }, { status: 413 });
+    return NextResponse.json(
+      { error: 'request body exceeds the safety limit', reason: 'bodyTooLarge' satisfies RejectionReason },
+      { status: 413 },
+    );
   }
 
   // A single, blunt safety cap on the raw request body — enforced against
@@ -196,14 +213,22 @@ export async function POST(request: NextRequest) {
   // deliberately far more generous than any real essay could ever need.
   const bodyResult = await readBodyWithinLimit(request, MAX_REQUEST_BODY_BYTES);
   if (!bodyResult.ok) {
-    return NextResponse.json({ error: 'request body exceeds the safety limit' }, { status: 413 });
+    // Same `reason` as the Content-Length pre-check above — a client can't
+    // act on which of the two guards actually caught it, only that its body
+    // was too large (see rejection-reason.ts's own comment on why this is
+    // one code, not two, and route.test.ts for the disjoint test coverage
+    // that stays disjoint regardless).
+    return NextResponse.json(
+      { error: 'request body exceeds the safety limit', reason: 'bodyTooLarge' satisfies RejectionReason },
+      { status: 413 },
+    );
   }
 
   let json: unknown;
   try {
     json = JSON.parse(bodyResult.text);
   } catch {
-    return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 });
+    return NextResponse.json({ error: 'invalid JSON body', reason: 'invalidJson' satisfies RejectionReason }, { status: 400 });
   }
 
   const parsed = essaySubmissionRequestSchema.safeParse(json);
@@ -258,7 +283,15 @@ export async function POST(request: NextRequest) {
     if (lengthIssue && lengthIssue.code === 'custom' && isEssayLengthRejectionReason(lengthIssue.params?.reason)) {
       return NextResponse.json({ error: lengthIssue.message, reason: lengthIssue.params?.reason }, { status: 400 });
     }
-    return NextResponse.json({ error: 'invalid essay submission' }, { status: 400 });
+    // KAN-31: everything the schema rejects that isn't one of the two length
+    // reasons above — most commonly a missing/wrong-typed `content` field —
+    // gets this one generic reason. It is deliberately not further split:
+    // nothing downstream of this route acts differently on WHICH schema
+    // constraint failed, only that the submission itself was invalid.
+    return NextResponse.json(
+      { error: 'invalid essay submission', reason: 'invalidSubmission' satisfies RejectionReason },
+      { status: 400 },
+    );
   }
 
   const { actor, reissued } = await resolveGuestSession(rawCookie);

@@ -3,6 +3,7 @@ import { resolveGuestSession } from '@/lib/domain/guest-session';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
 import { isCrossOriginRequest } from '@/lib/same-origin';
+import type { RejectionReason } from '@/lib/contracts/rejection-reason';
 
 /**
  * POST /api/guest-session — KAN-10 session issuance, the Node-runtime half.
@@ -97,6 +98,13 @@ import { isCrossOriginRequest } from '@/lib/same-origin';
  * (extracted there, once a second call site needed it, rather than
  * duplicated) -- with the same caveat carried on that module instead of
  * repeated per call site.
+ *
+ * KAN-31: both rejections below now carry a `reason` code (`crossOrigin` /
+ * `invalidSessionCookie`) alongside their unchanged status and message —
+ * the same `lib/contracts/rejection-reason.ts` union `/api/essays` draws
+ * from, since both routes' guards for these two are the exact same check.
+ * See that module's own comment for why this exists at all, and
+ * route.test.ts for the tests asserting `reason` on both branches.
  */
 export async function POST(request: NextRequest) {
   if (isCrossOriginRequest(request)) {
@@ -105,7 +113,7 @@ export async function POST(request: NextRequest) {
     // caller sends its own. See `isCrossOriginRequest`'s own doc comment
     // for exactly what counts as a mismatch, including the "absence on
     // both sides is not a match" case a round-2 review found missing here.
-    return NextResponse.json({ error: 'cross-origin request rejected' }, { status: 400 });
+    return NextResponse.json({ error: 'cross-origin request rejected', reason: 'crossOrigin' satisfies RejectionReason }, { status: 400 });
   }
 
   const raw = request.cookies.get(GUEST_SESSION_COOKIE_NAME)?.value;
@@ -114,7 +122,10 @@ export async function POST(request: NextRequest) {
     // middleware already set moments earlier on the same navigation — see
     // the comment above. Reject outright rather than resolving a session
     // (which would mean minting one) for whoever this actually is.
-    return NextResponse.json({ error: 'missing or invalid guest session cookie' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'missing or invalid guest session cookie', reason: 'invalidSessionCookie' satisfies RejectionReason },
+      { status: 400 },
+    );
   }
 
   const { actor, reissued } = await resolveGuestSession(raw);

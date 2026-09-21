@@ -277,6 +277,56 @@ describe('EssayEntryForm — a failed submission', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.tooLongError));
     expect(screen.queryByText(STRINGS.errorGeneric)).toBeNull();
   });
+
+  // KAN-31: the exhaustive `reasonMessages` map (EssayEntryForm.tsx) now
+  // covers every `RejectionReason`, not just the two length ones — the five
+  // guard-level reasons (cross-origin, an invalid session cookie, an
+  // oversized body, malformed JSON, the schema's own generic failure) all
+  // map to `strings.errorGeneric`, deliberately: this route's own tests
+  // (route.test.ts) prove none of them is reachable by this component going
+  // through the real flow, so this is the SAME text a reason-less failure
+  // already showed before this story, reached by an additional path, not a
+  // new message. Any one of these five is enough to prove the map resolves
+  // them at all rather than throwing or rendering `undefined` — a mutant
+  // that dropped a key back out of the object literal fails to compile
+  // (verified directly against `tsc --noEmit`, not asserted at runtime
+  // here), so this only needs to prove the RUNTIME behaviour for the
+  // reasons that do exist in the map today.
+  it('shows the generic error message, not a blank one, when the server rejects with a guard-level reason (e.g. "invalidSubmission") the client never triggers on its own', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'invalid essay submission', reason: 'invalidSubmission' }), { status: 400 }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    renderForm();
+
+    fillEssay(words(60));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.errorGeneric));
+  });
+
+  // Round-1 review (should-fix #3, still true after KAN-31 widened the
+  // union): a body with no recognised `reason` at all (a 500, a reason this
+  // union doesn't know about, or no JSON body) still falls back to
+  // `errorGeneric` via `isRejectionReason` rejecting it — proven already by
+  // the very first test in this describe block (a bare 500, no body). This
+  // test adds the one shape that test doesn't cover: a 400 WITH a JSON body,
+  // but naming a reason string outside the known union entirely — the exact
+  // "server and client silently disagree" shape the round-2/round-3 review
+  // history on EssaySubmissionError/reasonMessages above both exist to
+  // prevent from resolving to anything OTHER than the generic fallback.
+  it('falls back to the generic message for an unrecognised reason string, rather than rendering it or throwing', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'rate limited', reason: 'rateLimited' }), { status: 429 }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    renderForm();
+
+    fillEssay(words(60));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.errorGeneric));
+  });
 });
 
 /**
