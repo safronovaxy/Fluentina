@@ -68,7 +68,8 @@ always releasable but does not itself deploy to production.
 
 - Every PR runs `ci.yml`: install → lint → typecheck → apply database
   migrations → confirm migrations match the schema → Vitest → build →
-  Playwright against the locally built app.
+  Playwright against the locally built app, served through a self-signed
+  TLS proxy (`website/scripts/tls-proxy.mjs`) as of KAN-30 — see below.
 - **What that covers today is narrower than it sounds, but less narrow than
   it used to be.** The Playwright suite used to be the marketing regression
   suite only, with no funnel specs — KAN-14 added the first one
@@ -90,6 +91,20 @@ always releasable but does not itself deploy to production.
   excludes them by tag and they run against a live site via
   `npm run test:e2e:live`. Without that exclusion the suite is red on every PR
   for reasons unrelated to the change under review.
+- **WebKit (`webkit-desktop` — Safari's engine) gates every PR as of KAN-30,
+  alongside `chromium-desktop`/`chromium-mobile`, not only via
+  `npm run test:e2e:live` as before.** WebKit refuses to store any `Secure`
+  cookie — including the guest session's `__Host-`-prefixed one — over a
+  plain HTTP connection, even on localhost, so `ci.yml` serves the built app
+  through a throwaway self-signed TLS proxy (`website/scripts/
+  tls-proxy.mjs` + `generate-tls-cert.sh`) rather than plain HTTP; a
+  self-signed certificate is sufficient because Safari stores the cookie
+  over an encrypted connection even when the certificate itself is
+  untrusted. A local plain-HTTP `npm run test:e2e` run still skips the
+  handful of assertions that need the cookie actually stored (each spec
+  documents its own — see `tests/guest-session.spec.ts`'s own comment for
+  the underlying probe); those skips don't fire in `ci.yml` because it runs
+  through the TLS proxy, not plain HTTP.
 - `website/src/**/*.typecheck.{ts,tsx}` files (introduced in KAN-27, first
   non-`.tsx` example added in KAN-10) are a third test category alongside
   Vitest and Playwright, with `tsc --noEmit` — the `typecheck` step above —

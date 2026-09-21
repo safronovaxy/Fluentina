@@ -63,14 +63,49 @@ test.describe('T5 — Contact form', () => {
     }
   });
 
+});
+
+/**
+ * T5.6 — deliberately outside the describe block above, with no shared
+ * `beforeEach`: this test used to reuse the shared `page` fixture, which
+ * `beforeEach` had already navigated to `/contact` once, and then called
+ * `page.goto('/contact')` a SECOND time itself (the only way to have
+ * something for its own listener to observe, since it attaches after
+ * `beforeEach` already ran). That second navigation tore down the first
+ * page while a Next.js `<Link>` prefetch it had kicked off was still in
+ * flight — KAN-30 review: reproduced directly, 13 failures in 25 repeats on
+ * `webkit-desktop`, 0 in 25 on `chromium-desktop`. WebKit (not Chromium)
+ * logs the aborted fetch as a page console error ("Failed to fetch RSC
+ * payload for .../TypeError: Load failed"), which then landed on the
+ * SECOND page's listener because it resolves asynchronously, after that
+ * navigation had already started. Chromium's Falling back to browser
+ * navigation happens too, but doesn't log an error the same way.
+ *
+ * A single navigation, with the listener attached first — never a second
+ * page to tear down — doesn't reproduce it: 0 failures in 25 repeats on
+ * `webkit-desktop`. That's this test now, and it's the same shape
+ * tests/guest-flow.spec.ts's own "zero console errors" test already uses:
+ * listeners attached, then exactly one navigation, `networkidle` (not
+ * `domcontentloaded`, which fires before hydration — see that file's own
+ * comment) before asserting, and `pageerror` filtered through `isCritical`
+ * too, not just `console`, so an uncaught exception (the way CookieYes'
+ * unregistered-origin error actually arrives — see helpers/console-errors.ts)
+ * isn't silently missed.
+ */
+test.describe('T5 — Contact form (console errors)', () => {
   test('T5.6 — Form renders without console errors', async ({ page }) => {
     const errors: string[] = [];
-    page.on('console', msg => {
-      if (msg.type() === 'error') errors.push(msg.text());
+    page.on('pageerror', (err) => {
+      if (isCritical(err.message)) errors.push(err.message);
     });
-    await page.goto('/contact');
-    await page.waitForLoadState('domcontentloaded');
-    const critical = errors.filter(isCritical);
-    expect(critical).toHaveLength(0);
+    page.on('console', (msg) => {
+      if (msg.type() === 'error' && isCritical(msg.text())) errors.push(msg.text());
+    });
+
+    const response = await page.goto('/contact');
+    expect(response?.ok(), `/contact should respond 200, got ${response?.status()}`).toBe(true);
+    await page.waitForLoadState('networkidle');
+
+    expect(errors, `Console errors on /contact:\n${errors.join('\n')}`).toHaveLength(0);
   });
 });
