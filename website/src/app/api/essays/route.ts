@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { submitEssay } from '@/lib/domain/essay-submission';
 import { resolveGuestSession } from '@/lib/domain/guest-session';
+import { checkEssaySubmissionRateLimit } from '@/lib/domain/rate-limit';
 import { essaySubmissionRequestSchema, MAX_REQUEST_BODY_BYTES, isEssayLengthRejectionReason } from '@/lib/contracts/essay-submission';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
 import { isCrossOriginRequest } from '@/lib/same-origin';
+import { clientIp } from '@/lib/client-ip';
 import { rejectionResponse } from '@/lib/rejection-response';
 
 /**
@@ -130,6 +132,31 @@ import { rejectionResponse } from '@/lib/rejection-response';
  * the two cheap header checks: no bytes read off the wire, no JSON parse.
  * This also matters for KAN-25, which wants the actor in hand before the
  * route does any work on an anonymous caller's behalf.
+ *
+ * KAN-25: the rate-limit check now runs immediately after that cookie
+ * guard, ahead of the Content-Length pre-check and everything below it —
+ * exactly the same "before the body is read" placement the comment above
+ * already established for the cookie guard itself, extended one guard
+ * further. A caller that has already exhausted either cap (five
+ * submissions/hour for their session, or the looser per-IP backstop —
+ * `lib/domain/rate-limit.ts` carries the numbers and the justification for
+ * each) never costs this route the up-to-128KB buffer `readBodyWithinLimit`
+ * would otherwise allocate. It needs the branded `GuestSessionId` the cookie
+ * guard just validated, not a resolved `Actor` — `resolveGuestSession`
+ * itself still runs only where it always has, after the essay content is
+ * validated (see that call's own comment, below), so a body-content
+ * rejection still creates no `guest_sessions` row, unchanged from before
+ * this story (see route.test.ts's own "creates no guest session row" tests).
+ * `checkEssaySubmissionRateLimit` counts against the RAW, schema-validated
+ * cookie value either way: for a well-formed cookie naming an existing
+ * session that value and the eventually-resolved actor's session id are the
+ * same string, and for the one case they could ever differ (the presented
+ * id names an already-converted session — see `resolveGuestSession`'s own
+ * `SessionIdUnavailableError` handling) that request was always going to
+ * insert under a freshly minted id anyway, so counting the stale one here
+ * costs nothing real. `clientIp` (`lib/client-ip.ts`) is this route's first
+ * use of `X-Forwarded-For` — see that module's own comment for the hop-count
+ * assumption behind it.
  */
 
 /**
@@ -185,13 +212,23 @@ export async function POST(request: NextRequest) {
   }
 
   const rawCookie = request.cookies.get(GUEST_SESSION_COOKIE_NAME)?.value;
-  if (!guestSessionIdSchema.safeParse(rawCookie).success) {
+  const cookieParse = guestSessionIdSchema.safeParse(rawCookie);
+  if (!cookieParse.success) {
     // No legitimate caller on the real path reaches this without a cookie
     // middleware already set moments earlier on the same navigation — see
     // this file's own comment above. Reject outright rather than resolving
     // (which would mean minting) a session for whoever this actually is —
     // and reject before the body is even read (round-2 review, see above).
     return rejectionResponse('invalidSessionCookie', 400, 'missing or invalid guest session cookie');
+  }
+
+  // KAN-25 — see this file's own top comment for why this runs exactly
+  // here: right after the cookie guard (the earliest point a validated
+  // `GuestSessionId` exists to count against) and ahead of every
+  // body-reading step below.
+  const rateLimitOk = await checkEssaySubmissionRateLimit(cookieParse.data, clientIp(request));
+  if (!rateLimitOk) {
+    return rejectionResponse('rateLimited', 429, 'too many essay submissions — try again later');
   }
 
   // Checked before the raw request body is ever read, so a caller that
@@ -202,7 +239,20 @@ export async function POST(request: NextRequest) {
   // all).
   const contentLength = Number(request.headers.get('content-length'));
   if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
-    return rejectionResponse('bodyTooLarge', 413, 'request body exceeds the safety limit');
+    // KAN-25: a rejected oversized upload otherwise leaves its socket held
+    // open for up to five minutes — measured directly against the deployed
+    // build: 30 requests against this class of guard left 28 sockets
+    // sitting in a wait state, against zero on the no-cookie path above
+    // (which never reads the body at all) — see readBodyWithinLimit's own
+    // "cancelling here" comment below for where that measurement is also
+    // recorded. Telling the runtime to close the connection after this
+    // response, rather than holding it open for keep-alive reuse, is the
+    // verified fix: a client still mid-upload can't hold the socket for the
+    // rest of that five-minute window merely by continuing to send bytes
+    // nobody is going to read.
+    const response = rejectionResponse('bodyTooLarge', 413, 'request body exceeds the safety limit');
+    response.headers.set('Connection', 'close');
+    return response;
   }
 
   // A single, blunt safety cap on the raw request body — enforced against
@@ -227,8 +277,13 @@ export async function POST(request: NextRequest) {
     // act on which of the two guards actually caught it, only that its body
     // was too large (see rejection-reason.ts's own comment on why this is
     // one code, not two, and route.test.ts for the disjoint test coverage
-    // that stays disjoint regardless).
-    return rejectionResponse('bodyTooLarge', 413, 'request body exceeds the safety limit');
+    // that stays disjoint regardless). Same KAN-25 socket-retention fix too
+    // — see the Content-Length pre-check's own comment above for the
+    // measurement behind it; this is the guard that measurement was
+    // actually run against.
+    const response = rejectionResponse('bodyTooLarge', 413, 'request body exceeds the safety limit');
+    response.headers.set('Connection', 'close');
+    return response;
   }
 
   let json: unknown;

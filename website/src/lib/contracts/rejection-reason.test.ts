@@ -16,6 +16,7 @@ import { REJECTION_REASONS, isRejectionReason } from './rejection-reason';
 const EXPECTED_REJECTION_REASONS = [
   'crossOrigin',
   'invalidSessionCookie',
+  'rateLimited',
   'bodyTooLarge',
   'invalidJson',
   'invalidSubmission',
@@ -24,7 +25,7 @@ const EXPECTED_REJECTION_REASONS = [
 ] as const;
 
 describe('rejection-reason — the KAN-31 union every first-party rejection draws its reason from', () => {
-  it('is exactly this fixed set of seven reasons — nothing missing, nothing extra, nothing renamed', () => {
+  it('is exactly this fixed set of eight reasons — nothing missing, nothing extra, nothing renamed', () => {
     expect([...REJECTION_REASONS].sort()).toEqual([...EXPECTED_REJECTION_REASONS].sort());
   });
 
@@ -36,9 +37,14 @@ describe('rejection-reason — the KAN-31 union every first-party rejection draw
   // `essay-submission.ts`'s own history (KAN-15, round-2) already closed
   // once for the two length reasons: a value this union doesn't know about
   // must never narrow as if it were a real reason, on either side of the
-  // wire.
-  it('rejects a value that looks plausible but is not in the union — e.g. a rate-limit reason KAN-25 has not added yet', () => {
-    expect(isRejectionReason('rateLimited')).toBe(false);
+  // wire. KAN-25: this used to name 'rateLimited' as its own example of a
+  // plausible-but-absent reason — true until this story added it for real,
+  // above, which would have made this assertion start failing for the RIGHT
+  // reason (a real reason recognised where the test expects `false`) rather
+  // than the wrong one. Swapped for a still-absent, still-plausible string
+  // so the guard keeps testing what its own title claims.
+  it('rejects a value that looks plausible but is not in the union — e.g. a grading-failure reason no story has added yet', () => {
+    expect(isRejectionReason('gradingFailed')).toBe(false);
   });
 
   it('rejects non-string values, undefined, and null', () => {

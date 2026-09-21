@@ -58,6 +58,7 @@ export interface EssayEntryFormStrings {
   readonly successTitle: string;
   readonly successBody: string;
   readonly errorGeneric: string;
+  readonly rateLimitedError: string;
 }
 
 export interface EssayEntryFormProps {
@@ -245,7 +246,7 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
   // KAN-31: `reason` widened from the two length codes to the full
   // `RejectionReason` union (see EssaySubmissionError's own comment above),
   // so this map is now `Record<RejectionReason, string>` — the same
-  // compile-or-else mechanism, just over more keys. Four of the five
+  // compile-or-else mechanism, just over more keys. Four of the six
   // guard-level reasons below (cross-origin, an oversized body, malformed
   // JSON, and the schema's own generic failure) are not reachable by a real
   // guest going through this form at all: the fetch is same-origin by
@@ -268,15 +269,23 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
   // KAN-32 (already opened) is the guest-facing fix; this story does not
   // widen scope to add one.
   //
-  // A reason that DOES need its own guest-facing copy (KAN-25's rate-limit
-  // reason, most likely, and KAN-32 for this one) gets a dedicated string
-  // the same way `tooShortError`/`tooLongError` already have one, at the
-  // point it's added — not invented speculatively here.
+  // KAN-25: `rateLimited` IS reachable by a real guest through this exact
+  // form — unlike the four guard-level reasons above, hitting either cap
+  // (five submissions an hour, or the looser per-IP backstop) needs no
+  // bypass at all, just normal, repeated use of this component. That is
+  // exactly the acceptance criterion this dedicated message exists to
+  // satisfy: "a guest who exceeds either cap sees a clear, non-cryptic
+  // message" — `errorGeneric`'s "please try again" would be actively
+  // misleading here (immediately retrying is the one thing guaranteed not
+  // to work), so this gets its own string the same way
+  // `tooShortError`/`tooLongError` already do, rather than falling back to
+  // the placeholder the way `invalidSessionCookie` still does above.
   const reasonMessages: Record<RejectionReason, string> = {
     tooShort: strings.tooShortError,
     tooLong: strings.tooLongError,
     crossOrigin: strings.errorGeneric,
     invalidSessionCookie: strings.errorGeneric,
+    rateLimited: strings.rateLimitedError,
     bodyTooLarge: strings.errorGeneric,
     invalidJson: strings.errorGeneric,
     invalidSubmission: strings.errorGeneric,

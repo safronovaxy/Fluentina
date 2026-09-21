@@ -42,7 +42,8 @@
         "submittingCta": "Submitting...",
         "successTitle": "Essay received",
         "successBody": "Your essay has been submitted. We're working on the next steps of the guest flow.",
-        "errorGeneric": "Something went wrong submitting your essay. Please try again."
+        "errorGeneric": "Something went wrong submitting your essay. Please try again.",
+        "rateLimitedError": "You've reached the submission limit for now — please wait a bit before submitting another essay."
       }
     },
     "localeSwitcher": {

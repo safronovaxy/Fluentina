@@ -15,6 +15,13 @@
       "when": 1789367858649,
       "tag": "0001_kan10_fk_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790030825146,
+      "tag": "0002_kan25_rate_limit_counters",
+      "breakpoints": true
     }
   ]
 }
