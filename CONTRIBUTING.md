@@ -111,6 +111,20 @@ always releasable but does not itself deploy to production.
   not plain HTTP — and in `ci.yml` specifically, an unencrypted `BASE_URL`
   is now a hard failure rather than a silent skip (`playwright.config.ts`),
   so that drift can't recur unnoticed.
+- **"WebKit gates every PR" does not mean every test under `webkit-desktop`
+  ran in a browser.** `seo.spec.ts`, `redirects.spec.ts`, `routing.spec.ts`,
+  and `sitemap.spec.ts` take only the `request` fixture and never open a
+  `page`, so Playwright never launches a browser engine for them at all —
+  not WebKit, not Chromium, none — regardless of which project lists them.
+  That's 94 of `webkit-desktop`'s 187 reported tests (verified with
+  `npx playwright test --project=webkit-desktop --grep-invert "@cms" --list`),
+  roughly half the project's count, contributing nothing to real Safari-engine
+  coverage. `routing.spec.ts` says so in its own comment ("Only run in one
+  project — this is pure HTTP, no browser rendering needed"); the same
+  reasoning applies to the other three. An engine-sensitive assertion added
+  to any of those four specs is not exercised by this gate — `webkit-desktop`
+  staying green proves nothing about it — until the spec actually opens a
+  `page`.
 - `website/src/**/*.typecheck.{ts,tsx}` files (introduced in KAN-27, first
   non-`.tsx` example added in KAN-10) are a third test category alongside
   Vitest and Playwright, with `tsc --noEmit` — the `typecheck` step above —

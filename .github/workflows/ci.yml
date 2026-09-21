@@ -229,6 +229,22 @@ jobs:
       # is now a required project here, not an optional local-only extra: it's
       # what closes the gap the story exists for (Safari, unexercised by any
       # PR gate before this).
+      #
+      # No `--project` flags here (KAN-30 round-2 review, Test Lead): the
+      # project list comes from playwright.config.ts alone, which is where
+      # the guard that stops `--grep-invert "@cms"` from re-admitting CMS
+      # specs *also* lives (the config's own `projects` array). Naming
+      # chromium-desktop/chromium-mobile/webkit-desktop explicitly here meant
+      # a future edit or merge resolution could drop the `webkit-desktop` flag
+      # and the job would stay green with zero Safari coverage — no error,
+      # nothing — the exact silent-drift shape the throw two steps up exists
+      # to close for the protocol, just one layer higher: for the project
+      # itself instead of the connection it runs over. Dropping Safari now
+      # requires editing playwright.config.ts, same file, so both guards sit
+      # together. Verified this changes nothing about what runs: config's
+      # `projects` array is exactly these three and no more, and
+      # `--list --grep-invert "@cms"` reports the identical 561 tests with
+      # and without the flags.
       - name: E2E (Playwright, no CMS)
         working-directory: website
         env:
@@ -237,7 +253,7 @@ jobs:
           # This job owns the server lifecycle (Start/Stop steps above), so
           # Playwright must not also try to start one — see playwright.config.ts.
           PLAYWRIGHT_EXTERNAL_SERVER: '1'
-        run: npx playwright test --project=chromium-desktop --project=chromium-mobile --project=webkit-desktop --grep-invert "@cms"
+        run: npx playwright test --grep-invert "@cms"
 
       - name: Stop TLS proxy
         if: always()

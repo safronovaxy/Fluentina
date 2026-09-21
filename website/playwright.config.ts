@@ -131,6 +131,13 @@ export default defineConfig({
     },
     {
       name: 'webkit-desktop',
+      // This project's own reported test count overstates real Safari
+      // coverage: seo.spec.ts, redirects.spec.ts, routing.spec.ts, and
+      // sitemap.spec.ts (94 of 187 tests under this project, per
+      // `--project=webkit-desktop --grep-invert "@cms" --list`) take only
+      // the `request` fixture and never open a `page`, so no browser engine
+      // launches for them here — not WebKit, not Chromium, none. See
+      // CONTRIBUTING.md's "WebKit gates every PR" bullet for the full note.
       use: { ...devices['Desktop Safari'] },
     },
   ],
