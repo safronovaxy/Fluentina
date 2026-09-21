@@ -279,19 +279,24 @@ describe('EssayEntryForm — a failed submission', () => {
   });
 
   // KAN-31: the exhaustive `reasonMessages` map (EssayEntryForm.tsx) now
-  // covers every `RejectionReason`, not just the two length ones — the five
+  // covers every `RejectionReason`, not just the two length ones — all five
   // guard-level reasons (cross-origin, an invalid session cookie, an
-  // oversized body, malformed JSON, the schema's own generic failure) all
-  // map to `strings.errorGeneric`, deliberately: this route's own tests
-  // (route.test.ts) prove none of them is reachable by this component going
-  // through the real flow, so this is the SAME text a reason-less failure
-  // already showed before this story, reached by an additional path, not a
-  // new message. Any one of these five is enough to prove the map resolves
-  // them at all rather than throwing or rendering `undefined` — a mutant
-  // that dropped a key back out of the object literal fails to compile
-  // (verified directly against `tsc --noEmit`, not asserted at runtime
-  // here), so this only needs to prove the RUNTIME behaviour for the
-  // reasons that do exist in the map today.
+  // oversized body, malformed JSON, the schema's own generic failure) map
+  // to `strings.errorGeneric`, deliberately. Four of the five (everything
+  // but `invalidSessionCookie`) are not reachable by this component going
+  // through the real flow — see EssayEntryForm.tsx's own comment on the map
+  // for `invalidSessionCookie`'s exception (round-1 review: a comment here
+  // used to claim all five were unreachable on the grounds the cookie is
+  // "mandatory and browser-attached", which the submission route's own
+  // comment already contradicts — KAN-32 is the guest-facing fix, out of
+  // scope here). Either way this is the SAME `errorGeneric` text a
+  // reason-less failure already showed before this story, reached by an
+  // additional path, not a new message. Any one of these five is enough to
+  // prove the map resolves them at all rather than throwing or rendering
+  // `undefined` — a mutant that dropped a key back out of the object
+  // literal fails to compile (verified directly against `tsc --noEmit`, not
+  // asserted at runtime here), so this only needs to prove the RUNTIME
+  // behaviour for the reasons that do exist in the map today.
   it('shows the generic error message, not a blank one, when the server rejects with a guard-level reason (e.g. "invalidSubmission") the client never triggers on its own', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ error: 'invalid essay submission', reason: 'invalidSubmission' }), { status: 400 }),

@@ -244,8 +244,15 @@ describe('POST /api/guest-session — KAN-31: guard rejections never leak the se
     const validCookie = generateGuestSessionId();
 
     const response = await POST(postWithCookie(validCookie, { origin: 'https://evil.example' }));
-    const rawBody = JSON.stringify(await response.json());
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
 
+    // Round-1 review: neither assertion below is reachable by a guard that
+    // never runs — before this fix, a success body (which asserts nothing
+    // here) or a later guard returning the same shape both passed silently.
+    // Status plus the specific reason is what proves THIS guard fired.
+    expect(response.status).toBe(400);
+    expect(body.reason).toBe('crossOrigin');
     expect(rawBody).not.toContain(validCookie);
   });
 
@@ -253,8 +260,12 @@ describe('POST /api/guest-session — KAN-31: guard rejections never leak the se
     const forged = 'attacker-supplied-value-that-must-not-echo';
 
     const response = await POST(postWithCookie(forged));
-    const rawBody = JSON.stringify(await response.json());
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
 
+    // See the cross-origin test's own comment above.
+    expect(response.status).toBe(400);
+    expect(body.reason).toBe('invalidSessionCookie');
     expect(rawBody).not.toContain(forged);
   });
 });

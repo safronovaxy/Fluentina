@@ -1,20 +1,34 @@
 import { describe, expect, it } from 'vitest';
-import { GUARD_REJECTION_REASONS, REJECTION_REASONS, isRejectionReason } from './rejection-reason';
-import { ESSAY_LENGTH_REJECTION_REASONS } from './essay-submission';
+import { REJECTION_REASONS, isRejectionReason } from './rejection-reason';
+
+/**
+ * Round-1 review: the first two tests below used to be built from the
+ * module's own source arrays (`GUARD_REJECTION_REASONS.length +
+ * ESSAY_LENGTH_REJECTION_REASONS.length`, and `it.each(REJECTION_REASONS)`
+ * iterating that same array) — every one of them held by construction, no
+ * matter what the union actually contained, and only a rewrite of the
+ * module itself could fail them. This literal list is the independent
+ * check: pinned here, by hand, the same wire strings both route test
+ * suites already pin individually — a reason silently renamed, dropped, or
+ * added without updating this list now fails HERE, not just wherever a
+ * route test happens to notice.
+ */
+const EXPECTED_REJECTION_REASONS = [
+  'crossOrigin',
+  'invalidSessionCookie',
+  'bodyTooLarge',
+  'invalidJson',
+  'invalidSubmission',
+  'tooShort',
+  'tooLong',
+] as const;
 
 describe('rejection-reason — the KAN-31 union every first-party rejection draws its reason from', () => {
-  it('is the guard reasons plus the two length reasons, with nothing missing and nothing duplicated', () => {
-    expect(REJECTION_REASONS).toHaveLength(GUARD_REJECTION_REASONS.length + ESSAY_LENGTH_REJECTION_REASONS.length);
-    expect(new Set(REJECTION_REASONS).size).toBe(REJECTION_REASONS.length);
-    for (const reason of GUARD_REJECTION_REASONS) {
-      expect(REJECTION_REASONS).toContain(reason);
-    }
-    for (const reason of ESSAY_LENGTH_REJECTION_REASONS) {
-      expect(REJECTION_REASONS).toContain(reason);
-    }
+  it('is exactly this fixed set of seven reasons — nothing missing, nothing extra, nothing renamed', () => {
+    expect([...REJECTION_REASONS].sort()).toEqual([...EXPECTED_REJECTION_REASONS].sort());
   });
 
-  it.each(REJECTION_REASONS)('isRejectionReason recognises "%s"', (reason) => {
+  it.each(EXPECTED_REJECTION_REASONS)('isRejectionReason recognises "%s"', (reason) => {
     expect(isRejectionReason(reason)).toBe(true);
   });
 

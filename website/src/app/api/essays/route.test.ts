@@ -981,9 +981,16 @@ describe('POST /api/essays — KAN-31: guard-level rejections never leak essay c
     const response = await POST(
       postEssay({ content: `${secretToken} ${wordsContent(60)}` }, sessionId, { origin: 'https://evil.example' }),
     );
-    const rawBody = JSON.stringify(await response.json());
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
 
     expect(response.status).toBe(400);
+    // Round-1 review: a status-and-absence assertion alone survives a later
+    // guard (e.g. a rate limiter) returning the same 400 ahead of THIS one —
+    // the test would keep passing without ever exercising the cross-origin
+    // branch its own title names. Asserting the specific reason is what
+    // still fails once this guard stops being the one that actually fired.
+    expect(body.reason).toBe('crossOrigin');
     expect(rawBody).not.toContain(secretToken);
     expect(rawBody).not.toContain(sessionId);
   });
@@ -993,9 +1000,13 @@ describe('POST /api/essays — KAN-31: guard-level rejections never leak essay c
     const secretToken = 'EinVierterToken_NieBeiEinemUngueltigenCookie';
 
     const response = await POST(postEssay({ content: `${secretToken} ${wordsContent(60)}` }, forged));
-    const rawBody = JSON.stringify(await response.json());
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
 
     expect(response.status).toBe(400);
+    // See the cross-origin test's own comment above — the reason is what
+    // proves this branch, specifically, is what fired.
+    expect(body.reason).toBe('invalidSessionCookie');
     expect(rawBody).not.toContain(secretToken);
     expect(rawBody).not.toContain(forged);
   });
@@ -1006,9 +1017,11 @@ describe('POST /api/essays — KAN-31: guard-level rejections never leak essay c
     const oversizedContent = `${secretToken} ${'a'.repeat(MAX_REQUEST_BODY_BYTES)}`;
 
     const response = await POST(postEssay({ content: oversizedContent }, sessionId));
-    const rawBody = JSON.stringify(await response.json());
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
 
     expect(response.status).toBe(413);
+    expect(body.reason).toBe('bodyTooLarge');
     expect(rawBody).not.toContain(secretToken);
     expect(rawBody).not.toContain(sessionId);
   });
@@ -1019,9 +1032,13 @@ describe('POST /api/essays — KAN-31: guard-level rejections never leak essay c
     const secretToken = 'EinSechsterToken_NieBeiUngueltigemJson';
 
     const response = await POST(postRaw(`{ "content": "${secretToken}" this is not valid json`, sessionId));
-    const rawBody = JSON.stringify(await response.json());
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
 
     expect(response.status).toBe(400);
+    // See the cross-origin test's own comment above — the reason is what
+    // proves this branch, specifically, is what fired.
+    expect(body.reason).toBe('invalidJson');
     expect(rawBody).not.toContain(secretToken);
     expect(rawBody).not.toContain(sessionId);
   });
@@ -1032,9 +1049,13 @@ describe('POST /api/essays — KAN-31: guard-level rejections never leak essay c
     const secretToken = 'EinSiebterToken_NieBeiEinerFehlendenContentEigenschaft';
 
     const response = await POST(postEssay({ content: 123, note: secretToken }, sessionId));
-    const rawBody = JSON.stringify(await response.json());
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
 
     expect(response.status).toBe(400);
+    // See the cross-origin test's own comment above — the reason is what
+    // proves this branch, specifically, is what fired.
+    expect(body.reason).toBe('invalidSubmission');
     expect(rawBody).not.toContain(secretToken);
     expect(rawBody).not.toContain(sessionId);
   });

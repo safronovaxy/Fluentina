@@ -245,22 +245,33 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
   // KAN-31: `reason` widened from the two length codes to the full
   // `RejectionReason` union (see EssaySubmissionError's own comment above),
   // so this map is now `Record<RejectionReason, string>` — the same
-  // compile-or-else mechanism, just over more keys. The five guard-level
-  // reasons below (cross-origin, an invalid session cookie, an oversized
-  // body, malformed JSON, and the schema's own generic failure) are not
-  // reachable by a real guest going through this form at all: the cookie is
-  // mandatory and browser-attached, the fetch is same-origin by
+  // compile-or-else mechanism, just over more keys. Four of the five
+  // guard-level reasons below (cross-origin, an oversized body, malformed
+  // JSON, and the schema's own generic failure) are not reachable by a real
+  // guest going through this form at all: the fetch is same-origin by
   // construction, the body is `JSON.stringify`'d here, and `isValid` above
   // already blocks submission for anything the schema would reject on
   // shape. They exist only for a caller that bypasses this component
-  // entirely (route.test.ts proves the server rejects them independently),
-  // so they deliberately map to the exact same `errorGeneric` text a
-  // reason-less failure already showed before this story — not a new
-  // message, just the existing one reached by an additional, equally
-  // generic path. A reason that DOES need its own guest-facing copy (KAN-25's
-  // rate-limit reason, most likely) gets a dedicated string the same way
-  // `tooShortError`/`tooLongError` already have one, at the point it's
-  // added — not invented speculatively here.
+  // entirely (route.test.ts proves the server rejects them independently).
+  //
+  // Round-1 review (both reviewers): `invalidSessionCookie` is NOT in that
+  // set, and a comment here (and in EssayEntryForm.test.tsx, and in this
+  // story's own PR description) used to claim it was, on the grounds that
+  // "the cookie is mandatory and browser-attached" — which this route's own
+  // comment (`src/app/api/essays/route.ts`) already contradicts: a browser
+  // refusing to store the cookie at all (cookies blocked for the site, or
+  // cleared between page load and submit) reaches this branch for real,
+  // having written up to three hundred words first. No dedicated
+  // guest-facing message exists for it yet — deliberately, not by
+  // oversight; `errorGeneric` below is a placeholder, not a considered
+  // choice, and "try again" is advice that cannot work for that guest.
+  // KAN-32 (already opened) is the guest-facing fix; this story does not
+  // widen scope to add one.
+  //
+  // A reason that DOES need its own guest-facing copy (KAN-25's rate-limit
+  // reason, most likely, and KAN-32 for this one) gets a dedicated string
+  // the same way `tooShortError`/`tooLongError` already have one, at the
+  // point it's added — not invented speculatively here.
   const reasonMessages: Record<RejectionReason, string> = {
     tooShort: strings.tooShortError,
     tooLong: strings.tooLongError,
