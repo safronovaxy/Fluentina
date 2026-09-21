@@ -91,6 +91,14 @@ test.describe('T5 — Contact form', () => {
  * too, not just `console`, so an uncaught exception (the way CookieYes'
  * unregistered-origin error actually arrives — see helpers/console-errors.ts)
  * isn't silently missed.
+ *
+ * KAN-30 round-1 review (should-fix): moving this out of the describe block
+ * above to drop the double navigation also dropped the shared beforeEach's
+ * `expect(page.locator('form')).toBeVisible()` assertion. The test is named
+ * for the form rendering, and had come to assert only a successful response
+ * and no console errors — a page that returns 200 and renders no form at
+ * all would still pass it. Restored below, after the load wait, without
+ * reintroducing a second navigation.
  */
 test.describe('T5 — Contact form (console errors)', () => {
   test('T5.6 — Form renders without console errors', async ({ page }) => {
@@ -105,6 +113,7 @@ test.describe('T5 — Contact form (console errors)', () => {
     const response = await page.goto('/contact');
     expect(response?.ok(), `/contact should respond 200, got ${response?.status()}`).toBe(true);
     await page.waitForLoadState('networkidle');
+    await expect(page.locator('form')).toBeVisible();
 
     expect(errors, `Console errors on /contact:\n${errors.join('\n')}`).toHaveLength(0);
   });

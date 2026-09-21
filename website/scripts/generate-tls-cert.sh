@@ -23,7 +23,6 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
   -keyout "$OUT_DIR/localhost-key.pem" \
   -out "$OUT_DIR/localhost-cert.pem" \
   -subj "/CN=localhost" \
-  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
-  2>/dev/null
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 
 echo "Generated $OUT_DIR/localhost-cert.pem and $OUT_DIR/localhost-key.pem (self-signed, 1 day)"

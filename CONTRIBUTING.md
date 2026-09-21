@@ -93,18 +93,24 @@ always releasable but does not itself deploy to production.
   for reasons unrelated to the change under review.
 - **WebKit (`webkit-desktop` — Safari's engine) gates every PR as of KAN-30,
   alongside `chromium-desktop`/`chromium-mobile`, not only via
-  `npm run test:e2e:live` as before.** WebKit refuses to store any `Secure`
-  cookie — including the guest session's `__Host-`-prefixed one — over a
-  plain HTTP connection, even on localhost, so `ci.yml` serves the built app
-  through a throwaway self-signed TLS proxy (`website/scripts/
-  tls-proxy.mjs` + `generate-tls-cert.sh`) rather than plain HTTP; a
-  self-signed certificate is sufficient because Safari stores the cookie
-  over an encrypted connection even when the certificate itself is
-  untrusted. A local plain-HTTP `npm run test:e2e` run still skips the
-  handful of assertions that need the cookie actually stored (each spec
-  documents its own — see `tests/guest-session.spec.ts`'s own comment for
-  the underlying probe); those skips don't fire in `ci.yml` because it runs
-  through the TLS proxy, not plain HTTP.
+  `npm run test:e2e:live` as before. This is desktop Safari only — Mobile
+  Safari has no project and is not covered by this gate**, deliberately
+  (round-1 review): the defect this story closes is engine-level and
+  identical on both, so desktop coverage closes it; a mobile follow-up is a
+  separate ticket. WebKit refuses to store any `Secure` cookie — including
+  the guest session's `__Host-`-prefixed one — over a plain HTTP connection,
+  even on localhost, so `ci.yml` serves the built app through a throwaway
+  self-signed TLS proxy (`website/scripts/tls-proxy.mjs` +
+  `generate-tls-cert.sh`) rather than plain HTTP; a self-signed certificate
+  is sufficient because Safari stores the cookie over an encrypted
+  connection even when the certificate itself is untrusted. A local
+  plain-HTTP `npm run test:e2e` run still skips the handful of assertions
+  that need the cookie actually stored (each spec documents its own — see
+  `tests/guest-session.spec.ts`'s own comment for the underlying probe);
+  those skips don't fire in `ci.yml` because it runs through the TLS proxy,
+  not plain HTTP — and in `ci.yml` specifically, an unencrypted `BASE_URL`
+  is now a hard failure rather than a silent skip (`playwright.config.ts`),
+  so that drift can't recur unnoticed.
 - `website/src/**/*.typecheck.{ts,tsx}` files (introduced in KAN-27, first
   non-`.tsx` example added in KAN-10) are a third test category alongside
   Vitest and Playwright, with `tsc --noEmit` — the `typecheck` step above —
