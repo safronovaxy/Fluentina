@@ -41,13 +41,9 @@ import { useMutation } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { WordCountLabel } from '@/components/guest/chrome/WordCountLabel';
-import {
-  essaySubmissionRequestSchema,
-  MAX_ESSAY_CONTENT_CHARS,
-  isEssayLengthRejectionReason,
-  type EssayLengthRejectionReason,
-} from '@/lib/contracts/essay-submission';
+import { essaySubmissionRequestSchema, MAX_ESSAY_CONTENT_CHARS } from '@/lib/contracts/essay-submission';
 import { countGermanWords, classifyEssayLength } from '@/lib/contracts/word-count';
+import { isRejectionReason, type RejectionReason } from '@/lib/contracts/rejection-reason';
 
 export interface EssayEntryFormStrings {
   readonly textareaLabel: string;
@@ -96,11 +92,18 @@ interface SubmitEssayResponse {
  * `isEssayLengthRejectionReason` narrowing function) from
  * `lib/contracts/essay-submission` — the layer this pair of literals always
  * actually belonged to, being the schema's own `reason` values.
+ *
+ * KAN-31: widened again, the same way — `reason` is now the FULL
+ * `RejectionReason` union (`lib/contracts/rejection-reason.ts`), not just
+ * the two length ones, since every rejection this route can return now
+ * carries one. `isRejectionReason` (that module's own type guard) replaces
+ * `isEssayLengthRejectionReason` below for the same cast-vs-narrow reason
+ * the round-2 note above already made once.
  */
 class EssaySubmissionError extends Error {
-  readonly reason: EssayLengthRejectionReason | undefined;
+  readonly reason: RejectionReason | undefined;
 
-  constructor(status: number, reason: EssayLengthRejectionReason | undefined) {
+  constructor(status: number, reason: RejectionReason | undefined) {
     super(`essay submission failed with status ${status}`);
     this.reason = reason;
   }
@@ -118,11 +121,11 @@ async function postEssay(content: string): Promise<SubmitEssayResponse> {
     // for instance), so this is deliberately best-effort and swallows a
     // parse failure rather than letting it replace the real HTTP-status
     // error below.
-    let reason: EssayLengthRejectionReason | undefined;
+    let reason: RejectionReason | undefined;
     try {
       const body: unknown = await response.json();
       const candidate = (body as { reason?: unknown } | null)?.reason;
-      if (isEssayLengthRejectionReason(candidate)) reason = candidate;
+      if (isRejectionReason(candidate)) reason = candidate;
     } catch {
       // Not JSON, or no body at all — reason stays undefined and the
       // generic error message is shown, same as before this reason-mapping
@@ -238,9 +241,45 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
   // reason union ever grows, this object literal fails to COMPILE until
   // someone supplies that reason's message, rather than silently falling
   // back at runtime.
-  const reasonMessages: Record<EssayLengthRejectionReason, string> = {
+  //
+  // KAN-31: `reason` widened from the two length codes to the full
+  // `RejectionReason` union (see EssaySubmissionError's own comment above),
+  // so this map is now `Record<RejectionReason, string>` — the same
+  // compile-or-else mechanism, just over more keys. Four of the five
+  // guard-level reasons below (cross-origin, an oversized body, malformed
+  // JSON, and the schema's own generic failure) are not reachable by a real
+  // guest going through this form at all: the fetch is same-origin by
+  // construction, the body is `JSON.stringify`'d here, and `isValid` above
+  // already blocks submission for anything the schema would reject on
+  // shape. They exist only for a caller that bypasses this component
+  // entirely (route.test.ts proves the server rejects them independently).
+  //
+  // Round-1 review (both reviewers): `invalidSessionCookie` is NOT in that
+  // set, and a comment here (and in EssayEntryForm.test.tsx, and in this
+  // story's own PR description) used to claim it was, on the grounds that
+  // "the cookie is mandatory and browser-attached" — which this route's own
+  // comment (`src/app/api/essays/route.ts`) already contradicts: a browser
+  // refusing to store the cookie at all (cookies blocked for the site, or
+  // cleared between page load and submit) reaches this branch for real,
+  // having written up to three hundred words first. No dedicated
+  // guest-facing message exists for it yet — deliberately, not by
+  // oversight; `errorGeneric` below is a placeholder, not a considered
+  // choice, and "try again" is advice that cannot work for that guest.
+  // KAN-32 (already opened) is the guest-facing fix; this story does not
+  // widen scope to add one.
+  //
+  // A reason that DOES need its own guest-facing copy (KAN-25's rate-limit
+  // reason, most likely, and KAN-32 for this one) gets a dedicated string
+  // the same way `tooShortError`/`tooLongError` already have one, at the
+  // point it's added — not invented speculatively here.
+  const reasonMessages: Record<RejectionReason, string> = {
     tooShort: strings.tooShortError,
     tooLong: strings.tooLongError,
+    crossOrigin: strings.errorGeneric,
+    invalidSessionCookie: strings.errorGeneric,
+    bodyTooLarge: strings.errorGeneric,
+    invalidJson: strings.errorGeneric,
+    invalidSubmission: strings.errorGeneric,
   };
   const submissionError = mutation.error instanceof EssaySubmissionError ? mutation.error : undefined;
   const submissionErrorMessage = submissionError?.reason

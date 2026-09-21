@@ -45,23 +45,29 @@ describe('POST /api/guest-session — missing or malformed cookie', () => {
   // test below used to assert which one actually fired, only the shared
   // status code. A mutant that swapped this branch's message for the
   // cross-origin one's (or vice versa) left both suites green.
-  it('rejects a request with no cookie at all — 400, "missing or invalid guest session cookie", no session resolved, no row created', async () => {
+  it('rejects a request with no cookie at all — 400, "missing or invalid guest session cookie", reason "invalidSessionCookie", no session resolved, no row created', async () => {
     const response = await POST(postWithCookie());
-    const body: { error: string } = await response.json();
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
     expect(body.error).toBe('missing or invalid guest session cookie');
+    // KAN-31: `reason` is what tells this guard's 400 apart from the
+    // cross-origin guard's own 400 below — both share the status, and
+    // nothing here proved which one actually fired before this assertion
+    // existed.
+    expect(body.reason).toBe('invalidSessionCookie');
     expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
   });
 
-  it('rejects a malformed or forged cookie the same way — 400, "missing or invalid guest session cookie", and the forged value never becomes a row', async () => {
+  it('rejects a malformed or forged cookie the same way — 400, "missing or invalid guest session cookie", reason "invalidSessionCookie", and the forged value never becomes a row', async () => {
     const forged = 'attacker-supplied-value';
 
     const response = await POST(postWithCookie(forged));
-    const body: { error: string } = await response.json();
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
     expect(body.error).toBe('missing or invalid guest session cookie');
+    expect(body.reason).toBe('invalidSessionCookie');
     const forgedActor = { kind: 'guest' as const, sessionId: forged as GuestSessionId };
     expect(await getGuestSessionById(forgedActor, forged)).toBeNull();
   });
@@ -165,14 +171,18 @@ describe('POST /api/guest-session — cross-origin requests', () => {
   // well-formed FOR, specifically so a 400 here can only be the cross-origin
   // guard. Asserting the exact message is what makes that true rather than
   // merely intended.
-  it('rejects a mismatched Origin header with 400, "cross-origin request rejected", even with an otherwise valid cookie, and creates no row', async () => {
+  it('rejects a mismatched Origin header with 400, "cross-origin request rejected", reason "crossOrigin", even with an otherwise valid cookie, and creates no row', async () => {
     const validCookie = generateGuestSessionId();
 
     const response = await POST(postWithCookie(validCookie, { origin: 'https://evil.example' }));
-    const body: { error: string } = await response.json();
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
     expect(body.error).toBe('cross-origin request rejected');
+    // KAN-31: proves this 400 is the cross-origin guard, not the cookie
+    // guard — this fixture's cookie is deliberately well-formed FOR that
+    // reason (see this describe block's own comment above).
+    expect(body.reason).toBe('crossOrigin');
     expect(await getGuestSessionById({ kind: 'guest', sessionId: validCookie }, validCookie)).toBeNull();
   });
 
@@ -217,5 +227,45 @@ describe('POST /api/guest-session — preflight surface', () => {
     const routeModule: Record<string, unknown> = await import('./route');
 
     expect(routeModule.OPTIONS).toBeUndefined();
+  });
+});
+
+/**
+ * KAN-31 — "do not let a reason leak anything", extended to this route's own
+ * two guards, the same guarantee `/api/essays`' equivalent block
+ * (route.test.ts) pins for all five of its own. `reason` is a fixed string
+ * off `REJECTION_REASONS`, never built from anything request-specific, so
+ * there is no path today that could leak through it — these tests exist so
+ * a later change that started echoing request detail into a rejection body
+ * fails immediately.
+ */
+describe('POST /api/guest-session — KAN-31: guard rejections never leak the session id', () => {
+  it('a cross-origin rejection does not echo the (rejected) cookie value into the response body', async () => {
+    const validCookie = generateGuestSessionId();
+
+    const response = await POST(postWithCookie(validCookie, { origin: 'https://evil.example' }));
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
+
+    // Round-1 review: neither assertion below is reachable by a guard that
+    // never runs — before this fix, a success body (which asserts nothing
+    // here) or a later guard returning the same shape both passed silently.
+    // Status plus the specific reason is what proves THIS guard fired.
+    expect(response.status).toBe(400);
+    expect(body.reason).toBe('crossOrigin');
+    expect(rawBody).not.toContain(validCookie);
+  });
+
+  it('an invalid-session-cookie rejection does not echo the forged cookie value into the response body', async () => {
+    const forged = 'attacker-supplied-value-that-must-not-echo';
+
+    const response = await POST(postWithCookie(forged));
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
+
+    // See the cross-origin test's own comment above.
+    expect(response.status).toBe(400);
+    expect(body.reason).toBe('invalidSessionCookie');
+    expect(rawBody).not.toContain(forged);
   });
 });
