@@ -139,11 +139,39 @@ export const essays = fluentinaSchema.table(
  *
  * `bucketKey` alone is not unique — the same key recurs every window, which
  * is the whole point (yesterday's count must not suppress today's) — so the
- * primary key is the pair. Rows are never deleted by this story: a bucket
- * this table has ever seen accumulates one row per window forever. Left for
- * a follow-up (see the PR description) — a periodic sweep of rows whose
- * `window_start` is more than a handful of windows old, the same shape as
- * the retention sweep `guest_sessions`' own schema comment already defers.
+ * primary key is the pair.
+ *
+ * Round-1 review (Architect, blocking): rows used to be "never deleted by
+ * this story", deferred the same way as `guest_sessions`' own 30-day sweep.
+ * Two problems with that, both closed by the same fix: `bucketKey` embeds a
+ * session id or a client address (see the column's own comment) — personal
+ * data — and BOTH counters (session-scoped and address-scoped, see
+ * `lib/domain/rate-limit.ts`'s own comment on why both always increment,
+ * win or lose) write a row on every single request regardless of whether
+ * that request is ultimately refused; a caller rotating cookies (or one
+ * behind a rotating address) writes a fresh row every time, so the address
+ * cap bounds DECISIONS, not ROWS. The Architect's own estimate under
+ * sustained abuse: on the order of 100k rows/day, permanently, with nothing
+ * cascading on erasure and nothing caught by any sweep — on the same
+ * Postgres instance the production content system shares, so unbounded
+ * growth here risks taking that down too on disk exhaustion.
+ *
+ * `deleteStaleRateLimitCounters` (`lib/db/rate-limit.ts`) deletes rows whose
+ * `window_start` is more than two hours behind the window currently being
+ * written — a counter has no purpose beyond its own window, and a fixed
+ * hourly window never needs to compare against anything older than the
+ * immediately preceding one. It runs on every call to
+ * `incrementRateLimitCounter`, in the same round trip as the increment
+ * itself, NOT on a periodic schedule: no scheduled cleanup path exists
+ * anywhere in this codebase today (checked directly — `guest_sessions`' own
+ * deferred 30-day sweep has never been built either, despite the comment
+ * that used to sit here implying otherwise), and standing up the
+ * infrastructure for one (a Cloud Scheduler job, an authenticated endpoint
+ * to receive it) is a deployment decision outside this story's scope to
+ * make unilaterally. Folding the delete into the write path this table
+ * already takes on every check bounds growth today without inventing new
+ * infrastructure; `windowStartIdx` below is what keeps that delete an
+ * indexed range scan rather than a sequential one as the table grows.
  */
 export const rateLimitCounters = fluentinaSchema.table(
   'rate_limit_counters',
@@ -153,10 +181,21 @@ export const rateLimitCounters = fluentinaSchema.table(
     // lib/domain/rate-limit.ts for the exact strings. Free-form on purpose:
     // this table has no idea what a "session" or an "IP" is, only that two
     // requests with the same key in the same window count against each
-    // other.
+    // other. Personal data (a session id, a client address) for as long as
+    // its row lives — see this table's own comment above for why that's now
+    // bounded to a couple of hours, not forever.
     bucketKey: text('bucket_key').notNull(),
     windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
     count: integer('count').notNull().default(0),
   },
-  (table) => [primaryKey({ columns: [table.bucketKey, table.windowStart] })],
+  (table) => [
+    primaryKey({ columns: [table.bucketKey, table.windowStart] }),
+    // The primary key above is (bucketKey, windowStart) — leads with
+    // bucketKey, so it cannot serve "every row older than this instant
+    // regardless of bucket", the exact query `deleteStaleRateLimitCounters`
+    // runs on every increment. Without this, that delete is a sequential
+    // scan of the whole table — the same unbounded-growth problem this
+    // index exists to close, just moved from row count to query cost.
+    index('rate_limit_counters_window_start_idx').on(table.windowStart),
+  ],
 );

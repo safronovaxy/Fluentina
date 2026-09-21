@@ -58,25 +58,59 @@
  * verified directly: `guest-flow.spec.ts` and `guest-session.spec.ts` failed
  * with real 429s from unrelated, earlier tests exhausting it first, twice,
  * once for each wrong assumption. In production the same shape is worse: a
- * caller hitting Cloud Run's default URL directly (bypassing the load
- * balancer entirely, if that's reachable — the same open gap
- * `same-origin.ts`'s `forwardedHost` caveat already carries, deferred to
- * KAN-28, not newly introduced here) could send ANY single-hop
- * `X-Forwarded-For` value and have it trusted outright — spoofable, not
- * merely locally confusing.
+ * caller reaching this deployment WITHOUT going through the load balancer at
+ * all (if that path is reachable — the Architect's own finding, tracked as
+ * KAN-34, a deployment question this function cannot fix) controls the
+ * entire header, including its length and shape, and can fabricate as many
+ * comma-separated entries as it likes — a convincing-looking two-hop value
+ * included. This is NOT the same gap `same-origin.ts`'s `forwardedHost`
+ * caveat carries (KAN-28), and a round-1 review (Architect, Test Lead,
+ * independently) asked for the two to stop being equated: there, the
+ * mandatory `SameSite=Lax` session cookie is the real control and the
+ * origin check is defence in depth on top of it — neutralising that check
+ * gains an attacker nothing they couldn't already get by omitting `Origin`.
+ * Here there is no such control underneath this one — the per-address
+ * backstop this function feeds IS the control, so a caller on that path can
+ * forge it outright, not merely evade a secondary check. See KAN-34 for
+ * that gap; this module's own two mitigations below (fewer than two hops
+ * treated as unprovable, and every candidate validated as a real IP literal)
+ * hold regardless of which path a request took — they narrow what a caller
+ * can pretend to be, not whether it actually went through the load balancer.
  *
  * The actual, load-bearing signal this deployment can trust is not "is the
- * header present" but "does it carry AT LEAST the two hops the load
- * balancer always appends for traffic that genuinely passed through it" —
- * fewer than two hops means this request cannot be proven to have gone
- * through the one trusted proxy this function's whole offset assumption
- * rests on, whether that's because nothing set the header at all, Next.js
- * synthesised a single local one, or a caller fabricated one directly.
- * `null` is what `lib/domain/rate-limit.ts` reads as "skip the IP-scoped
- * check for this request" — the per-session cap (always checked, never
- * skipped) still applies regardless.
+ * header present" but "does it carry at least the two-hop shape traffic
+ * that passed through the load balancer always has". That shape does not
+ * PROVE the request passed through it — see the KAN-34 paragraph above —
+ * only that this function can distinguish locally-synthesised or directly-
+ * sent traffic (always fewer than two hops) from traffic carrying the shape
+ * proxied traffic has. Fewer than two hops means this request cannot be
+ * shown to have gone through the one trusted proxy this function's whole
+ * offset assumption rests on, whether that's because nothing set the header
+ * at all, Next.js synthesised a single local one, or a caller fabricated one
+ * directly. `null` is what `lib/domain/rate-limit.ts` reads as "skip the
+ * IP-scoped check for this request" — the per-session cap (always checked,
+ * never skipped) still applies regardless.
+ *
+ * --- The candidate hop is validated as a real IP address literal ---
+ *
+ * Round-3 (Architect finding, reproduced against the real table): the
+ * candidate hop used to be returned verbatim — no validation, no length
+ * bound — and it becomes part of an indexed rate-limit bucket key
+ * (`lib/domain/rate-limit.ts` -> `lib/db/rate-limit.ts`). A sufficiently
+ * long, high-entropy value in that position exceeds Postgres' own maximum
+ * index row size; the insert throws, nothing catches it, and the caller
+ * gets a server error instead of a rate-limit decision — true for ANY
+ * caller able to put an oversized value at the second-to-last position,
+ * load balancer or not. `ipLiteralSchema` (below) closes this outright
+ * rather than merely capping the length: a candidate that doesn't parse as
+ * an IPv4 or IPv6 literal is treated exactly like fewer than two hops — an
+ * unprovable identity — and this function returns `null`, never a value
+ * that reaches the database unvalidated.
  */
+import { z } from 'zod';
 import type { NextRequest } from 'next/server';
+
+const ipLiteralSchema = z.string().ip();
 
 export function clientIp(request: NextRequest): string | null {
   const xff = request.headers.get('x-forwarded-for');
@@ -94,5 +128,11 @@ export function clientIp(request: NextRequest): string | null {
   // value as a usable identity, unlike an earlier cut of this function.
   if (hops.length < 2) return null;
 
-  return hops[hops.length - 2];
+  const candidate = hops[hops.length - 2];
+
+  // Round-3 (Architect finding, see this module's own comment above):
+  // reject anything that doesn't parse as a real IP address literal, the
+  // same as an unprovable hop count — never pass an unvalidated,
+  // unbounded-length string into a rate-limit bucket key.
+  return ipLiteralSchema.safeParse(candidate).success ? candidate : null;
 }

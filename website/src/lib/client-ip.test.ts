@@ -80,4 +80,46 @@ describe('clientIp — the production-correct reading of X-Forwarded-For (KAN-25
 
     expect(ip).toBe('203.0.113.7');
   });
+
+  // Round-1 review (Architect, blocking): reproduced against the real
+  // table — the candidate hop used to be returned verbatim, with no
+  // validation and no length bound, and became part of an indexed
+  // rate-limit bucket key (lib/db/rate-limit.ts). A sufficiently long,
+  // high-entropy value in the second-to-last position exceeded the index's
+  // maximum row size and threw on insert, uncaught — a rate-limit check
+  // turning into a server error for the caller. See this module's own
+  // comment for why parsing (not merely a length cap) is the fix.
+  it('returns null for a hostile, high-entropy candidate hop long enough to overflow an index row — never reaches the database unvalidated', () => {
+    const hostile = 'a'.repeat(3000);
+    const ip = clientIp(requestWithXff(`${hostile}, 34.120.0.1`));
+
+    expect(ip).toBeNull();
+  });
+
+  it('returns null when the candidate hop is not a real IP address literal at all, even at ordinary length', () => {
+    const ip = clientIp(requestWithXff('not-an-address, 34.120.0.1'));
+
+    expect(ip).toBeNull();
+  });
+
+  // The empty-hop filter's own coverage — untested before this round, and
+  // deleting it leaves every other test above still green while
+  // reintroducing exactly the regression round-2 already fixed once: a
+  // single real hop plus a stray comma splits into TWO array entries (one
+  // real, one empty), which without this filter would satisfy the
+  // `hops.length >= 2` check above and get trusted as a genuine two-hop,
+  // proxied shape — collapsing every caller sharing that same one real hop
+  // (e.g. every unproxied local/CI request) onto one bucket again. Both
+  // sides of the stray comma are covered: a trailing one and a leading one.
+  it('treats a single real hop with a trailing comma as no address, not a two-hop shape', () => {
+    const ip = clientIp(requestWithXff('203.0.113.7,'));
+
+    expect(ip).toBeNull();
+  });
+
+  it('treats a single real hop with a leading comma as no address, not a two-hop shape', () => {
+    const ip = clientIp(requestWithXff(',203.0.113.7'));
+
+    expect(ip).toBeNull();
+  });
 });

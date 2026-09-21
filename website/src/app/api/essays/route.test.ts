@@ -132,6 +132,13 @@ describe('POST /api/essays — well-formed cookie, row already exists (returning
     const response = await POST(postEssay({ content }, sessionId));
     const body: unknown = await response.json();
 
+    // Round-1 review (Test Lead, blocking): this test's own title claims a
+    // successful submission ran — asserting only the body's absence proves
+    // that even when the submission was REJECTED and never wrote a body
+    // containing a session id in the first place (e.g. every request
+    // refused by KAN-25's own rate limit). Pinning 201 is what proves the
+    // path this test's title names actually ran.
+    expect(response.status).toBe(201);
     expect(JSON.stringify(body)).not.toContain(sessionId);
   });
 
@@ -144,8 +151,14 @@ describe('POST /api/essays — well-formed cookie, row already exists (returning
     const secretPhrase = validLengthContent('a very particular sentence nobody should ever see logged');
 
     try {
-      await POST(postEssay({ content: secretPhrase }, sessionId));
+      const response = await POST(postEssay({ content: secretPhrase }, sessionId));
 
+      // Round-1 review (Test Lead, blocking): same reasoning as the test
+      // above — with the limiter mutated to refuse everything, this
+      // submission would never reach the code path that could log the
+      // secret phrase, and every assertion below would still pass for the
+      // wrong reason. 201 proves the submission actually went through.
+      expect(response.status).toBe(201);
       for (const spy of [logSpy, errorSpy, warnSpy]) {
         for (const call of spy.mock.calls) {
           expect(JSON.stringify(call)).not.toContain(secretPhrase);
@@ -451,8 +464,16 @@ describe('POST /api/essays — invalid submissions', () => {
   it('does not create a guest session row as a side effect of a rejected submission', async () => {
     const sessionId = generateGuestSessionId(); // never persisted
 
-    await POST(postEssay({ content: '' }, sessionId));
+    const response = await POST(postEssay({ content: '' }, sessionId));
 
+    // Round-1 review (Test Lead, blocking): the title names a specific
+    // path (empty content, rejected) — pinning the exact 400/"tooShort"
+    // pair is what proves THIS rejection ran, not some other guard (e.g.
+    // KAN-25's rate limit) that would also leave no row behind and pass
+    // this assertion for the wrong reason.
+    expect(response.status).toBe(400);
+    const body: { reason?: string } = await response.json();
+    expect(body.reason).toBe('tooShort');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
   });
@@ -482,7 +503,13 @@ describe('POST /api/essays — the raw-body transport cap (KAN-14 scope note: a 
     // the no-cookie path (which never reads the body at all). Telling the
     // runtime to close the connection is the verified fix — see route.ts's
     // own comment at this exact branch for the full measurement and
-    // reasoning.
+    // reasoning. Round-1 review (note, not a fix): this assertion pins the
+    // `Connection` HEADER on the returned response object — it does not
+    // itself observe the socket actually closing. The socket behaviour was
+    // what got measured directly against the deployed build (see the
+    // comment above); this assertion is the regression guard for the
+    // header that measurement was made against, not a re-run of the
+    // measurement itself.
     expect(response.headers.get('connection')).toBe('close');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
@@ -564,7 +591,10 @@ describe('POST /api/essays — the Content-Length pre-check (round-2 review: not
     // itself distinguish from the streaming guard catching the same body.
     expect(body.reason).toBe('bodyTooLarge');
     // KAN-25: same socket-retention fix as the streaming guard's own test —
-    // see route.ts's own comment at this branch.
+    // see route.ts's own comment at this branch. Round-1 review (note, not
+    // a fix): same caveat as that test's own — this pins the `Connection`
+    // header on the response object, not the socket behaviour that was
+    // actually measured against the deployed build.
     expect(response.headers.get('connection')).toBe('close');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
@@ -1143,8 +1173,15 @@ describe('POST /api/essays — the KAN-15 word-count bounds, enforced independen
   it('creates no guest session row as a side effect of a length-rejected submission, the same guarantee already proven for an empty one', async () => {
     const sessionId = generateGuestSessionId(); // never persisted
 
-    await POST(postEssay({ content: wordsContent(1000) }, sessionId));
+    const response = await POST(postEssay({ content: wordsContent(1000) }, sessionId));
 
+    // Round-1 review (Test Lead, blocking): same reasoning as the empty-
+    // content version of this test above — 400/"tooLong" proves THIS
+    // rejection ran, not some other guard (KAN-25's rate limit included)
+    // that would also leave no row behind.
+    expect(response.status).toBe(400);
+    const body: { reason?: string } = await response.json();
+    expect(body.reason).toBe('tooLong');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
   });
@@ -1159,8 +1196,16 @@ describe('POST /api/essays — the KAN-15 word-count bounds, enforced independen
     const content = `${secretToken} ${wordsContent(999)}`;
 
     try {
-      await POST(postEssay({ content }, sessionId));
+      const response = await POST(postEssay({ content }, sessionId));
 
+      // Round-1 review (Test Lead, blocking): 400/"tooLong" proves the
+      // length rejection this test's own title names actually ran, rather
+      // than passing for the wrong reason against some other refusal
+      // (KAN-25's rate limit included) that also never reaches the log
+      // statement this test is checking for.
+      expect(response.status).toBe(400);
+      const body: { reason?: string } = await response.json();
+      expect(body.reason).toBe('tooLong');
       for (const spy of [logSpy, errorSpy, warnSpy]) {
         for (const call of spy.mock.calls) {
           expect(JSON.stringify(call)).not.toContain(secretToken);

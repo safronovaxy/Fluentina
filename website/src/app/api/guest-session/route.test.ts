@@ -100,6 +100,12 @@ describe('POST /api/guest-session — well-formed cookie, no row yet (ordinary f
 
     const response = await POST(postWithCookie(mintedByEdge));
 
+    // Round-1 review (Test Lead, blocking): this scenario's own title
+    // ("ordinary first use") is only actually proven by 200 — with the
+    // rate limiter mutated to refuse everything, this same cookie-absence
+    // assertion would still pass, for a 429 rather than the success case
+    // the title claims.
+    expect(response.status).toBe(200);
     // Deterministic, not conditional: this scenario's id never changes, so
     // asserting the cookie is absent is always the right check here, not
     // merely "if present, check its value" (which would pass just as well
@@ -113,6 +119,10 @@ describe('POST /api/guest-session — well-formed cookie, no row yet (ordinary f
     const response = await POST(postWithCookie(mintedByEdge));
     const body: unknown = await response.json();
 
+    // Round-1 review (Test Lead, blocking): same reasoning as the test
+    // above — a body with no hex-looking id in it also describes a 429
+    // rejection's body, not only a successful resolution's.
+    expect(response.status).toBe(200);
     expect(JSON.stringify(body)).not.toMatch(/[0-9a-f]{32}/);
   });
 });

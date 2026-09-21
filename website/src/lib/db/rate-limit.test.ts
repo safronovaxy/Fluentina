@@ -1,7 +1,18 @@
 /** @vitest-environment node */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { incrementRateLimitCounter } from './rate-limit';
+import { and, eq } from 'drizzle-orm';
+import { deleteStaleRateLimitCounters, incrementRateLimitCounter } from './rate-limit';
+import { db } from './client';
+import { rateLimitCounters } from './schema';
 import { resetDatabase, closePool } from '@/test/db-fixtures';
+
+async function rowExists(bucketKey: string, windowStart: Date): Promise<boolean> {
+  const rows = await db
+    .select({ bucketKey: rateLimitCounters.bucketKey })
+    .from(rateLimitCounters)
+    .where(and(eq(rateLimitCounters.bucketKey, bucketKey), eq(rateLimitCounters.windowStart, windowStart)));
+  return rows.length > 0;
+}
 
 beforeAll(async () => {
   await resetDatabase();
@@ -72,5 +83,55 @@ describe('incrementRateLimitCounter — the one atomic statement KAN-25 rests on
     // say), and the final count must equal the number of callers, not fewer.
     expect(new Set(counts).size).toBe(concurrentCallers);
     expect(Math.max(...counts)).toBe(concurrentCallers);
+  });
+});
+
+describe('deleteStaleRateLimitCounters — KAN-25 item 4 (round-1 review, Architect, blocking): bounded growth, bounded retention of personal data', () => {
+  it('deletes a row whose window is more than two hours behind the reference window', async () => {
+    const staleWindow = new Date('2026-01-01T00:00:00Z');
+    const referenceWindow = new Date('2026-01-01T03:00:00Z'); // 3h later — outside the 2h margin
+    await incrementRateLimitCounter('test:stale', staleWindow);
+
+    const deletedCount = await deleteStaleRateLimitCounters(referenceWindow);
+
+    expect(deletedCount).toBeGreaterThanOrEqual(1);
+    expect(await rowExists('test:stale', staleWindow)).toBe(false);
+  });
+
+  it('keeps a row inside the two-hour margin — the immediately preceding window is not swept away', async () => {
+    const recentWindow = new Date('2026-01-01T00:00:00Z');
+    const referenceWindow = new Date('2026-01-01T01:00:00Z'); // 1h later — inside the 2h margin
+    await incrementRateLimitCounter('test:recent', recentWindow);
+
+    await deleteStaleRateLimitCounters(referenceWindow);
+
+    expect(await rowExists('test:recent', recentWindow)).toBe(true);
+  });
+
+  it('keeps a row exactly at the two-hour boundary — the cutoff is strictly older than, not at or older than', async () => {
+    const boundaryWindow = new Date('2026-01-01T00:00:00Z');
+    const referenceWindow = new Date('2026-01-01T02:00:00Z'); // exactly 2h later
+    await incrementRateLimitCounter('test:boundary', boundaryWindow);
+
+    await deleteStaleRateLimitCounters(referenceWindow);
+
+    expect(await rowExists('test:boundary', boundaryWindow)).toBe(true);
+  });
+
+  // The property item 4 actually exists to guarantee: growth from
+  // `incrementRateLimitCounter` itself is bounded, not merely bounded when
+  // some separate cleanup call happens to also run. No scheduled cleanup
+  // path exists anywhere in this codebase (see schema.ts's own comment) —
+  // this proves the sweep runs on the write path itself, not only when
+  // `deleteStaleRateLimitCounters` is called directly, the way the three
+  // tests above do.
+  it('incrementRateLimitCounter itself sweeps stale rows, on every call, with no separate cleanup call needed', async () => {
+    const staleWindow = new Date('2026-01-01T00:00:00Z');
+    const freshWindow = new Date('2026-01-01T05:00:00Z'); // 5h later — well outside the 2h margin
+    await incrementRateLimitCounter('test:stale-via-increment', staleWindow);
+
+    await incrementRateLimitCounter('test:unrelated', freshWindow);
+
+    expect(await rowExists('test:stale-via-increment', staleWindow)).toBe(false);
   });
 });
