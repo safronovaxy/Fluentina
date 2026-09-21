@@ -125,12 +125,12 @@ export default [
             {
               group: ["@/lib/db", "@/lib/db/**", "@/lib/domain", "@/lib/domain/**"],
               message:
-                "lib/contracts holds types and Zod schemas only and imports nothing of ours — see CONTRIBUTING.md.",
+                "lib/contracts holds types, Zod schemas, and dependency-free, isomorphic validation rules only and imports nothing of ours — see CONTRIBUTING.md.",
             },
             {
               group: ["pg", "drizzle-orm", "drizzle-orm/**"],
               message:
-                "lib/contracts holds types and Zod schemas only — the driver and the query builder belong to lib/db alone. See CONTRIBUTING.md.",
+                "lib/contracts holds types, Zod schemas, and dependency-free, isomorphic validation rules only — the driver and the query builder belong to lib/db alone. See CONTRIBUTING.md.",
             },
             {
               group: ["@/test", "@/test/**"],

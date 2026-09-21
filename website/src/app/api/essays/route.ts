@@ -1,18 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { submitEssay } from '@/lib/domain/essay-submission';
 import { resolveGuestSession } from '@/lib/domain/guest-session';
-import { essaySubmissionRequestSchema, MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
+import { essaySubmissionRequestSchema, MAX_REQUEST_BODY_BYTES, isEssayLengthRejectionReason } from '@/lib/contracts/essay-submission';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
 import { isCrossOriginRequest } from '@/lib/same-origin';
 
 /**
- * POST /api/essays — KAN-14, guest essay submission. Storage only: this
- * route persists the essay and reports its id back, nothing more. Grading
- * (KAN-16) and the recommended-length/word-count UI and its server-side
- * counterpart (KAN-15) are both separate stories that build on this
- * endpoint rather than being part of it — see `essaySubmissionRequestSchema`'s
- * own comment for the one seam KAN-15 extends here.
+ * POST /api/essays — KAN-14, guest essay submission; word-count enforcement
+ * added by KAN-15. Storage only: this route persists the essay and reports
+ * its id back, nothing more. Grading (KAN-16) is a separate story that
+ * builds on this endpoint rather than being part of it. The word-count
+ * bounds themselves (50-300 words, BR-1.4 through BR-1.7) live entirely in
+ * `essaySubmissionRequestSchema` (see that schema's own comment for the
+ * seam this filled) — this route's only KAN-15-specific job is turning a
+ * length-based rejection into its own distinguishable message, below.
  *
  * Never logs the request body — see the `never log essay text` rule this
  * route is built against; nothing in this file (or anything it calls)
@@ -206,6 +208,56 @@ export async function POST(request: NextRequest) {
 
   const parsed = essaySubmissionRequestSchema.safeParse(json);
   if (!parsed.success) {
+    // KAN-15 (BR-1.7): "a blocked guest is told why, clearly, and never by
+    // a generic error" — the two length-based failures (too short to
+    // grade; over the 300-word hard ceiling) get their own message, read
+    // off the schema's own `reason` (see essaySubmissionRequestSchema's
+    // `.superRefine`), not a string match against its message text. In the
+    // real guest flow this branch should never actually fire for a length
+    // reason — EssayEntryForm runs the identical check client-side and
+    // blocks the request before it's ever sent — so reaching it means the
+    // request bypassed the browser; this is that independent server-side
+    // enforcement, proven directly in route.test.ts with a request built
+    // the same way. Every other rejection (empty content, over the
+    // character safety cap) keeps the generic message below, unchanged
+    // from KAN-14 — this route doesn't have a distinct guest-facing case
+    // for either of those the way it does for the two length ones.
+    //
+    // Round-1 review (should-fix): `reason` used to stop here — the English
+    // `message` went out, `reason` itself never left this function. The
+    // client discarded the body entirely and rendered its own generic
+    // `errorGeneric` string, so nothing about "a guest is told why" was
+    // actually true of the shipped response; it only held in this route's
+    // own tests, which read `parsed.error.issues` directly rather than the
+    // HTTP body a real client gets. No user-visible effect today because
+    // EssayEntryForm's identical client-side check blocks first — the only
+    // way a real guest reaches this branch at all is a bypass — but a
+    // German guest who DID reach it got an English sentence, and the
+    // contract this route claims to expose was fiction past its own return
+    // statement. Returning `reason` alongside `message` lets the caller
+    // (EssayEntryForm) map it onto the already-translated string it
+    // already holds (`strings.tooShortError`/`strings.tooLongError`)
+    // instead of re-parsing English prose — the same shape KAN-16's own
+    // grading failure reasons will need, cheaper to add now than to retrofit
+    // once that lands.
+    const lengthIssue = parsed.error.issues.find(
+      (issue) => issue.code === 'custom' && isEssayLengthRejectionReason(issue.params?.reason),
+    );
+    // Round-2 review (Architect, blocking): this used to re-check `.code ===
+    // 'custom'` here and then `as`-cast `.params?.reason` to the two known
+    // reason strings — sound only because the `.find` predicate above
+    // happened to check the same two strings inline, a fact the cast itself
+    // could never verify. A third reason (grading, rate limiting) added to
+    // the predicate above and not to the cast would compile cleanly and put
+    // a value on the wire `EssayEntryForm`'s own narrowing doesn't recognise
+    // either, silently dropped to the generic error. Narrowing against
+    // `isEssayLengthRejectionReason` again here — the SAME exported check
+    // the `.find` predicate above used, from `lib/contracts/essay-submission`
+    // — replaces the cast with a real type guard: `reason` below is
+    // `EssayLengthRejectionReason`, not `unknown` asserted into shape.
+    if (lengthIssue && lengthIssue.code === 'custom' && isEssayLengthRejectionReason(lengthIssue.params?.reason)) {
+      return NextResponse.json({ error: lengthIssue.message, reason: lengthIssue.params?.reason }, { status: 400 });
+    }
     return NextResponse.json({ error: 'invalid essay submission' }, { status: 400 });
   }
 

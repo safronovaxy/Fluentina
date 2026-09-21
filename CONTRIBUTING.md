@@ -74,7 +74,10 @@ always releasable but does not itself deploy to production.
   suite only, with no funnel specs — KAN-14 added the first one
   (`tests/essay-entry.spec.ts`, guest essay entry end to end), which this
   same round of review also confirmed makes viewport-differential assertions
-  of its own, not just piggybacking on two viewport projects. Vitest, though,
+  of its own, not just piggybacking on two viewport projects. KAN-15 added a
+  second: `tests/word-count.spec.ts`, the live word-count guidance/warning/
+  block states end to end (`ci.yml`'s own E2E step comment names both).
+  Vitest, though,
   is no longer only component tests: KAN-10 added the data-layer integration
   suite (session/essay row-level ownership, the conversion cutover, the
   Postgres major-version guard) that runs against the real `postgres` service
@@ -151,8 +154,17 @@ Several comments in `website/src` point here for "the layering rule" —
 this is that rule, written down once instead of only in code comments and
 `eslint.config.js`:
 
-- `lib/contracts` — types and Zod schemas only. Depends on nothing else of
-  ours; no SQL, no client, no business logic.
+- `lib/contracts` — types, Zod schemas, and dependency-free, isomorphic
+  validation rules (e.g. the word-count bounds in `word-count.ts`, shared
+  verbatim by the browser and the server so the two can never quietly
+  disagree). "Business logic" here means anything that needs a database, an
+  `Actor`, or has a side effect — none of which belongs in this layer. A
+  rule that's pure, needs nothing of ours to run, and must hold identically
+  on both sides of the wire is not that, even though it encodes a product
+  rule; it stays here because `lib/domain` is server-only by convention (see
+  that layer's own entry below) and this needs to run in the browser too.
+  Depends on nothing else of ours: no SQL, no client, no database, no actor,
+  no side effects.
 - `lib/domain` — business rules (e.g. how a guest session id is generated).
   May call `lib/db` repository functions, never the raw client
   (`lib/db/client`) or the driver/query-builder directly — that bypasses the

@@ -24,8 +24,11 @@
  * later ends up on the same Postgres instance.
  *
  * Essays are text only — no file storage — per this story's scope. Word
- * count enforcement is KAN-14's job (the submission feature), not this
- * layer's; this table only needs to hold and own the text.
+ * count enforcement is KAN-15's job (the request contract,
+ * `lib/contracts/essay-submission.ts`'s `essaySubmissionRequestSchema`), not
+ * this layer's; this table only needs to hold and own the text. (Round-1
+ * review: this used to say KAN-14 — KAN-14 only left the seam that rule
+ * fills, per that schema's own comment; the bound itself is KAN-15.)
  *
  * Every owned table (guest_sessions, essays) carries the same two columns
  * the ownership predicate in `ownership.ts` needs: a `session_id`-shaped
