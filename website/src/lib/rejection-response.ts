@@ -18,10 +18,11 @@ import type { RejectionReason } from './contracts/rejection-reason';
  * test helpers, but said nothing about a framework server import — so this
  * file importing `next/server`'s `NextResponse` there passed lint clean.
  * Nothing caught it: a round-2 spike importing this helper into a client
- * component typechecked, linted and built successfully, adding ~95kB of
- * `next/server` internals to that route's client bundle (measured directly;
- * see the branch's own PR description for the before/after numbers). The
- * `import 'server-only'` line above is what actually closes that hole now —
+ * component typechecked, linted and built successfully, and `next build`
+ * reported that route's page bundle growing from ~7.3kB to ~32kB (First
+ * Load JS 149kB → 174kB, ~25kB either way it's read) — see the branch's own
+ * PR description for the full before/after. The `import 'server-only'` line
+ * above is what actually closes that hole now —
  * the same repo-wide idiom every `lib/db` and `lib/domain` module already
  * uses (see e.g. `lib/domain/guest-session.ts`) — so the identical import
  * from a client component now fails the BUILD, not merely the leak
@@ -46,12 +47,19 @@ import type { RejectionReason } from './contracts/rejection-reason';
  * function that omits `reason`, or misspells it against the `RejectionReason`
  * union, fails to compile — see `rejection-response.typecheck.ts` for the
  * pinned proof, including the case where a later change loosens the
- * parameter to optional. A `no-restricted-syntax` ESLint rule scoped to
- * these two route files (see `eslint.config.js`) additionally blocks a
- * literal `status >= 400` inside any direct `NextResponse.json(...)` call
- * in either file, which is what actually rules the mutant above back out —
- * it does not (and by its own admission cannot) catch a computed status, but
- * every real rejection in both routes has always been a literal.
+ * parameter to optional, and the case where a later change widens the
+ * parameter's type instead. A `no-restricted-syntax` ESLint rule scoped to
+ * these two route files (see `eslint.config.js`'s KAN-31 round-3 note)
+ * additionally blocks a literal `status >= 400` inside a direct
+ * `NextResponse.json(...)` call in either file, unquoted or quoted key alike
+ * — round-2's version only caught the unquoted form and a quoted-key mutant
+ * slipped past it, which round-3 closed. That rules out exactly that one
+ * construction, not every way a rejection could be built without this
+ * helper: a computed status, a cast on the status value, the
+ * `new NextResponse(...)` constructor form, and the platform's own
+ * `Response.json(...)` all still lint clean — none used anywhere in either
+ * route today, so this is a theoretical gap, not a closed one; see
+ * `eslint.config.js`'s KAN-31 round-3 note for the full list.
  *
  * The gap the positional-parameter shape itself closes: `reason: 'crossOrigin'
  * satisfies RejectionReason` (the shape both routes used before this

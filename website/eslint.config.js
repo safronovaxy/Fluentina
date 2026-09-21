@@ -140,8 +140,11 @@ export default [
               // still living here as `rejection-response.ts`) imported
               // `next/server`'s `NextResponse` and nothing caught it: lint
               // stayed green, and a spike importing it into a client
-              // component added ~95kB of framework server internals to that
-              // route's client bundle. `next/server` is a server-only API
+              // component made `next build` report that route's page bundle
+              // growing from ~7.3kB to ~32kB (First Load JS 149kB → 174kB,
+              // ~25kB either way it's read) — see the branch's own PR
+              // description for the full before/after. `next/server` is a
+              // server-only API
               // (route handlers, middleware) that must never reach this
               // isomorphic layer — see CONTRIBUTING.md's "depends on nothing
               // else of ours" for lib/contracts, which this makes true of a
@@ -268,21 +271,33 @@ export default [
       "no-restricted-imports": ["error", { patterns: ADAPTER_LAYERING_GROUPS }],
     },
   },
-  // --- KAN-31 round-2 review -----------------------------------------------
+  // --- KAN-31 round-3 review -----------------------------------------------
   // `rejectionResponse` (lib/rejection-response.ts) makes a `reason`-less
   // call fail to compile, but says nothing about a branch that skips the
   // helper entirely and builds a rejection with `NextResponse.json` directly
   // — both route files still import `NextResponse` for their success paths,
   // so that mutant compiles, lints (without this block) and passes. This
-  // rule is what actually rules it out: any literal `status >= 400` inside a
-  // direct `NextResponse.json(...)` call in either route file is an error,
-  // regardless of where in the call the `status` property sits. It does NOT
-  // catch a computed status (`{ status: someVariable }`) — deliberately not
-  // attempted, since every real rejection in both files has always been a
-  // literal, and a selector chasing a computed value would be chasing a
-  // case that doesn't occur here. Scoped to exactly these two files, not
-  // `src/app/api/**`, so a future route is free to use `NextResponse.json`
-  // directly until it, too, adopts `rejectionResponse` on purpose.
+  // rule is what actually rules out that one specific mutant: a literal
+  // `status >= 400` inside a direct `NextResponse.json(...)` call in either
+  // route file, whether the `status` key is written unquoted (`status: 400`)
+  // or quoted (`"status": 400`) — the round-2 selector only matched the
+  // former, so `NextResponse.json({ error }, { "status": 400 })` linted
+  // clean; the Architect found it, and the widened `:has()` below (an
+  // unquoted-key branch and a quoted-key branch, `Property[key.name=...]` vs
+  // `Property[key.value=...]`) catches both while staying silent on the
+  // success path, quoted or not (verified against both). Blocking one
+  // construction form is not the same as blocking every way a rejection
+  // could be built without the helper, and four other forms still lint
+  // clean, none used anywhere in these routes today: a computed status
+  // (`{ status: someVariable }` — deliberately not attempted, since every
+  // real rejection in both files has always been a literal); a cast
+  // (`{ status: 400 as number }`, which makes `value.value` undefined);
+  // the `new NextResponse(body, { status: 400 })` constructor form instead
+  // of the `.json` helper; and the platform's own `Response.json(...)`
+  // instead of `NextResponse.json(...)`. Scoped to exactly these two files,
+  // not `src/app/api/**`, so a future route is free to use
+  // `NextResponse.json` directly until it, too, adopts `rejectionResponse`
+  // on purpose.
   {
     files: ["src/app/api/essays/route.ts", "src/app/api/guest-session/route.ts"],
     rules: {
@@ -290,9 +305,9 @@ export default [
         "error",
         {
           selector:
-            "CallExpression[callee.object.name='NextResponse'][callee.property.name='json']:has(Property[key.name='status'][value.value>=400])",
+            "CallExpression[callee.object.name='NextResponse'][callee.property.name='json']:has(Property[key.name='status'][value.value>=400], Property[key.value='status'][value.value>=400])",
           message:
-            "Build a rejection through rejectionResponse() (lib/rejection-response.ts), not NextResponse.json directly — see that module's own comment, and eslint.config.js's KAN-31 round-2 note above.",
+            "Build a rejection through rejectionResponse() (lib/rejection-response.ts), not NextResponse.json directly — see that module's own comment, and eslint.config.js's KAN-31 round-3 note above.",
         },
       ],
     },
