@@ -3,7 +3,7 @@ import { resolveGuestSession } from '@/lib/domain/guest-session';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
 import { isCrossOriginRequest } from '@/lib/same-origin';
-import { rejectionResponse } from '@/lib/contracts/rejection-response';
+import { rejectionResponse } from '@/lib/rejection-response';
 
 /**
  * POST /api/guest-session — KAN-10 session issuance, the Node-runtime half.
@@ -107,11 +107,17 @@ import { rejectionResponse } from '@/lib/contracts/rejection-response';
  * route.test.ts for the tests asserting `reason` on both branches.
  *
  * Round-1 review: both rejections below are now built by
- * `rejectionResponse` (`lib/contracts/rejection-response.ts`) — the only
- * way either this route or `/api/essays` constructs one — rather than each
- * branch spelling out its own `NextResponse.json({ error, reason: '...'
- * satisfies RejectionReason }, { status })`, a shape that let a reason be
- * omitted entirely and still compile. See that module's own comment.
+ * `rejectionResponse` (`lib/rejection-response.ts`) rather than each branch
+ * spelling out its own `NextResponse.json({ error, reason: '...' satisfies
+ * RejectionReason }, { status })`, a shape that let a reason be omitted
+ * entirely and still compile. Every rejection in this file is built through
+ * it, and a call that omits or misspells `reason` fails to compile — see
+ * that module's own comment for the pinned proof (`rejection-response.typecheck.ts`)
+ * and for what this does NOT guarantee (a branch that skips the helper and
+ * calls `NextResponse.json` directly for a rejection still compiles; the
+ * `no-restricted-syntax` rule in `eslint.config.js`, scoped to this file and
+ * `/api/essays`, is what actually rules that out, by blocking a literal
+ * `status >= 400` inside a direct `NextResponse.json(...)` call here).
  */
 export async function POST(request: NextRequest) {
   if (isCrossOriginRequest(request)) {

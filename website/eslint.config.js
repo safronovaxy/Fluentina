@@ -133,6 +133,24 @@ export default [
                 "lib/contracts holds types, Zod schemas, and dependency-free, isomorphic validation rules only — the driver and the query builder belong to lib/db alone. See CONTRIBUTING.md.",
             },
             {
+              // KAN-31 round-2 review: this layer is imported client-side
+              // (rejection-reason.ts, by EssayEntryForm) as well as
+              // server-side, and this block previously said nothing about a
+              // framework SERVER import — `lib/rejection-response.ts` (then
+              // still living here as `rejection-response.ts`) imported
+              // `next/server`'s `NextResponse` and nothing caught it: lint
+              // stayed green, and a spike importing it into a client
+              // component added ~95kB of framework server internals to that
+              // route's client bundle. `next/server` is a server-only API
+              // (route handlers, middleware) that must never reach this
+              // isomorphic layer — see CONTRIBUTING.md's "depends on nothing
+              // else of ours" for lib/contracts, which this makes true of a
+              // framework dependency too, not just our own three layers.
+              group: ["next/server"],
+              message:
+                "lib/contracts is isomorphic and must never import a server-only framework API — next/server is server-only (route handlers, middleware) and belongs in adapter-level code (e.g. lib/rejection-response.ts), never here. See CONTRIBUTING.md.",
+            },
+            {
               group: ["@/test", "@/test/**"],
               message:
                 "src/test is test-only fixture code and must never be imported from production code. See CONTRIBUTING.md.",
@@ -248,6 +266,35 @@ export default [
       // lost the i18n restriction everywhere except lib/db: the layering
       // blocks below overwrote this one.
       "no-restricted-imports": ["error", { patterns: ADAPTER_LAYERING_GROUPS }],
+    },
+  },
+  // --- KAN-31 round-2 review -----------------------------------------------
+  // `rejectionResponse` (lib/rejection-response.ts) makes a `reason`-less
+  // call fail to compile, but says nothing about a branch that skips the
+  // helper entirely and builds a rejection with `NextResponse.json` directly
+  // — both route files still import `NextResponse` for their success paths,
+  // so that mutant compiles, lints (without this block) and passes. This
+  // rule is what actually rules it out: any literal `status >= 400` inside a
+  // direct `NextResponse.json(...)` call in either route file is an error,
+  // regardless of where in the call the `status` property sits. It does NOT
+  // catch a computed status (`{ status: someVariable }`) — deliberately not
+  // attempted, since every real rejection in both files has always been a
+  // literal, and a selector chasing a computed value would be chasing a
+  // case that doesn't occur here. Scoped to exactly these two files, not
+  // `src/app/api/**`, so a future route is free to use `NextResponse.json`
+  // directly until it, too, adopts `rejectionResponse` on purpose.
+  {
+    files: ["src/app/api/essays/route.ts", "src/app/api/guest-session/route.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.object.name='NextResponse'][callee.property.name='json']:has(Property[key.name='status'][value.value>=400])",
+          message:
+            "Build a rejection through rejectionResponse() (lib/rejection-response.ts), not NextResponse.json directly — see that module's own comment, and eslint.config.js's KAN-31 round-2 note above.",
+        },
+      ],
     },
   },
   {

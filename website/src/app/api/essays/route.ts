@@ -5,7 +5,7 @@ import { essaySubmissionRequestSchema, MAX_REQUEST_BODY_BYTES, isEssayLengthReje
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
 import { isCrossOriginRequest } from '@/lib/same-origin';
-import { rejectionResponse } from '@/lib/contracts/rejection-response';
+import { rejectionResponse } from '@/lib/rejection-response';
 
 /**
  * POST /api/essays — KAN-14, guest essay submission; word-count enforcement
@@ -27,17 +27,21 @@ import { rejectionResponse } from '@/lib/contracts/rejection-response';
  * this story — see route.test.ts for the tests asserting `reason` on every
  * branch.
  *
- * Round-1 review: every rejection below is now built by
- * `rejectionResponse` (`lib/contracts/rejection-response.ts`) — the only
- * way either this route or `/api/guest-session` constructs one — rather
- * than each branch spelling out its own `NextResponse.json({ error,
- * reason: '...' satisfies RejectionReason }, { status })`. That shape let a
- * reason be OMITTED entirely and still compile; `reason` is
- * `rejectionResponse`'s first, required, positional parameter, so a new
- * branch that forgets it fails to compile instead of shipping to be caught
- * by a reviewer or a test that happened to assert one. See that module's
- * own comment for the rest of the reasoning, and why it is not folded into
- * `rejection-reason.ts` itself.
+ * Round-1 review: every rejection below is now built by `rejectionResponse`
+ * (`lib/rejection-response.ts`) rather than each branch spelling out its own
+ * `NextResponse.json({ error, reason: '...' satisfies RejectionReason },
+ * { status })`. That shape let a reason be OMITTED entirely and still
+ * compile; `reason` is `rejectionResponse`'s first, required, positional
+ * parameter, so a call that forgets it fails to compile instead of shipping
+ * to be caught by a reviewer or a test that happened to assert one. Every
+ * rejection in this file is built through it — a branch that instead called
+ * `NextResponse.json` directly for a rejection would still compile, which is
+ * what the `no-restricted-syntax` rule in `eslint.config.js` (scoped to this
+ * file and `/api/guest-session`) exists to rule out, by blocking a literal
+ * `status >= 400` inside a direct `NextResponse.json(...)` call here. See
+ * `lib/rejection-response.ts`'s own comment for the rest of this reasoning,
+ * the pinned compile-time proof (`rejection-response.typecheck.ts`), and why
+ * the helper is not folded into `rejection-reason.ts` itself.
  *
  * Never logs the request body — see the `never log essay text` rule this
  * route is built against; nothing in this file (or anything it calls)
