@@ -183,27 +183,37 @@ describe('POST /api/essays — no cookie at all', () => {
   // gap the padding alone wouldn't — a mutant minting a session for a forged
   // cookie could still return 400 for some unrelated reason and pass a
   // status-only assertion.
-  it('rejects a request with no cookie at all — 400, no session resolved, no essay stored', async () => {
+  it('rejects a request with no cookie at all — 400, reason "invalidSessionCookie", no session resolved, no essay stored', async () => {
     const response = await POST(
       postEssay({ content: validLengthContent('Submitted with no guest session cookie present.') }),
     );
-    const body: { error: string } = await response.json();
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
     expect(body.error).toBe('missing or invalid guest session cookie');
+    // KAN-31: `reason`, not just the status, is what tells this guard's 400
+    // apart from every OTHER 400 this route can return — including the
+    // 50-word floor's, which fired ahead of this exact guard for two tests
+    // here before `validLengthContent` closed that gap (see this describe
+    // block's own comment above). A mutant that widened the cookie guard to
+    // accept (and mint a session for) any request, leaving some unrelated
+    // guard to reject this content for a different reason, now fails here
+    // even if it happened to also return 400.
+    expect(body.reason).toBe('invalidSessionCookie');
     expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
   });
 
-  it('rejects a malformed or forged cookie the same way — 400, and the forged value never becomes a row or an essay', async () => {
+  it('rejects a malformed or forged cookie the same way — 400, reason "invalidSessionCookie", and the forged value never becomes a row or an essay', async () => {
     const forged = 'attacker-supplied-value';
 
     const response = await POST(
       postEssay({ content: validLengthContent('Submitted with a malformed guest session cookie.') }, forged),
     );
-    const body: { error: string } = await response.json();
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
     expect(body.error).toBe('missing or invalid guest session cookie');
+    expect(body.reason).toBe('invalidSessionCookie');
     expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
     const forgedActor = { kind: 'guest' as const, sessionId: forged as GuestSessionId };
     expect(await getGuestSessionById(forgedActor, forged)).toBeNull();
@@ -372,7 +382,7 @@ describe('POST /api/essays — invalid submissions', () => {
     expect(await countEssaysForSession(sessionId)).toBe(0);
   });
 
-  it('rejects a body with no content field at all, with the generic message — never a length-specific reason for a field that was never a string to count words in', async () => {
+  it('rejects a body with no content field at all, with the generic message and reason "invalidSubmission" — never a length-specific reason for a field that was never a string to count words in', async () => {
     // Round-2 review: the cookie check now runs before the body is ever
     // read (see route.ts's own comment), so this needs a valid cookie —
     // without one, this would still assert 400, but for "missing cookie",
@@ -390,15 +400,16 @@ describe('POST /api/essays — invalid submissions', () => {
     // the rest of the chain — `.superRefine` never runs, so no `tooShort`/
     // `tooLong` custom issue exists for route.ts to find, and this falls
     // through to the one generic message left in that branch. Asserting
-    // that message (and the absence of `reason`) is what proves this 400
+    // that message (and, KAN-31, that `reason` is the generic
+    // `invalidSubmission` rather than a length one) is what proves this 400
     // came from the missing field, not a coincidental length rejection.
     expect(response.status).toBe(400);
     expect(body.error).toBe('invalid essay submission');
-    expect(body.reason).toBeUndefined();
+    expect(body.reason).toBe('invalidSubmission');
     expect(await countEssaysForSession(sessionId)).toBe(0);
   });
 
-  it('rejects malformed JSON with 400, not a 500, and with the dedicated "invalid JSON body" message', async () => {
+  it('rejects malformed JSON with 400, not a 500, with the dedicated "invalid JSON body" message, and reason "invalidJson"', async () => {
     // Round-2 review: same reason as the test above — a valid cookie, so
     // this actually reaches JSON.parse and proves THAT path returns 400
     // rather than a valid cookie being incidental to the assertion.
@@ -406,16 +417,20 @@ describe('POST /api/essays — invalid submissions', () => {
     await createGuestSession({ kind: 'guest', sessionId });
 
     const response = await POST(postRaw('{ this is not valid json', sessionId));
-    const body: { error: string } = await response.json();
+    const body: { error: string; reason?: string } = await response.json();
 
     // Round-2 review (Test Lead, blocking): a bare 400 here is also what the
     // missing-cookie guard, the schema-validation branch and (with a small
     // enough body) nothing else in this file returns — asserting the exact
     // message this branch alone produces is what proves JSON.parse's own
     // catch fired, not some other 400 path this malformed-but-small body
-    // happened to also satisfy.
+    // happened to also satisfy. KAN-31: `reason` pins it further still — a
+    // mutant that merged this catch into the generic `invalidSubmission`
+    // branch (same status, same "invalid" flavour of message) would now be
+    // caught even if it kept an "invalid JSON body"-shaped message.
     expect(response.status).toBe(400);
     expect(body.error).toBe('invalid JSON body');
+    expect(body.reason).toBe('invalidJson');
   });
 
   it('does not create a guest session row as a side effect of a rejected submission', async () => {
@@ -429,13 +444,24 @@ describe('POST /api/essays — invalid submissions', () => {
 });
 
 describe('POST /api/essays — the raw-body transport cap (KAN-14 scope note: a blunt cap, not the KAN-15 word-count rule, and NOT the same number as the character cap — see essay-submission.ts own comment)', () => {
-  it('rejects a request body over the transport cap with 413, before ever touching the database', async () => {
+  it('rejects a request body over the transport cap with 413, reason "bodyTooLarge", before ever touching the database', async () => {
     const sessionId = generateGuestSessionId(); // never persisted — proves nothing downstream ran
     const oversizedContent = 'a'.repeat(MAX_REQUEST_BODY_BYTES + 1);
 
     const response = await POST(postEssay({ content: oversizedContent }, sessionId));
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(413);
+    // KAN-31: this is the streaming byte-count guard (readBodyWithinLimit),
+    // not the Content-Length pre-check above it — no header is set here, so
+    // Content-Length is absent and that earlier check never fires. Both
+    // guards share the one `bodyTooLarge` reason (see rejection-reason.ts's
+    // own comment on why), but this test's own job — proving the streaming
+    // guard specifically fires, not merely restating the shared reason — is
+    // still the 413 status plus the "never touched the database" assertion
+    // below, exactly as before; `reason` here is additive, not a
+    // replacement for that.
+    expect(body.reason).toBe('bodyTooLarge');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
   });
@@ -446,8 +472,10 @@ describe('POST /api/essays — the raw-body transport cap (KAN-14 scope note: a 
     const response = await POST(
       postEssay({ content: 'A short essay.', junk: 'x'.repeat(MAX_REQUEST_BODY_BYTES) }, sessionId),
     );
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(413);
+    expect(body.reason).toBe('bodyTooLarge');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
   });
@@ -501,8 +529,18 @@ describe('POST /api/essays — the Content-Length pre-check (round-2 review: not
         { 'content-length': String(MAX_REQUEST_BODY_BYTES + 1) },
       ),
     );
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(413);
+    // KAN-31: same `bodyTooLarge` reason the streaming guard's own three
+    // tests assert (see rejection-reason.ts's own comment on why one code,
+    // not two) — this test's OWN uniquely-killing evidence that the header
+    // pre-check specifically fired, rather than the streaming guard below
+    // it, is still the small actual body plus the 413 (see this test's own
+    // title): a mutant that deleted this block entirely would let a small
+    // body sail past it and 201 downstream, which `reason` here cannot by
+    // itself distinguish from the streaming guard catching the same body.
+    expect(body.reason).toBe('bodyTooLarge');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
   });
@@ -560,8 +598,10 @@ describe('POST /api/essays — the raw-body transport cap under chunked transfer
     request.headers.delete('content-length');
 
     const response = await POST(request);
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(413);
+    expect(body.reason).toBe('bodyTooLarge'); // KAN-31: same reason as the header pre-check and the other two streaming-guard tests — see rejection-reason.ts's own comment on why.
     // Cancelling the reader stops us pulling more bytes off a request we've
     // already decided to reject. It is NOT what returns the underlying
     // socket to Cloud Run's pool — measured directly against the deployed
@@ -612,7 +652,7 @@ describe('POST /api/essays — no body stream at all', () => {
     });
 
     const response = await POST(request);
-    const body: { error: string } = await response.json();
+    const body: { error: string; reason?: string } = await response.json();
 
     // Empty text fails JSON.parse the same way a truly empty string body
     // would ('' is not valid JSON), so this lands on the "invalid JSON
@@ -621,9 +661,12 @@ describe('POST /api/essays — no body stream at all', () => {
     // Test Lead, blocking) is what proves it's THIS branch, not merely any
     // 400 — a mutant that made the no-reader early return `{ ok: false }`
     // (readBodyWithinLimit's own comment names this exact mutant) would
-    // still 400 here, for the transport-cap message instead.
+    // still 400 here, for the transport-cap message instead. KAN-31: the
+    // reason assertion closes the same gap one layer more precisely — that
+    // mutant's 400 would carry `bodyTooLarge`, not `invalidJson`.
     expect(response.status).toBe(400);
     expect(body.error).toBe('invalid JSON body');
+    expect(body.reason).toBe('invalidJson');
   });
 });
 
@@ -662,10 +705,16 @@ describe('POST /api/essays — cross-origin requests', () => {
         { origin: 'https://evil.example' },
       ),
     );
-    const body: { error: string } = await response.json();
+    const body: { error: string; reason?: string } = await response.json();
 
     expect(response.status).toBe(400);
     expect(body.error).toBe('cross-origin request rejected');
+    // KAN-31: `reason` is what tells this guard's 400 apart from the
+    // cookie guard's — both 400, and (round-2 review, above) this test's
+    // own fixture is deliberately valid on every OTHER axis specifically so
+    // a mutant disabling only the cross-origin check is caught here, not
+    // coincidentally by some other rejection.
+    expect(body.reason).toBe('crossOrigin');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId: neverPersistedSessionId }, neverPersistedSessionId);
     expect(persisted).toBeNull();
   });
@@ -902,6 +951,111 @@ describe('POST /api/essays — the KAN-15 word-count bounds, enforced independen
     const rawBody = JSON.stringify(await response.json());
 
     expect(response.status).toBe(400);
+    expect(rawBody).not.toContain(secretToken);
+    expect(rawBody).not.toContain(sessionId);
+  });
+});
+
+/**
+ * KAN-31 — "do not let a reason leak anything": every rejection above
+ * already proves its own status/message/reason; this block is specifically
+ * the "never logs essay text or a session id" property, extended to the
+ * FIVE guard-level rejections `reason` newly names (cross-origin, an
+ * invalid session cookie, an oversized body, malformed JSON, and the
+ * schema's own generic failure) — the same property the length-rejection
+ * test just above this block already pins for the two length reasons, and
+ * the well-formed-cookie describe block at the top of this file pins for a
+ * successful submission. `reason` itself is a fixed string drawn from
+ * `REJECTION_REASONS` (lib/contracts/rejection-reason.ts), never built from
+ * request content, so there is no code path today that COULD leak through
+ * it — these tests exist so a later change that started interpolating
+ * anything request-specific into a rejection body fails immediately, the
+ * same guarantee the length-rejection test above already gives that
+ * failure mode for the two reasons it covers.
+ */
+describe('POST /api/essays — KAN-31: guard-level rejections never leak essay content or a session id', () => {
+  it('a cross-origin rejection leaks neither the submitted content nor the session id the (rejected) cookie carried', async () => {
+    const sessionId = generateGuestSessionId();
+    const secretToken = 'EinDritterToken_NieInEinerCrossOriginAntwort';
+
+    const response = await POST(
+      postEssay({ content: `${secretToken} ${wordsContent(60)}` }, sessionId, { origin: 'https://evil.example' }),
+    );
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
+
+    expect(response.status).toBe(400);
+    // Round-1 review: a status-and-absence assertion alone survives a later
+    // guard (e.g. a rate limiter) returning the same 400 ahead of THIS one —
+    // the test would keep passing without ever exercising the cross-origin
+    // branch its own title names. Asserting the specific reason is what
+    // still fails once this guard stops being the one that actually fired.
+    expect(body.reason).toBe('crossOrigin');
+    expect(rawBody).not.toContain(secretToken);
+    expect(rawBody).not.toContain(sessionId);
+  });
+
+  it('an invalid-session-cookie rejection leaks neither the submitted content nor the forged cookie value itself', async () => {
+    const forged = 'attacker-supplied-value-that-must-not-echo';
+    const secretToken = 'EinVierterToken_NieBeiEinemUngueltigenCookie';
+
+    const response = await POST(postEssay({ content: `${secretToken} ${wordsContent(60)}` }, forged));
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
+
+    expect(response.status).toBe(400);
+    // See the cross-origin test's own comment above — the reason is what
+    // proves this branch, specifically, is what fired.
+    expect(body.reason).toBe('invalidSessionCookie');
+    expect(rawBody).not.toContain(secretToken);
+    expect(rawBody).not.toContain(forged);
+  });
+
+  it('an over-the-transport-cap rejection leaks neither the session id nor any prefix of the oversized content', async () => {
+    const sessionId = generateGuestSessionId();
+    const secretToken = 'EinFuenfterToken_NieBeiEinerZuGrossenAnfrage';
+    const oversizedContent = `${secretToken} ${'a'.repeat(MAX_REQUEST_BODY_BYTES)}`;
+
+    const response = await POST(postEssay({ content: oversizedContent }, sessionId));
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
+
+    expect(response.status).toBe(413);
+    expect(body.reason).toBe('bodyTooLarge');
+    expect(rawBody).not.toContain(secretToken);
+    expect(rawBody).not.toContain(sessionId);
+  });
+
+  it('an invalid-JSON rejection leaks neither the session id nor any fragment of the malformed body', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const secretToken = 'EinSechsterToken_NieBeiUngueltigemJson';
+
+    const response = await POST(postRaw(`{ "content": "${secretToken}" this is not valid json`, sessionId));
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
+
+    expect(response.status).toBe(400);
+    // See the cross-origin test's own comment above — the reason is what
+    // proves this branch, specifically, is what fired.
+    expect(body.reason).toBe('invalidJson');
+    expect(rawBody).not.toContain(secretToken);
+    expect(rawBody).not.toContain(sessionId);
+  });
+
+  it('a generic invalid-submission rejection leaks neither the session id nor any field value the body carried', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const secretToken = 'EinSiebterToken_NieBeiEinerFehlendenContentEigenschaft';
+
+    const response = await POST(postEssay({ content: 123, note: secretToken }, sessionId));
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
+
+    expect(response.status).toBe(400);
+    // See the cross-origin test's own comment above — the reason is what
+    // proves this branch, specifically, is what fired.
+    expect(body.reason).toBe('invalidSubmission');
     expect(rawBody).not.toContain(secretToken);
     expect(rawBody).not.toContain(sessionId);
   });
