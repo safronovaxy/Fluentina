@@ -12,6 +12,8 @@
  * local Postgres this suite's `webServer` starts the app against.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { fillTextboxAndWaitForWordCount, wordCountText } from './helpers/essay-fill';
+import { isWebKitOverPlainHttp } from './helpers/webkit';
 
 const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 
@@ -46,9 +48,13 @@ const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3000';
 const isPlainHttp = BASE_URL.startsWith('http://');
 
-function skipIfWebkitCannotStoreTheSessionCookie(testInfo: { project: { name: string } }) {
+// KAN-33: `browserName`, not `testInfo.project.name === 'webkit-desktop'` —
+// see helpers/webkit.ts's own comment on `isWebKitOverPlainHttp` for why
+// the previous, name-pinned form would have silently stopped applying this
+// skip on the new `webkit-mobile` project's plain-HTTP runs.
+function skipIfWebkitCannotStoreTheSessionCookie(browserName: string) {
   test.skip(
-    testInfo.project.name === 'webkit-desktop' && isPlainHttp,
+    isWebKitOverPlainHttp(browserName, isPlainHttp),
     'WebKit refuses to store a __Host--prefixed cookie over plain HTTP, even on localhost, so no essay submission can succeed here — see the comment above isPlainHttp.',
   );
 }
@@ -78,6 +84,12 @@ function withFillerWords(sentence: string, totalWords: number): string {
   return `${sentence} ${filler}`;
 }
 
+// Both locale fixtures' essayText below is padded to exactly this many
+// words — a single named constant, not the bare `60` repeated at each
+// `withFillerWords` call and wherever the live word counter's expected text
+// is derived from it, so the two can never quietly drift apart.
+const ESSAY_WORD_COUNT = 60;
+
 interface LocaleFixture {
   readonly locale: 'en' | 'de';
   readonly landingPath: string;
@@ -98,7 +110,7 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     submitName: 'Submit essay',
     essayText: withFillerWords(
       'This is a sample essay written directly in the browser text box for the end-to-end test.',
-      60,
+      ESSAY_WORD_COUNT,
     ),
     successTitle: 'Essay received',
     writeHeading: 'Write your essay',
@@ -111,7 +123,7 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     submitName: 'Aufsatz einreichen',
     essayText: withFillerWords(
       'Dies ist ein Beispielaufsatz, der direkt im Textfeld des Browsers für den End-to-End-Test geschrieben wurde.',
-      60,
+      ESSAY_WORD_COUNT,
     ),
     successTitle: 'Aufsatz erhalten',
     writeHeading: 'Schreibe deinen Aufsatz',
@@ -123,8 +135,9 @@ for (const fx of LOCALE_FIXTURES) {
     test('a first-time visitor reaches the text box and submits an essay in exactly 2 clicks from landing — under the 3-click acceptance criterion', async ({
       page,
       context,
-    }, testInfo) => {
-      skipIfWebkitCannotStoreTheSessionCookie(testInfo);
+      browserName,
+    }) => {
+      skipIfWebkitCannotStoreTheSessionCookie(browserName);
       // Round-1 review: `clicks` is incremented twice in straight-line code
       // below, with no branching, so it is 2 on every run this test can
       // possibly complete — it can never actually observe a third click
@@ -158,8 +171,12 @@ for (const fx of LOCALE_FIXTURES) {
       await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
 
       // Typing is not a click or a tap — the acceptance criterion counts
-      // clicks/taps, and filling a text box is neither.
-      await page.getByRole('textbox').fill(fx.essayText);
+      // clicks/taps, and filling a text box is neither. Waits for the live
+      // word counter before the next line acts on it — see
+      // helpers/essay-fill.ts's own comment for the race this closes (KAN-30
+      // found it in tests/word-count.spec.ts; KAN-33 found the same
+      // unguarded fill-then-click shape here, on this same page).
+      await fillTextboxAndWaitForWordCount(page, fx.essayText, wordCountText(fx.locale, ESSAY_WORD_COUNT));
 
       // Click 2: submit.
       await click(page.getByRole('button', { name: fx.submitName }));
@@ -168,8 +185,8 @@ for (const fx of LOCALE_FIXTURES) {
       expect(clicks, 'this known-good path takes exactly 2 clicks/taps — CTA, then submit').toBe(2);
     });
 
-    test('no account or login is required anywhere on the path from landing to a submitted essay', async ({ page }, testInfo) => {
-      skipIfWebkitCannotStoreTheSessionCookie(testInfo);
+    test('no account or login is required anywhere on the path from landing to a submitted essay', async ({ page, browserName }) => {
+      skipIfWebkitCannotStoreTheSessionCookie(browserName);
       await gotoOk(page, fx.landingPath);
       await page.getByRole('link', { name: fx.ctaName, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
@@ -178,7 +195,7 @@ for (const fx of LOCALE_FIXTURES) {
       await expect(page.getByLabel(/email/i)).toHaveCount(0);
       await expect(page.getByLabel(/password/i)).toHaveCount(0);
 
-      await page.getByRole('textbox').fill(fx.essayText);
+      await fillTextboxAndWaitForWordCount(page, fx.essayText, wordCountText(fx.locale, ESSAY_WORD_COUNT));
       await page.getByRole('button', { name: fx.submitName }).click();
 
       await expect(page.getByRole('status')).toBeVisible();
@@ -195,8 +212,8 @@ for (const fx of LOCALE_FIXTURES) {
     });
 
     // Round-1 review: running on multiple viewport projects (chromium-desktop,
-    // chromium-mobile, webkit-desktop) is not by itself proof of
-    // responsiveness if every assertion is viewport-independent — see
+    // chromium-mobile, webkit-desktop, and — KAN-33 — webkit-mobile) is not by
+    // itself proof of responsiveness if every assertion is viewport-independent — see
     // tests/guest-flow.spec.ts's own comment, which states that standard for
     // the landing page. Every assertion elsewhere in this file is
     // viewport-independent; this is the write screen's own version of the

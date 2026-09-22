@@ -12,6 +12,8 @@
  * the lower-level suites at all.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { fillTextboxAndWaitForWordCount } from './helpers/essay-fill';
+import { isWebKitOverPlainHttp } from './helpers/webkit';
 
 const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 
@@ -23,9 +25,13 @@ const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3000';
 const isPlainHttp = BASE_URL.startsWith('http://');
 
-function skipIfWebkitCannotStoreTheSessionCookie(testInfo: { project: { name: string } }) {
+// KAN-33: `browserName`, not `testInfo.project.name === 'webkit-desktop'` —
+// see helpers/webkit.ts's own comment on `isWebKitOverPlainHttp` for why
+// the previous, name-pinned form would have silently stopped applying this
+// skip on the new `webkit-mobile` project's plain-HTTP runs.
+function skipIfWebkitCannotStoreTheSessionCookie(browserName: string) {
   test.skip(
-    testInfo.project.name === 'webkit-desktop' && isPlainHttp,
+    isWebKitOverPlainHttp(browserName, isPlainHttp),
     'WebKit refuses to store a __Host--prefixed cookie over plain HTTP, even on localhost, so no essay submission can succeed here — see the comment above isPlainHttp.',
   );
 }
@@ -109,73 +115,20 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
 
 /**
  * KAN-30 investigation (Safari CI failure, both the 1000-word block and the
- * 150/201-word live-guidance case): fills the textarea and then waits for
- * the live word counter — `EssayEntryForm`'s own re-render off `content`
- * state, the one thing on this page that can only show the right number
- * once React has actually processed the fill — to reflect `n`, before the
- * caller does anything else (assert other derived text, or click submit).
+ * 150/201-word live-guidance case) found this race and added the wait; KAN-33
+ * lifted the mechanism itself into helpers/essay-fill.ts's
+ * `fillTextboxAndWaitForWordCount` (see that function's own comment for the
+ * full why) once essay-entry.spec.ts needed the identical fix rather than a
+ * second copy of it. This wrapper stays file-local only for the `n`/
+ * `LocaleFixture` convenience below.
  *
- * This is not a workaround for a flaky test; it closes a genuine gap in
- * what the test proved. `page.getByRole('textbox').fill(...)` resolving
- * only means Playwright's WebKit driver finished ITS side of setting the
- * value; it is not a guarantee that the `input` event has been dispatched
- * and handled, that React's `onChange` has run, or that the component has
- * re-rendered — those all still have to happen on the page's own event
- * loop, and this spec used to click submit or assert some OTHER derived
- * bit of UI immediately after `fill()` returned, trusting that gap was
- * always zero. Under real CI load (a shared, CPU-constrained runner, not
- * this machine) it measurably was not: reproduced locally by generating
- * artificial CPU contention and repeating the affected tests, `fill()`
- * followed immediately by `click()` intermittently reached the submit
- * handler while `content` was still `''` from the PREVIOUS render — the
- * guest was told the box was empty (`essay-content-error`, the exact text
- * and locator the pipeline reported), not that the essay was too long or
- * too short. `fill()` immediately followed by an assertion on a DIFFERENT
- * derived string (the 150-word guidance text, the 220-word warning text)
- * raced the same way, with no submit involved at all — confirming this is
- * a propagation race between the test and the app, not a defect specific
- * to the submit path, and not something a real guest can trigger: a real
- * paste's `input` event and a real click are two separate, later browser
- * events on the SAME single JS thread — the click cannot even begin
- * processing until the paste's synchronous `onChange` handler (a plain
- * `setContent`, nothing async) has already finished, so `content` is
- * always current by the time a real click fires. Playwright's WebKit
- * driver is a separate, out-of-process automation client issuing `fill`
- * and `click` as two independent commands, which is exactly what let them
- * observably reorder under load where two real browser events on one
- * thread cannot.
- *
- * Waiting on the counter specifically (rather than, say, extending
- * `expect`'s timeout globally, or trusting whichever assertion happened to
- * come next in a given test) is the fix the story asked for: an
- * observable signal that the fill actually landed, asserted before the
- * test acts on it — the same computed `wordCount` every other assertion in
- * this file already depends on, so nothing downstream can be "ahead" of
- * it.
- *
- * `timeout: 15_000`, not the suite's 5s default (precedented elsewhere —
- * see tests/blog.spec.ts's own 8s/20s overrides for the same reason): a
- * 1000-word fill is a bigger DOM write and a bigger controlled-input
- * re-render than the 1/42/49/150/201/220-word ones this same helper also
- * covers, and it was the one that timed out first under artificial CI-like
- * CPU contention in the KAN-30 investigation, even once the assertion was
- * moved to the correct signal (see the earlier comment on this function).
- * Generous, not indefinite: still fails, just past the point where normal
- * scheduling jitter would have resolved it, rather than past the point a
- * real defect would.
- *
- * Precondition: `n` must differ from the count already shown on the page
- * (fresh page: any `n > 0`; after a prior `fillEssay` call in the same
- * test: any `n` other than that call's). The wait below only proves
- * anything because `fx.counterText(n)` is not already on the page when it
- * starts — call this twice with the same `n`, or with `n === 0` on a page
- * that has never been filled, and `toBeVisible` is satisfied by the STALE
- * text instantly, silently reverting to the unguarded fill-then-act this
- * function exists to close.
+ * Precondition (unchanged from the original): `n` must differ from the count
+ * already shown on the page (fresh page: any `n > 0`; after a prior
+ * `fillEssay` call in the same test: any `n` other than that call's) — see
+ * `fillTextboxAndWaitForWordCount`'s own comment for why.
  */
 async function fillEssay(page: Page, fx: LocaleFixture, n: number): Promise<void> {
-  await page.getByRole('textbox').fill(wordsContent(n));
-  await expect(page.getByText(fx.counterText(n), { exact: true })).toBeVisible({ timeout: 15_000 });
+  await fillTextboxAndWaitForWordCount(page, wordsContent(n), fx.counterText(n));
 }
 
 for (const fx of LOCALE_FIXTURES) {
@@ -199,8 +152,9 @@ for (const fx of LOCALE_FIXTURES) {
 
     test('a 220-word essay — the story\'s own "never blocked" verification case — submits successfully, with the non-blocking warning shown (not a block) along the way', async ({
       page,
-    }, testInfo) => {
-      skipIfWebkitCannotStoreTheSessionCookie(testInfo);
+      browserName,
+    }) => {
+      skipIfWebkitCannotStoreTheSessionCookie(browserName);
       await gotoOk(page, fx.writePath);
 
       await fillEssay(page, fx, 220);

@@ -1,9 +1,11 @@
 /**
  * KAN-8 — Guest flow responsive foundation
  *
- * Runs across chromium-desktop (1280px) and chromium-mobile (Pixel 5, 393px),
- * parameterised (KAN-9) over both locale routes — `/practice` (English) and
- * `/de/practice` (German).
+ * Runs across every configured project — desktop and mobile viewports, on
+ * both Chromium (chromium-desktop 1280px / chromium-mobile, Pixel 5, 393px)
+ * and, as of KAN-30/KAN-33, WebKit (webkit-desktop 1280px / webkit-mobile,
+ * iPhone 13, 390px) — parameterised (KAN-9) over both locale routes —
+ * `/practice` (English) and `/de/practice` (German).
  *
  * Running on two viewport projects is not by itself proof of responsiveness:
  * an earlier version of this spec made only viewport-independent assertions,
@@ -33,7 +35,26 @@
 import { test, expect, type Page } from '@playwright/test';
 import { isCritical } from './helpers/console-errors';
 
-const isMobileProject = () => test.info().project.name === 'chromium-mobile';
+// StepIndicator collapses its text labels to numbered dots below Tailwind's
+// `md` breakpoint (768px — see StepIndicator.tsx's own `md:inline` class;
+// tailwind.config.ts doesn't override the default `screens` scale, so 768 is
+// exact here, not approximate).
+//
+// KAN-33 round-1 finding (both reviewers, independently): this used to be
+// `test.info().project.name === 'chromium-mobile'` — matching the single
+// Chrome-based mobile project by name rather than the viewport that actually
+// drives the CSS. Adding `webkit-mobile` (Safari's engine, same phone-sized
+// viewport) would have taken the DESKTOP branch below at a phone width and
+// asserted labels are visible and untruncated — the opposite of the collapse
+// this test exists to prove. Deriving this from the rendered viewport instead
+// makes a future project addition a configuration line in
+// playwright.config.ts, not a second place this file has to learn about it.
+const MOBILE_BREAKPOINT_PX = 768;
+
+function isMobileViewport(page: Page): boolean {
+  const width = page.viewportSize()?.width;
+  return width !== undefined && width < MOBILE_BREAKPOINT_PX;
+}
 
 async function gotoOk(page: Page, path: string) {
   const response = await page.goto(path);
@@ -105,7 +126,7 @@ for (const fx of LOCALE_FIXTURES) {
       // Scoped to the progress list: KAN-13 is itself a list of prompts.
       await expect(progress.getByRole('listitem')).toHaveCount(5);
 
-      if (isMobileProject()) {
+      if (isMobileViewport(page)) {
         await expect(firstLabel).toBeHidden();
       } else {
         await expect(firstLabel).toBeVisible();
