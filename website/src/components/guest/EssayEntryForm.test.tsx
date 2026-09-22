@@ -25,6 +25,7 @@ const STRINGS: EssayEntryFormStrings = {
   successTitle: 'Essay received',
   successBody: "Your essay has been submitted. We're working on the next steps of the guest flow.",
   errorGeneric: 'Something went wrong submitting your essay. Please try again.',
+  rateLimitedError: "You've reached the submission limit for now — please wait a bit before submitting another essay.",
 };
 
 function renderForm() {
@@ -279,24 +280,26 @@ describe('EssayEntryForm — a failed submission', () => {
   });
 
   // KAN-31: the exhaustive `reasonMessages` map (EssayEntryForm.tsx) now
-  // covers every `RejectionReason`, not just the two length ones — all five
-  // guard-level reasons (cross-origin, an invalid session cookie, an
-  // oversized body, malformed JSON, the schema's own generic failure) map
-  // to `strings.errorGeneric`, deliberately. Four of the five (everything
-  // but `invalidSessionCookie`) are not reachable by this component going
-  // through the real flow — see EssayEntryForm.tsx's own comment on the map
-  // for `invalidSessionCookie`'s exception (round-1 review: a comment here
-  // used to claim all five were unreachable on the grounds the cookie is
-  // "mandatory and browser-attached", which the submission route's own
-  // comment already contradicts — KAN-32 is the guest-facing fix, out of
-  // scope here). Either way this is the SAME `errorGeneric` text a
-  // reason-less failure already showed before this story, reached by an
-  // additional path, not a new message. Any one of these five is enough to
-  // prove the map resolves them at all rather than throwing or rendering
-  // `undefined` — a mutant that dropped a key back out of the object
-  // literal fails to compile (verified directly against `tsc --noEmit`, not
-  // asserted at runtime here), so this only needs to prove the RUNTIME
-  // behaviour for the reasons that do exist in the map today.
+  // covers every `RejectionReason`, not just the two length ones. KAN-25
+  // (below, its own describe block) carves `rateLimited` out into its own
+  // dedicated message; the remaining four guard-level reasons (cross-origin,
+  // an invalid session cookie, an oversized body, malformed JSON, the
+  // schema's own generic failure) map to `strings.errorGeneric`,
+  // deliberately. Three of those four (everything but `invalidSessionCookie`)
+  // are not reachable by this component going through the real flow — see
+  // EssayEntryForm.tsx's own comment on the map for `invalidSessionCookie`'s
+  // exception (round-1 review: a comment here used to claim all five were
+  // unreachable on the grounds the cookie is "mandatory and
+  // browser-attached", which the submission route's own comment already
+  // contradicts — KAN-32 is the guest-facing fix, out of scope here). Either
+  // way this is the SAME `errorGeneric` text a reason-less failure already
+  // showed before this story, reached by an additional path, not a new
+  // message. Any one of these is enough to prove the map resolves them at
+  // all rather than throwing or rendering `undefined` — a mutant that
+  // dropped a key back out of the object literal fails to compile (verified
+  // directly against `tsc --noEmit`, not asserted at runtime here), so this
+  // only needs to prove the RUNTIME behaviour for the reasons that do exist
+  // in the map today.
   it('shows the generic error message, not a blank one, when the server rejects with a guard-level reason (e.g. "invalidSubmission") the client never triggers on its own', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ error: 'invalid essay submission', reason: 'invalidSubmission' }), { status: 400 }),
@@ -320,9 +323,18 @@ describe('EssayEntryForm — a failed submission', () => {
   // "server and client silently disagree" shape the round-2/round-3 review
   // history on EssaySubmissionError/reasonMessages above both exist to
   // prevent from resolving to anything OTHER than the generic fallback.
+  //
+  // KAN-25: this used to use `'rateLimited'` as its own example of a
+  // recognised-looking-but-unknown reason — true only until this story added
+  // it to the union for real (see rejection-reason.ts). Left in place it
+  // would have started asserting `errorGeneric`, silently, for a reason that
+  // now has its own dedicated message (below) — the exact "start passing for
+  // the wrong reason" failure mode this codebase's testing standard exists
+  // to catch, caught here by the story that caused it rather than by a later
+  // one. Swapped for a reason string no story has claimed.
   it('falls back to the generic message for an unrecognised reason string, rather than rendering it or throwing', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ error: 'rate limited', reason: 'rateLimited' }), { status: 429 }),
+      new Response(JSON.stringify({ error: 'grading failed', reason: 'gradingFailed' }), { status: 502 }),
     );
     vi.stubGlobal('fetch', fetchSpy);
     renderForm();
@@ -331,6 +343,33 @@ describe('EssayEntryForm — a failed submission', () => {
     fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.errorGeneric));
+  });
+});
+
+/**
+ * KAN-25 — the client-side half of "a guest who exceeds either cap sees a
+ * clear, non-cryptic message". `POST /api/essays` returns 429 with reason
+ * `rateLimited` for both the per-session and per-IP caps (route.test.ts
+ * proves the server side); this only needs to prove THIS component maps
+ * that reason onto its own dedicated string, not `errorGeneric` — the same
+ * "bypass case" shape the `tooShort`/`tooLong` tests above already
+ * establish for the two length reasons.
+ */
+describe('EssayEntryForm — KAN-25: the rate-limit rejection gets its own message, not the generic one', () => {
+  it('shows the rate-limit message, not the generic one, when the server rejects with reason "rateLimited"', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'too many essay submissions — try again later', reason: 'rateLimited' }), {
+        status: 429,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    renderForm();
+
+    fillEssay(words(60));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(STRINGS.rateLimitedError));
+    expect(screen.queryByText(STRINGS.errorGeneric)).toBeNull();
   });
 });
 

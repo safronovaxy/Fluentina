@@ -13,6 +13,7 @@ import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import type { GuestSessionId } from '@/lib/contracts/actor';
 import { MAX_ESSAY_CONTENT_CHARS, MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
 import { MIN_ESSAY_WORDS, MAX_ESSAY_WORDS } from '@/lib/contracts/word-count';
+import { ESSAY_SUBMISSION_SESSION_LIMIT, ESSAY_SUBMISSION_IP_LIMIT } from '@/lib/domain/rate-limit';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import { wordsContent, validLengthContent, contentOfExactLength } from '@/test/essay-content-fixtures';
 
@@ -52,6 +53,20 @@ function postEssay(
     },
     body: JSON.stringify(body),
   });
+}
+
+/**
+ * The `X-Forwarded-For` header value for a request that arrived through the
+ * real production proxy chain — a client IP followed by the load balancer's
+ * own, the exact two-hop shape `clientIp` (`lib/client-ip.ts`) is written
+ * against; see that module's own comment for why the trusted entry is the
+ * second-to-last one, not the last. Every KAN-25 test below that needs a
+ * specific, distinct IP identity uses this rather than a bare string, so
+ * each one is also proof `clientIp` is wired into these routes correctly,
+ * not just that some string labelled "IP" made it into a bucket key.
+ */
+function xff(ip: string): Record<string, string> {
+  return { 'x-forwarded-for': `${ip}, 34.120.0.1` };
 }
 
 /** A request whose raw body is exactly `text`, bypassing JSON.stringify — needed for the oversized/malformed-body tests. */
@@ -117,6 +132,13 @@ describe('POST /api/essays — well-formed cookie, row already exists (returning
     const response = await POST(postEssay({ content }, sessionId));
     const body: unknown = await response.json();
 
+    // Round-1 review (Test Lead, blocking): this test's own title claims a
+    // successful submission ran — asserting only the body's absence proves
+    // that even when the submission was REJECTED and never wrote a body
+    // containing a session id in the first place (e.g. every request
+    // refused by KAN-25's own rate limit). Pinning 201 is what proves the
+    // path this test's title names actually ran.
+    expect(response.status).toBe(201);
     expect(JSON.stringify(body)).not.toContain(sessionId);
   });
 
@@ -129,8 +151,14 @@ describe('POST /api/essays — well-formed cookie, row already exists (returning
     const secretPhrase = validLengthContent('a very particular sentence nobody should ever see logged');
 
     try {
-      await POST(postEssay({ content: secretPhrase }, sessionId));
+      const response = await POST(postEssay({ content: secretPhrase }, sessionId));
 
+      // Round-1 review (Test Lead, blocking): same reasoning as the test
+      // above — with the limiter mutated to refuse everything, this
+      // submission would never reach the code path that could log the
+      // secret phrase, and every assertion below would still pass for the
+      // wrong reason. 201 proves the submission actually went through.
+      expect(response.status).toBe(201);
       for (const spy of [logSpy, errorSpy, warnSpy]) {
         for (const call of spy.mock.calls) {
           expect(JSON.stringify(call)).not.toContain(secretPhrase);
@@ -436,8 +464,16 @@ describe('POST /api/essays — invalid submissions', () => {
   it('does not create a guest session row as a side effect of a rejected submission', async () => {
     const sessionId = generateGuestSessionId(); // never persisted
 
-    await POST(postEssay({ content: '' }, sessionId));
+    const response = await POST(postEssay({ content: '' }, sessionId));
 
+    // Round-1 review (Test Lead, blocking): the title names a specific
+    // path (empty content, rejected) — pinning the exact 400/"tooShort"
+    // pair is what proves THIS rejection ran, not some other guard (e.g.
+    // KAN-25's rate limit) that would also leave no row behind and pass
+    // this assertion for the wrong reason.
+    expect(response.status).toBe(400);
+    const body: { reason?: string } = await response.json();
+    expect(body.reason).toBe('tooShort');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
   });
@@ -462,6 +498,19 @@ describe('POST /api/essays — the raw-body transport cap (KAN-14 scope note: a 
     // below, exactly as before; `reason` here is additive, not a
     // replacement for that.
     expect(body.reason).toBe('bodyTooLarge');
+    // KAN-25: measured directly against the deployed build — 30 requests
+    // against this guard left 28 sockets in a wait state, against zero on
+    // the no-cookie path (which never reads the body at all). Telling the
+    // runtime to close the connection is the verified fix — see route.ts's
+    // own comment at this exact branch for the full measurement and
+    // reasoning. Round-1 review (note, not a fix): this assertion pins the
+    // `Connection` HEADER on the returned response object — it does not
+    // itself observe the socket actually closing. The socket behaviour was
+    // what got measured directly against the deployed build (see the
+    // comment above); this assertion is the regression guard for the
+    // header that measurement was made against, not a re-run of the
+    // measurement itself.
+    expect(response.headers.get('connection')).toBe('close');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
   });
@@ -541,6 +590,12 @@ describe('POST /api/essays — the Content-Length pre-check (round-2 review: not
     // body sail past it and 201 downstream, which `reason` here cannot by
     // itself distinguish from the streaming guard catching the same body.
     expect(body.reason).toBe('bodyTooLarge');
+    // KAN-25: same socket-retention fix as the streaming guard's own test —
+    // see route.ts's own comment at this branch. Round-1 review (note, not
+    // a fix): same caveat as that test's own — this pins the `Connection`
+    // header on the response object, not the socket behaviour that was
+    // actually measured against the deployed build.
+    expect(response.headers.get('connection')).toBe('close');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
   });
@@ -556,6 +611,12 @@ describe('POST /api/essays — the Content-Length pre-check (round-2 review: not
     const response = await POST(postEssay({ content }, sessionId, { 'content-length': honestContentLength }));
 
     expect(response.status).toBe(201);
+    // KAN-25: the socket-retention fix is scoped to the two `bodyTooLarge`
+    // branches specifically, not blanket-applied to every response — a
+    // successful submission's connection is left alone, free to be reused
+    // for keep-alive the way every other 2xx response on this route already
+    // is.
+    expect(response.headers.get('connection')).toBeNull();
   });
 });
 
@@ -569,15 +630,38 @@ describe('POST /api/essays — the raw-body transport cap under chunked transfer
     // back to draining the whole stream (the request.text() shape this
     // guard replaced), this would never terminate rather than merely being
     // slow — a stronger failure signal than a byte-count assertion alone.
-    const stream = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pulls += 1;
-        controller.enqueue(chunk);
+    //
+    // KAN-25: `highWaterMark: 0` added — this test used to rely on the
+    // platform default (1), which eagerly pre-fetches one chunk into the
+    // stream's internal queue as soon as the stream is constructed,
+    // independently of when anything actually starts reading it (see the
+    // "never pulls a single chunk" test above, which already documents this
+    // for the zero-pulls case and sets hwm 0 for exactly this reason). That
+    // pre-fetch's own timing depends on how many microtask turns run before
+    // the first `reader.read()` call — invisible while nothing meaningful
+    // happened between constructing the request and reading its body, but
+    // this story's own rate-limit check (two awaited Postgres round trips)
+    // now runs in between, ahead of `readBodyWithinLimit`, and gave that
+    // pre-fetch enough room to fire once more than before: `pulls` went from
+    // a reliable 13 to a reliable 14, deterministically, not a flake — this
+    // test's own synthetic source racing the stream's default backpressure
+    // behaviour, not anything wrong with the guard being counted. Pinning
+    // hwm 0 removes the pre-fetch entirely, the same fix already applied
+    // above, so this count is driven only by the deliberate read loop below
+    // and stays exactly the boundary-derived number regardless of how much
+    // (or how little) async work a future guard adds ahead of it.
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulls += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          cancelled = true;
+        },
       },
-      cancel() {
-        cancelled = true;
-      },
-    });
+      { highWaterMark: 0 },
+    );
     const sessionId = generateGuestSessionId(); // never persisted — proves nothing downstream ran
     const request = new NextRequest(new URL('http://localhost:3000/api/essays'), {
       method: 'POST',
@@ -805,6 +889,211 @@ describe('POST /api/essays — preflight surface', () => {
 });
 
 /**
+ * KAN-25 — the acceptance criterion verbatim: five submissions per guest
+ * session per hour. `ESSAY_SUBMISSION_SESSION_LIMIT` (lib/domain/rate-limit.ts)
+ * is the fixed number the ticket names, not an engineering call this test
+ * re-derives; it's read from that constant rather than hardcoded as `5` so a
+ * change to the constant (which this story's own PR description says is not
+ * this story's call to make) can't silently desync this test from the code
+ * it's supposed to be pinning.
+ *
+ * The trap the ticket itself names, addressed directly: every test below
+ * that proves a request is refused asserts the successes that precede it
+ * too — not just the final refusal — so a guard that (say) rejected the
+ * FIRST request for an unrelated reason couldn't still make the "sixth is
+ * refused" assertion pass for the wrong reason.
+ *
+ * Round-2 review (Test Lead, noted rather than fixed): every KAN-25
+ * rate-limit test in this file (this describe block and the two below it)
+ * calls `POST` directly, which calls `checkEssaySubmissionRateLimit` with no
+ * explicit `now` — the route itself never passes one (see route.ts), so
+ * these run against REAL wall-clock time, unlike
+ * `lib/domain/rate-limit.test.ts`'s own suite, which threads a
+ * fixed `now` through every call specifically to avoid this. The Test Lead
+ * measured roughly a 1-in-1000 run landing on an hour boundary mid-test,
+ * which would fail a test here for a time-of-day reason while claiming the
+ * limiter itself is broken. Threading a clock through the route handlers
+ * to fix this properly may not be worth the surface area it adds to
+ * production code for a 1-in-1000 flake; left as a known, named risk rather
+ * than "fixed" — a rate-limit test failing for a reason unrelated to rate
+ * limiting is exactly the kind that gets retried into invisibility instead
+ * of investigated, so if this file flakes, check the clock before the code.
+ */
+describe('POST /api/essays — KAN-25: the per-session rate limit (5/hour, fixed by the ticket)', () => {
+  it('allows exactly the limit\'s worth of submissions for one session — each one actually succeeds, not just "some request happened"', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    for (let i = 0; i < ESSAY_SUBMISSION_SESSION_LIMIT; i++) {
+      const response = await POST(postEssay({ content: validLengthContent(`Submission number ${i}.`) }, sessionId));
+      expect(response.status).toBe(201);
+    }
+    expect(await countEssaysForSession(sessionId)).toBe(ESSAY_SUBMISSION_SESSION_LIMIT);
+  });
+
+  it('rejects the submission one past the limit with 429, reason "rateLimited", and clear (non-generic) English text — and creates no essay for it', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    for (let i = 0; i < ESSAY_SUBMISSION_SESSION_LIMIT; i++) {
+      const response = await POST(postEssay({ content: validLengthContent(`Submission number ${i}.`) }, sessionId));
+      expect(response.status).toBe(201); // see this describe block's own top comment
+    }
+
+    const response = await POST(postEssay({ content: validLengthContent('One too many.') }, sessionId));
+    const body: { error: string; reason?: string } = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(body.reason).toBe('rateLimited');
+    // "Clear, non-cryptic" (the AC's own wording) — proven at the schema
+    // level rather than pinning exact prose: the message names the actual
+    // problem (too many submissions), not a generic "something went wrong".
+    expect(body.error.toLowerCase()).toMatch(/too many|rate|limit/);
+    expect(await countEssaysForSession(sessionId)).toBe(ESSAY_SUBMISSION_SESSION_LIMIT);
+  });
+
+  it('does not let one session\'s exhausted cap affect a completely different session', async () => {
+    const exhaustedSession = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId: exhaustedSession });
+    for (let i = 0; i < ESSAY_SUBMISSION_SESSION_LIMIT; i++) {
+      const response = await POST(postEssay({ content: validLengthContent(`Submission number ${i}.`) }, exhaustedSession));
+      expect(response.status).toBe(201);
+    }
+    // The exhausted session really is exhausted now — establishes the
+    // rejection this test's own point rests on actually fired.
+    const exhaustedResponse = await POST(postEssay({ content: validLengthContent('Should be refused.') }, exhaustedSession));
+    expect(exhaustedResponse.status).toBe(429);
+
+    const freshSession = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId: freshSession });
+    const freshResponse = await POST(postEssay({ content: validLengthContent('A different guest entirely.') }, freshSession));
+
+    expect(freshResponse.status).toBe(201);
+  });
+});
+
+/**
+ * KAN-25 — the per-IP backstop, and the specific bypass the ticket names:
+ * "must not be trivially bypassable by clearing the session cookie." A
+ * caller that clears its cookie between every five submissions gets a
+ * brand-new session id (and therefore a fresh session-scoped budget) for
+ * free — see `lib/domain/rate-limit.ts`'s own comment on why that cap alone
+ * is not enough. These tests prove the IP-scoped counter is what actually
+ * closes that: it stays keyed on the one thing clearing a cookie doesn't
+ * change.
+ */
+describe('POST /api/essays — KAN-25: the per-IP backstop is not bypassable by clearing the session cookie', () => {
+  it('blocks a request from a BRAND-NEW session — one that has never submitted before, nowhere near its own cap — once that IP has exhausted its backstop', async () => {
+    const sharedIp = '198.51.100.42';
+    const sessionsNeeded = Math.ceil(ESSAY_SUBMISSION_IP_LIMIT / ESSAY_SUBMISSION_SESSION_LIMIT);
+
+    let submitted = 0;
+    for (let s = 0; s < sessionsNeeded && submitted < ESSAY_SUBMISSION_IP_LIMIT; s++) {
+      const sessionId = generateGuestSessionId();
+      await createGuestSession({ kind: 'guest', sessionId });
+      for (let i = 0; i < ESSAY_SUBMISSION_SESSION_LIMIT && submitted < ESSAY_SUBMISSION_IP_LIMIT; i++) {
+        const response = await POST(
+          postEssay({ content: validLengthContent(`IP-backstop fixture ${s}-${i}.`) }, sessionId, xff(sharedIp)),
+        );
+        // Every one of these must genuinely succeed — the trap this
+        // describe block's own top comment names: reaching
+        // ESSAY_SUBMISSION_IP_LIMIT total submissions only proves what this
+        // test claims if none of them failed on the way there.
+        expect(response.status).toBe(201);
+        submitted++;
+      }
+    }
+    expect(submitted).toBe(ESSAY_SUBMISSION_IP_LIMIT);
+
+    const brandNewSession = generateGuestSessionId(); // never submitted before — its OWN session cap is nowhere near exhausted
+    await createGuestSession({ kind: 'guest', sessionId: brandNewSession });
+
+    const response = await POST(
+      postEssay({ content: validLengthContent('Should be refused by the IP backstop alone.') }, brandNewSession, xff(sharedIp)),
+    );
+    const body: { error: string; reason?: string } = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(body.reason).toBe('rateLimited');
+  });
+
+  it('does not let one IP\'s exhausted backstop affect a request from a different IP', async () => {
+    const exhaustedIp = '198.51.100.43';
+    for (let i = 0; i < ESSAY_SUBMISSION_IP_LIMIT; i++) {
+      const sessionId = generateGuestSessionId();
+      await createGuestSession({ kind: 'guest', sessionId });
+      const response = await POST(
+        postEssay({ content: validLengthContent(`IP-backstop fixture ${i}.`) }, sessionId, xff(exhaustedIp)),
+      );
+      expect(response.status).toBe(201);
+    }
+
+    const stillOnExhaustedIp = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId: stillOnExhaustedIp });
+    const exhaustedResponse = await POST(
+      postEssay({ content: validLengthContent('Refused.') }, stillOnExhaustedIp, xff(exhaustedIp)),
+    );
+    expect(exhaustedResponse.status).toBe(429); // establishes the IP really is exhausted
+
+    const differentIpSession = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId: differentIpSession });
+    const differentIpResponse = await POST(
+      postEssay({ content: validLengthContent('A different network entirely.') }, differentIpSession, xff('198.51.100.44')),
+    );
+
+    expect(differentIpResponse.status).toBe(201);
+  });
+});
+
+/**
+ * KAN-25 — "before the body is read" is not just a comment; a rate-limited
+ * caller must never cost this route the up-to-128KB buffer
+ * `readBodyWithinLimit` allocates. Same proof technique the cookie guard's
+ * own "never pulls a single chunk" test (above) already established: a
+ * stream that would pull forever if anything ever tried to read it.
+ */
+describe('POST /api/essays — KAN-25: the rate limit runs before the body is read', () => {
+  it('never pulls a single chunk off the body stream once the session cap is already exhausted — rejected on the counters alone, before the body is touched', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    for (let i = 0; i < ESSAY_SUBMISSION_SESSION_LIMIT; i++) {
+      const response = await POST(postEssay({ content: validLengthContent(`Submission number ${i}.`) }, sessionId));
+      expect(response.status).toBe(201); // see the per-session describe block's own top comment
+    }
+
+    let pulls = 0;
+    const chunk = new TextEncoder().encode('a'.repeat(10_000));
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulls += 1;
+          controller.enqueue(chunk);
+        },
+      },
+      { highWaterMark: 0 }, // see the chunked-transfer describe block's own KAN-25 comment for why this matters here
+    );
+    const request = new NextRequest(new URL('http://localhost:3000/api/essays'), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'http://localhost:3000',
+        host: 'localhost:3000',
+        cookie: `${GUEST_SESSION_COOKIE_NAME}=${sessionId}`,
+      },
+      body: stream,
+      duplex: 'half',
+    } as ConstructorParameters<typeof NextRequest>[1]);
+
+    const response = await POST(request);
+    const body: { error: string; reason?: string } = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(body.reason).toBe('rateLimited');
+    expect(pulls).toBe(0);
+  });
+});
+
+/**
  * KAN-15 (BR-1.4 through BR-1.7) — the word-count bounds, enforced
  * server-side. Every test in this file already calls `POST()` directly with
  * a hand-built `NextRequest` — no `EssayEntryForm`, no browser, nothing
@@ -900,8 +1189,15 @@ describe('POST /api/essays — the KAN-15 word-count bounds, enforced independen
   it('creates no guest session row as a side effect of a length-rejected submission, the same guarantee already proven for an empty one', async () => {
     const sessionId = generateGuestSessionId(); // never persisted
 
-    await POST(postEssay({ content: wordsContent(1000) }, sessionId));
+    const response = await POST(postEssay({ content: wordsContent(1000) }, sessionId));
 
+    // Round-1 review (Test Lead, blocking): same reasoning as the empty-
+    // content version of this test above — 400/"tooLong" proves THIS
+    // rejection ran, not some other guard (KAN-25's rate limit included)
+    // that would also leave no row behind.
+    expect(response.status).toBe(400);
+    const body: { reason?: string } = await response.json();
+    expect(body.reason).toBe('tooLong');
     const persisted = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
     expect(persisted).toBeNull();
   });
@@ -916,8 +1212,16 @@ describe('POST /api/essays — the KAN-15 word-count bounds, enforced independen
     const content = `${secretToken} ${wordsContent(999)}`;
 
     try {
-      await POST(postEssay({ content }, sessionId));
+      const response = await POST(postEssay({ content }, sessionId));
 
+      // Round-1 review (Test Lead, blocking): 400/"tooLong" proves the
+      // length rejection this test's own title names actually ran, rather
+      // than passing for the wrong reason against some other refusal
+      // (KAN-25's rate limit included) that also never reaches the log
+      // statement this test is checking for.
+      expect(response.status).toBe(400);
+      const body: { reason?: string } = await response.json();
+      expect(body.reason).toBe('tooLong');
       for (const spy of [logSpy, errorSpy, warnSpy]) {
         for (const call of spy.mock.calls) {
           expect(JSON.stringify(call)).not.toContain(secretToken);
@@ -1056,6 +1360,29 @@ describe('POST /api/essays — KAN-31: guard-level rejections never leak essay c
     // See the cross-origin test's own comment above — the reason is what
     // proves this branch, specifically, is what fired.
     expect(body.reason).toBe('invalidSubmission');
+    expect(rawBody).not.toContain(secretToken);
+    expect(rawBody).not.toContain(sessionId);
+  });
+
+  // KAN-25: the same guarantee, extended to the new rate-limit rejection —
+  // this guard runs earliest of all (right after the cookie guard, ahead of
+  // the body ever being read), so it has the least excuse of any of them to
+  // ever echo anything request-specific.
+  it('a rate-limited rejection leaks neither the session id nor the submitted content', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const secretToken = 'EinAchterToken_NieBeiEinerRateLimitAntwort';
+    for (let i = 0; i < ESSAY_SUBMISSION_SESSION_LIMIT; i++) {
+      const setupResponse = await POST(postEssay({ content: validLengthContent(`Setup ${i}.`) }, sessionId));
+      expect(setupResponse.status).toBe(201); // establishes the cap is genuinely exhausted below
+    }
+
+    const response = await POST(postEssay({ content: `${secretToken} ${wordsContent(60)}` }, sessionId));
+    const body = await response.json();
+    const rawBody = JSON.stringify(body);
+
+    expect(response.status).toBe(429);
+    expect(body.reason).toBe('rateLimited');
     expect(rawBody).not.toContain(secretToken);
     expect(rawBody).not.toContain(sessionId);
   });

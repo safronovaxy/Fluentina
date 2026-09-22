@@ -1,0 +1,1 @@
+CREATE INDEX "rate_limit_counters_window_start_idx" ON "fluentina"."rate_limit_counters" USING btree ("window_start");
