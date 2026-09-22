@@ -168,11 +168,12 @@ function liveWordCountLocator(page: Page) {
  * The `+ 1` is capped at `MAX_PROBE_WORD_COUNT` (below): `EssayEntryForm`'s
  * too-long block (`showTooLongError`) is deliberately NOT gated on having
  * submitted -- it's live, the same way the guidance/warning text is -- so
- * an uncapped probe filling at or above the 300-word ceiling would itself,
- * transiently, render a blocking "too long" alert while proving hydration.
- * No current call site fills that high, but nothing stops a future one, so
- * this stays inside the ceiling defensively: `pickProbeWordCount` prefers
- * `max(current, upcoming) + 1` when that's still under the cap (true for
+ * an uncapped probe filling above the 300-word ceiling would itself,
+ * transiently, render a blocking "too long" alert while proving hydration
+ * (300 itself is over the recommended range but not blocked -- only more
+ * than 300 is). No current call site fills that high, but nothing stops a
+ * future one, so this stays at the ceiling defensively: `pickProbeWordCount`
+ * prefers `max(current, upcoming) + 1` when that's still under the cap (true for
  * every call site today), and falls back to counting down from the cap
  * itself, skipping only the (at most two) values current/upcoming already
  * hold, when it isn't.
