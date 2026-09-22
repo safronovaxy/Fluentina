@@ -318,7 +318,15 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
         aria-invalid={isInvalid}
         aria-describedby={errorId}
       />
-      <div className="mt-1 text-sm text-muted-foreground">
+      {/*
+        data-testid, not a bare structural selector -- tests/helpers/essay-fill.ts's
+        `ensureEssayFormHydrated` has to locate this element reliably to prove the
+        page has hydrated before every fill (word-count.spec.ts, essay-entry.spec.ts),
+        and it's on the critical path of every test in both files. See that helper's
+        own comment on `liveWordCountLocator` for why a sibling-position selector
+        there used to be, and stopped being, safe.
+      */}
+      <div className="mt-1 text-sm text-muted-foreground" data-testid="essay-word-count">
         <WordCountLabel count={wordCount} />
       </div>
       {showRecommendedGuidance && <p className="mt-1 text-sm text-muted-foreground">{strings.recommendedRangeGuidance}</p>}

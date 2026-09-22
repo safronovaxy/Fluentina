@@ -390,6 +390,19 @@ describe('EssayEntryForm — the live word counter (KAN-15)', () => {
     expect(screen.getByText('0 words')).toBeInTheDocument();
   });
 
+  // Round-4 review: the counter's wrapper carries data-testid="essay-word-count"
+  // solely so tests/helpers/essay-fill.ts's ensureEssayFormHydrated can locate
+  // it reliably (see that file's own comment on liveWordCountLocator) -- but
+  // it's referenced nowhere else, so nothing at the unit level failed if a
+  // future edit renamed or dropped it. This pins it as an enforced contract,
+  // not a decorative attribute: a mutant that drops or renames the testid now
+  // fails here, at the unit level, instead of surfacing later as every e2e
+  // test's hydration-guard timeout.
+  it('carries the essay-word-count testid the e2e hydration guard depends on to locate this element', () => {
+    renderForm();
+    expect(screen.getByTestId('essay-word-count')).toBeInTheDocument();
+  });
+
   it('updates live as the guest types, with no submit attempt needed', () => {
     renderForm();
 
