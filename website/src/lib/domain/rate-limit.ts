@@ -53,7 +53,14 @@ import 'server-only';
  *
  * --- Per-IP cap: an engineering call, made here ---
  *
- * 30 essay submissions per IP per hour — 6x the per-session cap. Justified
+ * Round-2 review (Architect, Test Lead, independently): this headline used
+ * to still say "30 essay submissions per IP per hour — 6x the per-session
+ * cap" — the number round-1 review replaced, thirteen lines below, with 120.
+ * One comment block stated two different caps for the same security-relevant
+ * number, and this line is the one a reviewer reads first. Corrected to
+ * match the constant and the paragraph explaining it:
+ *
+ * 120 essay submissions per IP per hour — 24x the per-session cap. Justified
  * against two things this deployment already has, not picked in a vacuum:
  *
  * 1. The "shared network" acceptance criterion. Round-1 review (Architect,
@@ -120,12 +127,32 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
  * Server-only (this whole module is): nothing here is a `NEXT_PUBLIC_*`
  * var, so these are never baked into the client bundle, unlike everything
  * in `.env.example`'s existing entries.
+ *
+ * Round-2 review (Test Lead): every branch above was already correct but
+ * untested — nothing exercised this function directly, only the module-load
+ * constants that call it once, which a table-driven test can't cheaply
+ * re-trigger per case. Exported so `rate-limit.test.ts` can call it directly
+ * with every input in the table, not a public helper meant for reuse
+ * elsewhere.
+ *
+ * Also round-2 (Test Lead, the two questions this comment used to leave
+ * open): `Number.parseInt` stops at the first character it can't parse
+ * rather than rejecting the rest of the string — "1e4" (scientific notation
+ * for 10000) parsed as `1`, and "5.5" parsed as `5`, both silently, with no
+ * error. Neither would ever zero out or unbound a cap (the `> 0` check below
+ * still catches that), but both would silently configure a completely
+ * different number than the one an operator typed — a worse failure mode
+ * than falling back to the documented default, which is at least the
+ * behaviour `.env.example` describes. Decided: reject both rather than
+ * round or truncate — a value must be a plain non-negative integer literal
+ * (digits only; no sign, decimal point, or exponent) or it falls back, the
+ * same as a non-numeric string always has.
  */
-function positiveIntEnv(name: string, fallback: number): number {
+export function positiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
-  if (raw === undefined || raw === '') return fallback;
+  if (raw === undefined || raw === '' || !/^\d+$/.test(raw)) return fallback;
   const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  return parsed > 0 ? parsed : fallback;
 }
 
 /** Fixed by the ticket — not an engineering call. See this module's own comment. */
@@ -136,6 +163,14 @@ export const ESSAY_SUBMISSION_SESSION_WINDOW_MS = ONE_HOUR_MS;
  * The per-IP backstop, and its window — see this module's own comment for
  * the justification behind 120, and for why this reads from the
  * environment rather than being a bare literal.
+ *
+ * Round-2 review (Test Lead): tuned as a PAIR with
+ * `GUEST_SESSION_RESOLVE_IP_LIMIT` below, which is documented (that
+ * constant's own comment) as deliberately double this one. Both are
+ * independently overridable via the environment, so setting only this one
+ * without also raising the other breaks that documented 2x relationship
+ * silently — nothing enforces it at runtime. Retuning either one against
+ * real traffic should retune both together.
  */
 export const ESSAY_SUBMISSION_IP_LIMIT = positiveIntEnv('RATE_LIMIT_ESSAY_SUBMISSION_IP_LIMIT', 120);
 export const ESSAY_SUBMISSION_IP_WINDOW_MS = ONE_HOUR_MS;
@@ -143,6 +178,13 @@ export const ESSAY_SUBMISSION_IP_WINDOW_MS = ONE_HOUR_MS;
 export const GUEST_SESSION_RESOLVE_SESSION_LIMIT = 20;
 export const GUEST_SESSION_RESOLVE_SESSION_WINDOW_MS = ONE_HOUR_MS;
 
+/**
+ * See this module's own comment for why 240 (double the essay endpoint's
+ * own backstop). Round-2 review (Test Lead): tuned as a PAIR with
+ * `ESSAY_SUBMISSION_IP_LIMIT` above — same caveat, same direction: an
+ * override to one without the other silently breaks the documented 2x
+ * relationship between them.
+ */
 export const GUEST_SESSION_RESOLVE_IP_LIMIT = positiveIntEnv('RATE_LIMIT_GUEST_SESSION_RESOLVE_IP_LIMIT', 240);
 export const GUEST_SESSION_RESOLVE_IP_WINDOW_MS = ONE_HOUR_MS;
 
@@ -163,35 +205,78 @@ function windowStartFor(now: Date, windowMs: number): Date {
  * without this, there is no way to tell a working limiter from a broken
  * one in production, and that admission is unfalsifiable): the one
  * structured line this story emits, on REFUSAL only — which cap fired
- * (`action`+`scope`) and the count that tripped it. Deliberately minimal;
- * the fuller picture (latency, volume trends, alerting) belongs to KAN-24,
- * not this story — this is only what makes the threshold this module
- * cannot validate at least observable.
+ * (`action`+`scope`), the count that tripped it, and a correlation key for
+ * WHO tripped it (see `hashAndTruncate` below for exactly what that key is
+ * and is not). Deliberately minimal; the fuller picture (latency, volume
+ * trends, alerting) belongs to KAN-24, not this story — this is only what
+ * makes the threshold this module cannot validate at least observable.
  *
- * NEVER the raw session id: `identity` is only ever passed for `scope:
- * 'ip'` (see `underIpLimit`) — a session-scoped refusal logs no identity at
- * all, because the session id is a bearer credential (see actor.ts) and a
- * log line is not a place to put one, hashed or not. An address is not a
- * credential the same way, but it's still not logged verbatim either —
- * `hashAndTruncate` below keeps it to a short, non-reversible-in-practice
- * fingerprint, enough to spot a repeat offender across log lines without
- * keeping a plain per-caller address sitting in a log store this story
- * doesn't own the retention policy of.
+ * `severity` (round-2 review, Architect: not present before) is what lets
+ * this line sort above routine request logs and be driven off in an alert —
+ * the whole reason this line exists is that nothing else tells an on-call
+ * engineer a cap is firing.
+ *
+ * Round-2 review (Architect, Test Lead, independently, both measured this):
+ * a session-scoped refusal used to log NO identity at all — "the session id
+ * is a bearer credential, and a log line is not the place for one, hashed
+ * or not". That rule was too broad, and backwards for what this logging
+ * exists to answer: `hashAndTruncate` below is genuinely one-way for a
+ * HIGH-entropy secret like a guest session id (recovering the original
+ * value from 48 bits of truncated hash by brute force is not the same
+ * search problem as enumerating a small space) but was NOT one-way for the
+ * LOW-entropy address it was actually protecting — see that function's own
+ * comment. This module had the two backwards: the address that COULD be
+ * brute-forced got hashed, and the session id that genuinely couldn't be
+ * got nothing. The consequence: five hundred session-scoped refusal lines
+ * were indistinguishable between one repeat abuser and five hundred
+ * different learners tripping a cap set too tight — exactly the question
+ * this logging exists to answer given no traffic baseline exists to tune
+ * against. Every refusal now carries an `identityHash`, computed the same
+ * way regardless of scope; the raw value never appears in either case.
  */
-function logRefusal(action: string, scope: 'session' | 'ip', limit: number, count: number, identity?: string): void {
+function logRefusal(action: string, scope: 'session' | 'ip', limit: number, count: number, identity: string): void {
   console.log(
     JSON.stringify({
+      severity: 'WARNING',
       event: 'rate_limit_refused',
       action,
       scope,
       limit,
       count,
-      ...(identity !== undefined ? { identityHash: hashAndTruncate(identity) } : {}),
+      identityHash: hashAndTruncate(identity),
     }),
   );
 }
 
-/** A short, one-way fingerprint of `value` — see `logRefusal`'s own comment for why an address is hashed rather than logged verbatim. */
+/**
+ * A stable correlation key for `value` across log lines — NOT
+ * pseudonymisation. Round-2 review (Architect, Test Lead, independently
+ * measured): the comment that used to sit here called this "a short,
+ * non-reversible-in-practice fingerprint". False for a LOW-entropy input:
+ * an IPv4 address is one of roughly four billion values, this is an
+ * unsalted hash of it truncated to 48 bits, and the entire space is
+ * brute-forceable — the Architect recovered a specific address from its
+ * hash in 35ms, and both reviewers independently put the full address space
+ * at roughly half an hour on one core. Anyone with read access to these
+ * logs recovers every refused address exactly; this value IS personal data,
+ * recoverable, and inherits whatever retention policy the log store has —
+ * a privacy or retention answer built on "pseudonymised" would be wrong.
+ *
+ * For a HIGH-entropy input — a guest session id (see session-id.ts) — the
+ * same construction genuinely is a one-way correlation key: there is no
+ * space small enough to brute-force from 48 bits of truncated hash output
+ * back to the original value. That asymmetry is a property of the INPUT's
+ * entropy, not of this function, which does not know or care which kind of
+ * value it's given — see `logRefusal`'s own comment for why both scopes now
+ * log one.
+ *
+ * The real fix for the address side is salting with a per-deployment
+ * secret, closing the brute-force gap outright. Not done here: it needs
+ * secret management this app's own runtime doesn't have wired (see
+ * CLAUDE.md's Secrets list — every entry there backs the CMS, none of it
+ * this app). Flagged for whichever story wires that, not a decision to make
+ * unilaterally in this one.
+ */
 function hashAndTruncate(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 12);
 }
@@ -200,14 +285,17 @@ function hashAndTruncate(value: string): string {
  * True while `bucketKey`'s count for the window containing `now` is still
  * at or under `limit`, having just incremented it. `log` identifies which
  * cap this call is checking, purely for `logRefusal` above — never
- * consulted for the pass/fail decision itself.
+ * consulted for the pass/fail decision itself. `log.identity` is required
+ * (round-2 review — see `logRefusal`'s own comment for why a session-scoped
+ * refusal now logs a correlation key the same as an IP-scoped one does,
+ * rather than the identity being optional and omitted for one of the two).
  */
 async function underLimit(
   bucketKey: string,
   limit: number,
   windowMs: number,
   now: Date,
-  log: { action: string; scope: 'session' | 'ip'; identity?: string },
+  log: { action: string; scope: 'session' | 'ip'; identity: string },
 ): Promise<boolean> {
   const windowStart = windowStartFor(now, windowMs);
   const count = await incrementRateLimitCounter(bucketKey, windowStart);
@@ -262,7 +350,7 @@ export async function checkEssaySubmissionRateLimit(
     ESSAY_SUBMISSION_SESSION_LIMIT,
     ESSAY_SUBMISSION_SESSION_WINDOW_MS,
     now,
-    { action: 'essaySubmission', scope: 'session' },
+    { action: 'essaySubmission', scope: 'session', identity: sessionId },
   );
   const ipOk = await underIpLimit('essaySubmission', ip, ESSAY_SUBMISSION_IP_LIMIT, ESSAY_SUBMISSION_IP_WINDOW_MS, now);
   return sessionOk && ipOk;
@@ -284,7 +372,7 @@ export async function checkGuestSessionResolveRateLimit(
     GUEST_SESSION_RESOLVE_SESSION_LIMIT,
     GUEST_SESSION_RESOLVE_SESSION_WINDOW_MS,
     now,
-    { action: 'guestSessionResolve', scope: 'session' },
+    { action: 'guestSessionResolve', scope: 'session', identity: sessionId },
   );
   const ipOk = await underIpLimit(
     'guestSessionResolve',

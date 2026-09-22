@@ -170,8 +170,22 @@ export const essays = fluentinaSchema.table(
  * to receive it) is a deployment decision outside this story's scope to
  * make unilaterally. Folding the delete into the write path this table
  * already takes on every check bounds growth today without inventing new
- * infrastructure; `windowStartIdx` below is what keeps that delete an
- * indexed range scan rather than a sequential one as the table grows.
+ * infrastructure; `rate_limit_counters_window_start_idx` below is what keeps
+ * that delete an indexed range scan rather than a sequential one as the
+ * table grows.
+ *
+ * Round-2 review (Architect): the real guarantee this gives is weaker than
+ * "bounded to two hours" on its own, and the line further down that used to
+ * say exactly that overstated it. The sweep above runs ONLY on the write
+ * path — a service that scales to zero (Cloud Run, see this table's own
+ * comment above) has no sweep running while nothing is calling it. A burst
+ * of rows written at 2am, with no further traffic until 9am the next day,
+ * sits for the full 31 hours in between — not two. The real guarantee is
+ * "swept within two hours of the NEXT request that happens to land",
+ * whenever that is. Closing that gap for real needs the scheduled sweep
+ * path this comment already says doesn't exist anywhere in this codebase —
+ * the same one `guest_sessions`' own deferred 30-day retention is waiting
+ * on too, not a second, unrelated piece of infrastructure.
  */
 export const rateLimitCounters = fluentinaSchema.table(
   'rate_limit_counters',
@@ -183,7 +197,9 @@ export const rateLimitCounters = fluentinaSchema.table(
     // requests with the same key in the same window count against each
     // other. Personal data (a session id, a client address) for as long as
     // its row lives — see this table's own comment above for why that's now
-    // bounded to a couple of hours, not forever.
+    // bounded to roughly two hours after the next write to this table
+    // (not forever, and not a hard "two hours from now" either — see that
+    // comment's own round-2 correction for the gap between the two).
     bucketKey: text('bucket_key').notNull(),
     windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
     count: integer('count').notNull().default(0),

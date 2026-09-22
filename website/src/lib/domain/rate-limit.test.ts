@@ -4,9 +4,14 @@ import {
   checkEssaySubmissionRateLimit,
   checkGuestSessionResolveRateLimit,
   ESSAY_SUBMISSION_SESSION_LIMIT,
+  ESSAY_SUBMISSION_SESSION_WINDOW_MS,
   ESSAY_SUBMISSION_IP_LIMIT,
+  ESSAY_SUBMISSION_IP_WINDOW_MS,
   GUEST_SESSION_RESOLVE_SESSION_LIMIT,
+  GUEST_SESSION_RESOLVE_SESSION_WINDOW_MS,
   GUEST_SESSION_RESOLVE_IP_LIMIT,
+  GUEST_SESSION_RESOLVE_IP_WINDOW_MS,
+  positiveIntEnv,
 } from './rate-limit';
 import { generateGuestSessionId } from './session-id';
 import { resetDatabase, closePool } from '@/test/db-fixtures';
@@ -82,18 +87,29 @@ describe('checkEssaySubmissionRateLimit — the session cap (5/hour, fixed by th
     expect(freshResult).toBe(true);
   });
 
-  // Round-1 review (Test Lead, blocking): the window length itself was
-  // never pinned either — the old version of this test exhausted the cap at
-  // :30 past the hour and checked again an hour later, which only proves
-  // the window is SHORTER than that hour-long gap; any window from a few
-  // seconds upward would still pass it. Replaced with the two edge cases
-  // that actually pin the boundary: exhausting at the top of an hour and
-  // checking one millisecond before it ends (still refused — the window is
-  // not shorter than an hour), and exhausting one millisecond before an
-  // hour ends and checking the very next millisecond (allowed — the window
-  // is not longer than an hour either). Together the two pin the window at
-  // exactly one hour; a refactor of `windowStartFor`'s arithmetic, or an
-  // edit to either window constant, now fails one of them.
+  // Round-2 review (Test Lead, blocking — measured directly): the claim
+  // this comment used to make, that the two edge tests below "pin the
+  // window at exactly one hour", was false. They pin it DOWNWARD only:
+  // shortening the window still fails them (correct), but the Test Lead
+  // measured that DOUBLING, TRIPLING, or even 6x-ing `ONE_HOUR_MS` survives
+  // this whole file. The instant these tests use — 2026-01-01T05:00:00Z, the
+  // fixed top-of-hour edge — is 490,902 hours since the epoch, which
+  // divides evenly by 2, 3 and 6; at any of those widened windows the first
+  // edge below still falls inside one bucket and the second is still a
+  // bucket start, so both assertions still hold by coincidence of the
+  // chosen instant, not because the window is actually one hour. A constant
+  // doubled in some future refactor would enforce five submissions per TWO
+  // hours, ship with a green suite, and this very comment claiming it
+  // couldn't happen. The direct assertion right below closes that: it pins
+  // the constant itself against the ticket's literal "an hour", independent
+  // of which instant any other test happens to use. These two edge tests
+  // are kept below regardless — they're still what proves `windowStartFor`
+  // actually buckets on the constant's value, they just don't pin the
+  // value on their own.
+  it('the session window is exactly one hour — asserted directly against the constant, not re-derived from arithmetic a doubled window would still satisfy', () => {
+    expect(ESSAY_SUBMISSION_SESSION_WINDOW_MS).toBe(60 * 60 * 1000);
+  });
+
   it('exhausted at the top of an hour, a request one millisecond before that hour ends is still refused — the window is not shorter than an hour', async () => {
     const sessionId = generateGuestSessionId();
     const topOfHour = new Date('2026-01-01T05:00:00.000Z');
@@ -126,6 +142,17 @@ describe('checkEssaySubmissionRateLimit — the session cap (5/hour, fixed by th
 describe('checkEssaySubmissionRateLimit — the per-IP backstop, deliberately looser than the session cap (KAN-25\'s own engineering call)', () => {
   it('the IP backstop is strictly looser than the session cap, the acceptance criterion\'s own "shared network" requirement made concrete', () => {
     expect(ESSAY_SUBMISSION_IP_LIMIT).toBeGreaterThan(ESSAY_SUBMISSION_SESSION_LIMIT);
+  });
+
+  // Round-2 review (Test Lead) — same gap, same fix, as the session window's
+  // own direct assertion above: the IP-scoped window shares `windowStartFor`
+  // but is a SEPARATE constant (`ESSAY_SUBMISSION_IP_WINDOW_MS`), so a
+  // refactor that widened only this one would pass every edge test above
+  // (none of them exercise the IP-scoped window) and pass every IP-scoped
+  // test below too, for the exact reason described above: this file's fixed
+  // instants divide evenly by small widening factors.
+  it('the IP window is exactly one hour — asserted directly against the constant', () => {
+    expect(ESSAY_SUBMISSION_IP_WINDOW_MS).toBe(60 * 60 * 1000);
   });
 
   // The AC this test exists to prove: the session cap ALONE is trivially
@@ -227,6 +254,21 @@ describe('checkGuestSessionResolveRateLimit — the accumulated-finding fix: bou
     expect(GUEST_SESSION_RESOLVE_IP_LIMIT).toBeGreaterThan(ESSAY_SUBMISSION_IP_LIMIT);
   });
 
+  // Round-2 review (Test Lead) — same direct-assertion fix as both essay
+  // window tests above, for the same reason: this endpoint has its OWN pair
+  // of window constants (`GUEST_SESSION_RESOLVE_SESSION_WINDOW_MS`,
+  // `GUEST_SESSION_RESOLVE_IP_WINDOW_MS`), and the edge tests below alone
+  // only pin them downward — see the essay session window's own comment
+  // above for the measured, worked example (a widened window still passing
+  // every edge test in this file).
+  it('the session window is exactly one hour — asserted directly against the constant', () => {
+    expect(GUEST_SESSION_RESOLVE_SESSION_WINDOW_MS).toBe(60 * 60 * 1000);
+  });
+
+  it('the IP window is exactly one hour — asserted directly against the constant', () => {
+    expect(GUEST_SESSION_RESOLVE_IP_WINDOW_MS).toBe(60 * 60 * 1000);
+  });
+
   // Round-1 review (Test Lead, blocking): same gap as the essay endpoint's
   // session cap above, and the same fix — see that describe block's own
   // comment for the full reasoning. This endpoint shares `windowStartFor`
@@ -287,7 +329,17 @@ describe('rate-limit refusal logging (KAN-25 item 5, round-1 review, blocking �
     }
   });
 
-  it('logs one structured line naming the session cap and its count when it fires, and never contains the raw session id', async () => {
+  // Round-2 review (Architect, Test Lead, independently): a session-scoped
+  // refusal used to log no identity at all, on the reasoning that a session
+  // id is a bearer credential and shouldn't be logged "hashed or not" — see
+  // `logRefusal`'s own comment for why that rule was backwards. Five hundred
+  // session-scoped refusal lines that all looked identical (no way to tell
+  // one repeat abuser from five hundred different learners) is exactly the
+  // gap this test now proves closed: the correlation key must be present,
+  // must differ between two different sessions (proving it's a real
+  // per-identity hash, not a shared placeholder), and the raw session id
+  // must still never appear, in any form.
+  it('logs one structured line naming the session cap, its count, and a WARNING severity when it fires — with a per-session correlation key, never the raw session id', async () => {
     const sessionId = generateGuestSessionId();
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
@@ -302,22 +354,39 @@ describe('rate-limit refusal logging (KAN-25 item 5, round-1 review, blocking �
       const [line] = logSpy.mock.calls[0] as [string];
       const logged: unknown = JSON.parse(line);
       expect(logged).toMatchObject({
+        severity: 'WARNING',
         action: 'essaySubmission',
         scope: 'session',
         limit: ESSAY_SUBMISSION_SESSION_LIMIT,
         count: ESSAY_SUBMISSION_SESSION_LIMIT + 1,
       });
+      const sessionIdentityHash = (logged as { identityHash?: string }).identityHash;
+      expect(sessionIdentityHash).toBeTruthy();
       // The bearer credential itself must never appear in the log line, in
-      // any form — see logRefusal's own comment for why a session-scoped
-      // refusal carries no identity field at all, unlike an IP-scoped one.
+      // any form, raw or as a substring of the hash — only a correlation
+      // key derived from it.
       expect(line).not.toContain(sessionId);
-      expect(logged).not.toHaveProperty('identityHash');
+
+      // A different session refused the same way must produce a DIFFERENT
+      // correlation key — otherwise this "identityHash" is a constant that
+      // happens to satisfy the assertions above without actually
+      // distinguishing one session's refusals from another's, defeating the
+      // entire point of adding it.
+      const otherSessionId = generateGuestSessionId();
+      for (let i = 0; i < ESSAY_SUBMISSION_SESSION_LIMIT; i++) {
+        await checkEssaySubmissionRateLimit(otherSessionId, null, FIXED_NOW);
+      }
+      logSpy.mockClear();
+      await checkEssaySubmissionRateLimit(otherSessionId, null, FIXED_NOW);
+      const [otherLine] = logSpy.mock.calls[0] as [string];
+      const otherLogged: unknown = JSON.parse(otherLine);
+      expect((otherLogged as { identityHash?: string }).identityHash).not.toBe(sessionIdentityHash);
     } finally {
       logSpy.mockRestore();
     }
   });
 
-  it('logs the IP cap by scope, with a hashed/truncated address, never the raw one', async () => {
+  it('logs the IP cap by scope, with a WARNING severity and a hashed/truncated address, never the raw one', async () => {
     const ip = '192.0.2.222';
     const sessionsNeeded = Math.ceil(ESSAY_SUBMISSION_IP_LIMIT / ESSAY_SUBMISSION_SESSION_LIMIT);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -337,11 +406,57 @@ describe('rate-limit refusal logging (KAN-25 item 5, round-1 review, blocking �
       const ipLogLine = logSpy.mock.calls.map((call) => call[0] as string).find((line) => JSON.parse(line).scope === 'ip');
       expect(ipLogLine).toBeDefined();
       const ipLog: unknown = JSON.parse(ipLogLine as string);
-      expect(ipLog).toMatchObject({ action: 'essaySubmission', scope: 'ip', limit: ESSAY_SUBMISSION_IP_LIMIT });
+      expect(ipLog).toMatchObject({ severity: 'WARNING', action: 'essaySubmission', scope: 'ip', limit: ESSAY_SUBMISSION_IP_LIMIT });
       expect((ipLog as { identityHash?: string }).identityHash).toBeTruthy();
       expect(ipLogLine).not.toContain(ip);
     } finally {
       logSpy.mockRestore();
+    }
+  });
+});
+
+/**
+ * Round-2 review (Test Lead): `positiveIntEnv` was correct on every branch
+ * but exercised by nothing — the module-load constants that call it once
+ * (`ESSAY_SUBMISSION_IP_LIMIT` etc.) can't cheaply re-trigger it per case,
+ * so relaxing the `> 0` check in some later edit (letting a configured `0`
+ * through) would mean every address is refused, in production, with no test
+ * anywhere going red. Exported specifically so this table can call it
+ * directly. `undefined` (env var truly absent) and `''` (present but empty)
+ * are tested as two separate rows, not folded into one "falsy" case — they
+ * are two different states of `process.env` on the way in, both required to
+ * fall back the same way.
+ */
+describe('positiveIntEnv — every branch table-driven, so a relaxed positivity check can never mean "refuse everyone" silently', () => {
+  const FALLBACK = 42;
+
+  it.each<[string, string | undefined, number]>([
+    ['unset entirely', undefined, FALLBACK],
+    ['the empty string', '', FALLBACK],
+    ['non-numeric text', 'not-a-number', FALLBACK],
+    ['zero', '0', FALLBACK],
+    ['a negative integer', '-5', FALLBACK],
+    ['a valid positive integer', '17', 17],
+    // Decided (this function's own comment): scientific notation is
+    // REJECTED, not silently truncated to its leading digit —
+    // `Number.parseInt` alone would have parsed this as `1`, a wildly
+    // different (and far stricter) cap than the `10000` an operator
+    // presumably meant, with no error either way.
+    ['scientific notation', '1e4', FALLBACK],
+    // Decided (this function's own comment): a fractional value is
+    // REJECTED, not rounded or floored — `Number.parseInt` alone would have
+    // silently truncated this to `5`.
+    ['a fractional value', '5.5', FALLBACK],
+    // A leading '+' is a valid JS numeric literal but not a plain digit
+    // string — rejected the same way, falling back rather than being
+    // parsed leniently.
+    ['a leading plus sign', '+5', FALLBACK],
+  ])('%s falls back to the default (%s -> %s is asserted per row, never 0 or Infinity)', (_label, envValue, expected) => {
+    vi.stubEnv('RATE_LIMIT_TEST_VALUE', envValue);
+    try {
+      expect(positiveIntEnv('RATE_LIMIT_TEST_VALUE', FALLBACK)).toBe(expected);
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 });

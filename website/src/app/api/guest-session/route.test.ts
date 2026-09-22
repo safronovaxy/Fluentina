@@ -262,6 +262,14 @@ describe('POST /api/guest-session — preflight surface', () => {
  * that raw value, not whatever id gets resolved underneath it) now bounds
  * it. Same "assert the successes, not just the refusal" discipline
  * `essays/route.test.ts`'s equivalent block follows.
+ *
+ * Round-2 review (Test Lead, noted rather than fixed — same note as
+ * `essays/route.test.ts`'s own equivalent KAN-25 block): this describe
+ * block and the per-IP one below it both call `POST` directly, which calls
+ * `checkGuestSessionResolveRateLimit` with no explicit `now`, so these run
+ * against real wall-clock time rather than a fixed instant. See that other
+ * file's own comment for the measured flake rate and why this is left as a
+ * named risk rather than a fix.
  */
 describe('POST /api/guest-session — KAN-25: the per-session rate limit bounds the converted-session remint loop', () => {
   it('allows exactly the limit\'s worth of calls presenting the same stale, already-converted cookie — each one genuinely resolves and reissues — then rejects the next', async () => {

@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { deleteStaleRateLimitCounters, incrementRateLimitCounter } from './rate-limit';
 import { db } from './client';
@@ -133,5 +133,39 @@ describe('deleteStaleRateLimitCounters — KAN-25 item 4 (round-1 review, Archit
     await incrementRateLimitCounter('test:unrelated', freshWindow);
 
     expect(await rowExists('test:stale-via-increment', staleWindow)).toBe(false);
+  });
+
+  // Round-2 review (Architect, blocking): the increment above has already
+  // committed by the time the sweep runs — the count this function returns
+  // is already the right rate-limit decision. The sweep is a SECOND,
+  // independent connection checkout; a failure in it used to propagate out
+  // of `incrementRateLimitCounter` itself, turning an already-correct
+  // decision into a server error for the caller. `db.delete` is mocked to
+  // throw — the exact shape any of the ordinary reasons a second round trip
+  // can fail (pool exhaustion, a transient connection drop) would produce —
+  // and the increment must still return the correct count regardless.
+  it('does not fail the increment when the stale-row sweep throws — best-effort, the next increment retries the sweep', async () => {
+    const windowStart = new Date('2026-01-01T00:00:00Z');
+    const deleteSpy = vi.spyOn(db, 'delete').mockImplementation(() => {
+      throw new Error('simulated sweep failure — a connection-pool exhaustion or transient drop, not anything about this bucket');
+    });
+    try {
+      const count = await incrementRateLimitCounter('test:sweep-failure', windowStart);
+
+      expect(count).toBe(1);
+    } finally {
+      deleteSpy.mockRestore();
+    }
+
+    // The swallowed failure doesn't mean the sweep never runs again — the
+    // very next increment (with the mock restored) sweeps normally, proving
+    // nothing about the sweep path itself was left broken by the failure
+    // above, only that one call's failure didn't propagate.
+    const staleWindow = new Date('2026-01-01T00:00:00Z');
+    const freshWindow = new Date('2026-01-01T05:00:00Z');
+    await incrementRateLimitCounter('test:stale-after-failed-sweep', staleWindow);
+    await incrementRateLimitCounter('test:unrelated-after-failed-sweep', freshWindow);
+
+    expect(await rowExists('test:stale-after-failed-sweep', staleWindow)).toBe(false);
   });
 });

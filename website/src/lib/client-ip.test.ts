@@ -122,4 +122,22 @@ describe('clientIp — the production-correct reading of X-Forwarded-For (KAN-25
 
     expect(ip).toBeNull();
   });
+
+  // Round-2 review (Test Lead, blocking — measured directly): every fixture
+  // in this file above is an IPv4 literal. Narrowing `ipLiteralSchema`
+  // (client-ip.ts) to accept only IPv4 — a one-token edit
+  // (`z.string().ip({ version: 'v4' })`), and the natural choice if this
+  // codebase's Zod dependency is ever bumped to a version that splits `.ip()`
+  // into separate v4/v6 validators — passed every one of the ten tests that
+  // existed before this one. What that would ship: every caller reaching
+  // this deployment over IPv6 (a real, ordinary address family, not an edge
+  // case) gets treated as an unprovable identity, the per-IP backstop is
+  // skipped entirely for them, and the only cap left is the per-session one
+  // KAN-25's own ticket calls trivially bypassable by clearing a cookie.
+  // This fixture is the one in this file that a v4-only narrowing must fail.
+  it('accepts a modern (IPv6) address as the candidate hop, the same as an IPv4 one — an address-family-narrowed parse must fail this', () => {
+    const ip = clientIp(requestWithXff('2001:db8::1, 34.120.0.1'));
+
+    expect(ip).toBe('2001:db8::1');
+  });
 });

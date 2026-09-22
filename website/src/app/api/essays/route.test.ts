@@ -902,6 +902,22 @@ describe('POST /api/essays — preflight surface', () => {
  * too — not just the final refusal — so a guard that (say) rejected the
  * FIRST request for an unrelated reason couldn't still make the "sixth is
  * refused" assertion pass for the wrong reason.
+ *
+ * Round-2 review (Test Lead, noted rather than fixed): every KAN-25
+ * rate-limit test in this file (this describe block and the two below it)
+ * calls `POST` directly, which calls `checkEssaySubmissionRateLimit` with no
+ * explicit `now` — the route itself never passes one (see route.ts), so
+ * these run against REAL wall-clock time, unlike
+ * `lib/domain/rate-limit.test.ts`'s own suite, which threads a
+ * fixed `now` through every call specifically to avoid this. The Test Lead
+ * measured roughly a 1-in-1000 run landing on an hour boundary mid-test,
+ * which would fail a test here for a time-of-day reason while claiming the
+ * limiter itself is broken. Threading a clock through the route handlers
+ * to fix this properly may not be worth the surface area it adds to
+ * production code for a 1-in-1000 flake; left as a known, named risk rather
+ * than "fixed" — a rate-limit test failing for a reason unrelated to rate
+ * limiting is exactly the kind that gets retried into invisibility instead
+ * of investigated, so if this file flakes, check the clock before the code.
  */
 describe('POST /api/essays — KAN-25: the per-session rate limit (5/hour, fixed by the ticket)', () => {
   it('allows exactly the limit\'s worth of submissions for one session — each one actually succeeds, not just "some request happened"', async () => {
