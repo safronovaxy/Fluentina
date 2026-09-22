@@ -43,6 +43,48 @@ describe('incrementRateLimitCounter — the one atomic statement KAN-25 rests on
     expect([first, second, third]).toEqual([1, 2, 3]);
   });
 
+  // Final review round (Architect, blocking, measured directly): the raw
+  // driver error the failed `db.insert(...)` throws serialises its bound
+  // parameters into ITS OWN message — `bucketKey` here is
+  // `action:scope:<raw session id or address>`, so an unguarded failure put
+  // a bearer credential straight into whatever propagated out of this
+  // function. `db.insert` is mocked to throw a message that DELIBERATELY
+  // embeds a raw bucket key (standing in for what the real driver's own
+  // parameter-serialising message would contain), so this test can prove
+  // that exact string never reaches the thrown error, in the message OR in
+  // a nested `cause` — nesting the original error as `cause` would carry
+  // the leak right back out through `.cause.message` even with the outer
+  // message clean.
+  it('does not leak the raw bucket key into the error when the increment itself fails, and the failure is still fatal', async () => {
+    const bucketKey = 'essaySubmission:session:leak-probe-session-id-should-never-appear';
+    const windowStart = new Date('2026-01-01T00:00:00Z');
+    const rawLeakySubstring = 'leak-probe-session-id-should-never-appear';
+    const insertSpy = vi.spyOn(db, 'insert').mockImplementation(() => {
+      throw new Error(
+        `duplicate key value violates unique constraint — Key (bucket_key, window_start)=(${bucketKey}, 2026-01-01) already exists.`,
+      );
+    });
+    try {
+      let caught: unknown;
+      try {
+        await incrementRateLimitCounter(bucketKey, windowStart);
+      } catch (error) {
+        caught = error;
+      }
+
+      // Fatal: the call really did throw, never silently returned a count —
+      // a swallowed increment here would disable the rate limiter entirely.
+      expect(caught).toBeInstanceOf(Error);
+      const thrown = caught as Error;
+      expect(thrown.message).not.toContain(rawLeakySubstring);
+      // Discarded, not nested: a `cause` carrying the original error would
+      // still leak the raw value one property access away.
+      expect(thrown.cause).toBeUndefined();
+    } finally {
+      insertSpy.mockRestore();
+    }
+  });
+
   it('keeps two different bucket keys in the same window independent', async () => {
     const windowStart = new Date('2026-01-01T00:00:00Z');
 

@@ -14,11 +14,26 @@ import 'server-only';
  * the one caller, and it is the layer that decides what a `bucketKey` means
  * (a session id, an IP, which action) — this function trusts it verbatim.
  */
+import { createHash } from 'node:crypto';
 import { lt, sql } from 'drizzle-orm';
 import { db } from './client';
 import { rateLimitCounters } from './schema';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * A correlation-only stand-in for `bucketKey` in the rethrown error below —
+ * see that catch block's own comment for why the original error can never
+ * be logged or nested as `cause`. Deliberately NOT `lib/domain/rate-limit.ts`'s
+ * `hashAndTruncate`: importing it here would reach up from `lib/db` into
+ * `lib/domain`, the wrong direction for this codebase's layering (that
+ * module is the one caller of THIS file, never the other way around) — this
+ * is a small, local duplicate of the same truncated-sha256 construction, not
+ * a shared export.
+ */
+function hashBucketKeyForLog(bucketKey: string): string {
+  return createHash('sha256').update(bucketKey).digest('hex').slice(0, 12);
+}
 
 /**
  * Atomically increments the counter for `(bucketKey, windowStart)` and
@@ -59,16 +74,48 @@ const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
  * halving the round trips) was explicitly not taken: it would couple the
  * two, so a sweep failure would then fail the increment too — the exact
  * coupling this fix removes.
+ *
+ * Final review round (Architect, blocking, measured directly): the insert
+ * below used to be unguarded, and the query error the driver library raises
+ * on ANY failure — pool exhaustion, a transient connection drop, a statement
+ * timeout, the same ordinary failure class the sweep's own comment above
+ * already reasons about — serialises its bound parameters into the error's
+ * own MESSAGE. `bucketKey` is `action:scope:<raw session id or address>`
+ * (`lib/domain/rate-limit.ts` builds it), so an unguarded failure here put a
+ * bearer credential into whatever this function's caller let propagate,
+ * which nothing here catches — straight out to stderr, which on this
+ * infrastructure is the log store. Caught below and rethrown as a fresh
+ * error with a fixed message and a HASHED bucket key only, for correlation
+ * across log lines without the raw value ever appearing in either the
+ * message or (deliberately, see below) a nested `cause`. This must still be
+ * FATAL to the caller — both reviewers were explicit that a swallowed
+ * increment would disable the rate limiter entirely, the opposite failure
+ * mode from the best-effort sweep just below, which the increment's own
+ * result never depends on. Only the MESSAGE changes here, never whether the
+ * call throws.
  */
 export async function incrementRateLimitCounter(bucketKey: string, windowStart: Date): Promise<number> {
-  const [row] = await db
-    .insert(rateLimitCounters)
-    .values({ bucketKey, windowStart, count: 1 })
-    .onConflictDoUpdate({
-      target: [rateLimitCounters.bucketKey, rateLimitCounters.windowStart],
-      set: { count: sql`${rateLimitCounters.count} + 1` },
-    })
-    .returning({ count: rateLimitCounters.count });
+  let row: { count: number };
+  try {
+    [row] = await db
+      .insert(rateLimitCounters)
+      .values({ bucketKey, windowStart, count: 1 })
+      .onConflictDoUpdate({
+        target: [rateLimitCounters.bucketKey, rateLimitCounters.windowStart],
+        set: { count: sql`${rateLimitCounters.count} + 1` },
+      })
+      .returning({ count: rateLimitCounters.count });
+  } catch {
+    // The original error is deliberately DISCARDED, not nested as `cause` —
+    // the original error's own MESSAGE is the thing carrying the bearer
+    // credential (see this function's own comment above), so nesting it
+    // anywhere reachable from this thrown error reintroduces the exact leak
+    // this catch exists to close. `hashBucketKeyForLog` is one-way for a
+    // high-entropy bucket key the same way `hashAndTruncate`
+    // (`lib/domain/rate-limit.ts`) is for a session id — see that function's
+    // own comment for the entropy argument this relies on.
+    throw new Error(`rate-limit counter increment failed (bucket ${hashBucketKeyForLog(bucketKey)})`);
+  }
   try {
     await deleteStaleRateLimitCounters(windowStart);
   } catch {

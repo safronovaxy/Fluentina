@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   checkEssaySubmissionRateLimit,
   checkGuestSessionResolveRateLimit,
@@ -367,6 +367,32 @@ describe('rate-limit refusal logging (KAN-25 item 5, round-1 review, blocking �
       // key derived from it.
       expect(line).not.toContain(sessionId);
 
+      // Final review round (Test Lead, blocking, measured against all 31
+      // tests green beforehand): "two different sessions produce two
+      // different hashes" plus "the raw value is never a substring" is
+      // satisfied by ANY injective function, including a REVERSIBLE one —
+      // replacing `hashAndTruncate` with `value.split('').reverse().join('')`
+      // or with `Buffer.from(value).toString('base64').slice(0, 12)` both
+      // passed every assertion this test made before this line, while the
+      // reversal logs a 128-bit bearer credential in a form anyone reads
+      // backwards — exactly what this module's own comment promises never
+      // happens. Pinning the actual SHAPE — twelve lowercase hexadecimal
+      // characters, what truncated `sha256(...).digest('hex')` and only that
+      // produces — is what a reversed or base64-encoded 32-character hex
+      // session id can never satisfy.
+      expect(sessionIdentityHash).toMatch(/^[0-9a-f]{12}$/);
+
+      // Stability: the SAME session refused a second time must produce the
+      // SAME correlation key — otherwise the "correlation" this value exists
+      // to provide (see `logRefusal`'s own comment — distinguishing one
+      // repeat abuser from many different learners) doesn't actually hold
+      // across log lines, only within one.
+      logSpy.mockClear();
+      await checkEssaySubmissionRateLimit(sessionId, null, FIXED_NOW);
+      const [repeatLine] = logSpy.mock.calls[0] as [string];
+      const repeatLogged: unknown = JSON.parse(repeatLine);
+      expect((repeatLogged as { identityHash?: string }).identityHash).toBe(sessionIdentityHash);
+
       // A different session refused the same way must produce a DIFFERENT
       // correlation key — otherwise this "identityHash" is a constant that
       // happens to satisfy the assertions above without actually
@@ -430,6 +456,18 @@ describe('rate-limit refusal logging (KAN-25 item 5, round-1 review, blocking �
 describe('positiveIntEnv — every branch table-driven, so a relaxed positivity check can never mean "refuse everyone" silently', () => {
   const FALLBACK = 42;
 
+  // `console.warn` is not asserted against in this table — see the dedicated
+  // "warns" describe block below for that — but every rejected row DOES now
+  // call it (`positiveIntEnv`'s own comment), so it's silenced here purely
+  // to keep this table's own output clean.
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
   it.each<[string, string | undefined, number]>([
     ['unset entirely', undefined, FALLBACK],
     ['the empty string', '', FALLBACK],
@@ -451,11 +489,107 @@ describe('positiveIntEnv — every branch table-driven, so a relaxed positivity 
     // string — rejected the same way, falling back rather than being
     // parsed leniently.
     ['a leading plus sign', '+5', FALLBACK],
+    // Final review round (Architect, consider): the digits-only regex above
+    // has no length bound, so a 23-digit typo used to pass it AND the `> 0`
+    // check, returning a number large enough to effectively disable the cap
+    // it configures — the unsafe direction the stricter parse left open.
+    // `Number.isSafeInteger` closes it: this now falls back the same as any
+    // other rejected value, rather than silently unbounding a cap.
+    ['an over-long digit string past Number.MAX_SAFE_INTEGER — the unsafe direction, not just the lenient one', '99999999999999999999999', FALLBACK],
+    // Whitespace-padded strings AROUND an otherwise-valid integer are
+    // accepted (trimmed first) — a value pasted from a shell or a platform
+    // console realistically carries stray whitespace, and falling back
+    // silently on that is a worse failure mode than trimming it, the same
+    // reasoning this function already applies to scientific notation and
+    // fractions in the other direction.
+    ['a valid integer padded with whitespace', '  17\t\n', 17],
+    // Whitespace-ONLY is equivalent to unset/empty, not a "rejected" value —
+    // nothing was actually typed to reject. See the "warns" block below for
+    // why that distinction matters (no warning fires for this row).
+    ['whitespace only', '   ', FALLBACK],
   ])('%s falls back to the default (%s -> %s is asserted per row, never 0 or Infinity)', (_label, envValue, expected) => {
     vi.stubEnv('RATE_LIMIT_TEST_VALUE', envValue);
     try {
       expect(positiveIntEnv('RATE_LIMIT_TEST_VALUE', FALLBACK)).toBe(expected);
     } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+/**
+ * KAN-25 final review round (Test Lead, consider): the stricter parse above
+ * widened the set of values that fall back, and nothing told an operator
+ * their override was ignored — type a value in scientific notation, get the
+ * default, no log, no error. See `.env.example`'s own KAN-25 section for the
+ * accepted-format documentation half of this fix; this is the runtime half.
+ */
+describe('positiveIntEnv — warns exactly when a PRESENT value is rejected, never for an absent or blank one', () => {
+  const FALLBACK = 42;
+
+  it('does not warn when the variable is unset or blank — nothing was actually typed to reject', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      vi.stubEnv('RATE_LIMIT_TEST_VALUE', undefined);
+      positiveIntEnv('RATE_LIMIT_TEST_VALUE', FALLBACK);
+      vi.stubEnv('RATE_LIMIT_TEST_VALUE', '');
+      positiveIntEnv('RATE_LIMIT_TEST_VALUE', FALLBACK);
+      vi.stubEnv('RATE_LIMIT_TEST_VALUE', '   ');
+      positiveIntEnv('RATE_LIMIT_TEST_VALUE', FALLBACK);
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('does not warn when the override is accepted', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      vi.stubEnv('RATE_LIMIT_TEST_VALUE', '17');
+      positiveIntEnv('RATE_LIMIT_TEST_VALUE', FALLBACK);
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('warns once, with the variable name, the rejected raw value, and the fallback in use, when a present value is rejected', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      vi.stubEnv('RATE_LIMIT_TEST_VALUE', '1e4');
+      positiveIntEnv('RATE_LIMIT_TEST_VALUE', FALLBACK);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [line] = warnSpy.mock.calls[0] as [string];
+      const logged: unknown = JSON.parse(line);
+      expect(logged).toMatchObject({
+        severity: 'WARNING',
+        name: 'RATE_LIMIT_TEST_VALUE',
+        value: '1e4',
+        fallback: FALLBACK,
+      });
+    } finally {
+      warnSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  // The over-long/unsafe-integer case is a rejection too, not merely the
+  // syntactic ones above — an operator typing 23 digits is just as unaware
+  // their override was ignored as one typing scientific notation.
+  it('warns for an over-long digit string that would exceed Number.MAX_SAFE_INTEGER, the same as any other rejected value', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      vi.stubEnv('RATE_LIMIT_TEST_VALUE', '99999999999999999999999');
+      positiveIntEnv('RATE_LIMIT_TEST_VALUE', FALLBACK);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
       vi.unstubAllEnvs();
     }
   });

@@ -122,11 +122,11 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
 
 /**
  * Reads a positive integer override from `process.env[name]`, falling back
- * to `fallback` when the variable is unset, empty, non-numeric, zero or
- * negative — never a value that would silently disable or zero out a cap.
- * Server-only (this whole module is): nothing here is a `NEXT_PUBLIC_*`
- * var, so these are never baked into the client bundle, unlike everything
- * in `.env.example`'s existing entries.
+ * to `fallback` when the variable is unset, blank, non-numeric, zero,
+ * negative, or too large to represent exactly — never a value that would
+ * silently disable or zero out a cap. Server-only (this whole module is):
+ * nothing here is a `NEXT_PUBLIC_*` var, so these are never baked into the
+ * client bundle, unlike everything in `.env.example`'s existing entries.
  *
  * Round-2 review (Test Lead): every branch above was already correct but
  * untested — nothing exercised this function directly, only the module-load
@@ -147,12 +147,73 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
  * round or truncate — a value must be a plain non-negative integer literal
  * (digits only; no sign, decimal point, or exponent) or it falls back, the
  * same as a non-numeric string always has.
+ *
+ * Final review round (Architect, consider): the stricter parse above closed
+ * the too-LENIENT cases but left the unsafe direction open — the digits-only
+ * regex has no length bound, so a 23-digit typo still passes it and the `> 0`
+ * check below, and `Number.parseInt` happily returns a number far past
+ * `Number.MAX_SAFE_INTEGER`, which is large enough to effectively disable
+ * whichever cap it configures. Not a regression (the previous, more lenient
+ * check let the same string through too), and an operator fat-fingering 23
+ * digits is unlikely, but the failure mode is exactly the one this whole
+ * function exists to prevent — a cap silently unbounded rather than falling
+ * back to the documented default. `Number.isSafeInteger` closes it: every
+ * value this function returns is now guaranteed representable exactly.
+ * Trimming: leading/trailing whitespace (a value pasted into a shell or a
+ * platform's env-var console, a realistic source of stray whitespace this
+ * function used to reject silently, indistinguishable from a typo) is
+ * stripped before the shape check, so " 17 " configures 17 rather than
+ * falling back to the default the same way "not-a-number" does.
+ *
+ * Final review round (Test Lead, consider): nothing told an operator their
+ * override was ignored — a rejected value (any branch below that falls back
+ * to `fallback` because something WAS actually typed, as opposed to the
+ * variable being absent or blank) now logs one warning via
+ * `warnRejectedEnvOverride`. Fires at most once per constant per process:
+ * every call site below is a module-level constant evaluated exactly once
+ * on import, never per request, so "once per process" needs no explicit
+ * de-duplication here — it falls out of that call shape for free.
  */
 export function positiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
-  if (raw === undefined || raw === '' || !/^\d+$/.test(raw)) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  return parsed > 0 ? parsed : fallback;
+  if (raw === undefined) return fallback;
+  const trimmed = raw.trim();
+  if (trimmed === '') return fallback;
+  if (!/^\d+$/.test(trimmed)) {
+    warnRejectedEnvOverride(name, raw, fallback);
+    return fallback;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!(parsed > 0 && Number.isSafeInteger(parsed))) {
+    warnRejectedEnvOverride(name, raw, fallback);
+    return fallback;
+  }
+  return parsed;
+}
+
+/**
+ * The one warning this module emits for a rejected environment override —
+ * see `positiveIntEnv`'s own comment for when this fires (present but
+ * rejected, never for an absent or blank variable) and why once per process
+ * is enough. `console.warn`, not `console.log` at `logRefusal`'s WARNING
+ * severity: this is a configuration problem for an operator to notice at
+ * startup, not a per-request signal — `logRefusal`'s own comment is explicit
+ * that a per-request log line here would be alert-fatigue noise, and that
+ * reasoning doesn't apply to something that fires at most once per constant.
+ * The rejected raw value is safe to log, unlike a session id or an address
+ * elsewhere in this file: it is operator-typed deployment configuration, not
+ * personal data about an essay-grading visitor.
+ */
+function warnRejectedEnvOverride(name: string, raw: string, fallback: number): void {
+  console.warn(
+    JSON.stringify({
+      severity: 'WARNING',
+      event: 'rate_limit_env_override_rejected',
+      name,
+      value: raw,
+      fallback,
+    }),
+  );
 }
 
 /** Fixed by the ticket — not an engineering call. See this module's own comment. */
@@ -232,7 +293,20 @@ function windowStartFor(now: Date, windowMs: number): Date {
  * different learners tripping a cap set too tight — exactly the question
  * this logging exists to answer given no traffic baseline exists to tune
  * against. Every refusal now carries an `identityHash`, computed the same
- * way regardless of scope; the raw value never appears in either case.
+ * way regardless of scope; the raw value never appears in THIS refusal log,
+ * in either scope.
+ *
+ * Final review round (Architect, blocking — narrowed rather than widened by
+ * that finding): the line above used to claim the raw value "never appears
+ * in either case", full stop. True of this refusal log; false of a
+ * different path this function has no control over — a FAILED counter
+ * increment used to put the raw bucket key (hence the raw session id or
+ * address embedded in it) into the underlying query error's own message,
+ * unguarded, with nothing anywhere in this call chain to catch it. That is
+ * `lib/db/rate-limit.ts`'s concern, not this one's — see
+ * `incrementRateLimitCounter`'s own comment for the fix — but this comment
+ * had no business making a claim broader than the one thing `logRefusal`
+ * and `hashAndTruncate` actually control.
  */
 function logRefusal(action: string, scope: 'session' | 'ip', limit: number, count: number, identity: string): void {
   console.log(
