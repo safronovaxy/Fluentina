@@ -121,10 +121,11 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
  * of them. This wrapper stays file-local only for the `n`/`LocaleFixture`
  * convenience below.
  *
- * Precondition (unchanged): `n` must differ from the count already shown on
- * the page (fresh page: any `n > 0`; after a prior `fillEssay` call in the
- * same test: any `n` other than that call's) — see
- * `fillTextboxAndWaitForWordCount`'s own comment for why.
+ * No precondition on `n` relative to a prior call any more (round-1 review:
+ * this used to require `n` differ from the count already shown on the page,
+ * which was silently false for exactly the one-word case — see
+ * `fillTextboxAndWaitForWordCount`'s own comment for why that's now
+ * guaranteed by construction instead).
  */
 async function fillEssay(page: Page, fx: LocaleFixture, n: number): Promise<void> {
   await fillTextboxAndWaitForWordCount(page, wordsContent(n), fx.counterText(n));
