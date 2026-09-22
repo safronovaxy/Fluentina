@@ -163,6 +163,15 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
  * Generous, not indefinite: still fails, just past the point where normal
  * scheduling jitter would have resolved it, rather than past the point a
  * real defect would.
+ *
+ * Precondition: `n` must differ from the count already shown on the page
+ * (fresh page: any `n > 0`; after a prior `fillEssay` call in the same
+ * test: any `n` other than that call's). The wait below only proves
+ * anything because `fx.counterText(n)` is not already on the page when it
+ * starts — call this twice with the same `n`, or with `n === 0` on a page
+ * that has never been filled, and `toBeVisible` is satisfied by the STALE
+ * text instantly, silently reverting to the unguarded fill-then-act this
+ * function exists to close.
  */
 async function fillEssay(page: Page, fx: LocaleFixture, n: number): Promise<void> {
   await page.getByRole('textbox').fill(wordsContent(n));
@@ -171,6 +180,23 @@ async function fillEssay(page: Page, fx: LocaleFixture, n: number): Promise<void
 
 for (const fx of LOCALE_FIXTURES) {
   test.describe(`KAN-15 — word-count guidance (${fx.locale})`, () => {
+    // Round-3 review (Test Lead): the 1000-word fillEssay's 15_000ms counter
+    // wait sits inside the suite's default 30s test timeout, alongside a
+    // 10s actionTimeout and a 20s navigationTimeout (playwright.config.ts)
+    // — worst case for that test is ~27s against a 30s cap. Detection was
+    // never the problem (a real counter regression fails the first fill at
+    // ~16s, well inside 30s); the problem was the OTHER direction: on a
+    // badly contended runner, the flake this file exists to fix could
+    // resurface as a bare "Test timeout of 30000ms exceeded", which points
+    // at nothing, instead of the specific, actionable assertion failure on
+    // the counter that 15_000ms is tuned to still catch. Raising the
+    // per-test budget here — rather than trimming the 15_000ms wait itself
+    // — is the fix: that value isn't arbitrary, it's the one the KAN-30
+    // investigation found necessary under artificial CPU contention (see
+    // fillEssay's own comment); cutting it back to buy margin would risk
+    // reintroducing the exact flake this commit closes.
+    test.describe.configure({ timeout: 60_000 });
+
     test('a 220-word essay — the story\'s own "never blocked" verification case — submits successfully, with the non-blocking warning shown (not a block) along the way', async ({
       page,
     }, testInfo) => {
