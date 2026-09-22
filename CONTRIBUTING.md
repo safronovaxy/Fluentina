@@ -91,13 +91,18 @@ always releasable but does not itself deploy to production.
   excludes them by tag and they run against a live site via
   `npm run test:e2e:live`. Without that exclusion the suite is red on every PR
   for reasons unrelated to the change under review.
-- **WebKit (`webkit-desktop` — Safari's engine) gates every PR as of KAN-30,
-  alongside `chromium-desktop`/`chromium-mobile`, not only via
-  `npm run test:e2e:live` as before. This is desktop Safari only — Mobile
-  Safari has no project and is not covered by this gate**, deliberately
-  (round-1 review): the defect this story closes is engine-level and
-  identical on both, so desktop coverage closes it; a mobile follow-up is a
-  separate ticket. WebKit refuses to store any `Secure` cookie — including
+- **WebKit gates every PR as of KAN-30, both desktop (`webkit-desktop`) and,
+  as of KAN-33, mobile (`webkit-mobile`, iPhone 13) — alongside
+  `chromium-desktop`/`chromium-mobile`, not only via `npm run test:e2e:live`
+  as before.** KAN-30 shipped desktop-only deliberately (round-1 review): the
+  cookie-storage defect it closes is engine-level and identical on mobile, so
+  desktop coverage closed it for that one thing, and a mobile follow-up was
+  scoped out as a separate ticket. KAN-33 is that ticket, and covers what
+  desktop coverage could never reach: viewport-differential rendering (the
+  guest flow's step-label collapse, `tests/guest-flow.spec.ts`) under a real
+  Safari layout engine at a real phone width, not Chromium's — the only
+  mobile signal in the suite before this was `chromium-mobile`, a different
+  engine entirely. WebKit refuses to store any `Secure` cookie — including
   the guest session's `__Host-`-prefixed one — over a plain HTTP connection,
   even on localhost, so `ci.yml` serves the built app through a throwaway
   self-signed TLS proxy (`website/scripts/tls-proxy.mjs` +
@@ -106,25 +111,39 @@ always releasable but does not itself deploy to production.
   connection even when the certificate itself is untrusted. A local
   plain-HTTP `npm run test:e2e` run still skips the handful of assertions
   that need the cookie actually stored (each spec documents its own — see
-  `tests/guest-session.spec.ts`'s own comment for the underlying probe);
-  those skips don't fire in `ci.yml` because it runs through the TLS proxy,
-  not plain HTTP — and in `ci.yml` specifically, an unencrypted `BASE_URL`
-  is now a hard failure rather than a silent skip (`playwright.config.ts`),
-  so that drift can't recur unnoticed.
-- **"WebKit gates every PR" does not mean every test under `webkit-desktop`
-  ran in a browser.** `seo.spec.ts`, `redirects.spec.ts`, `routing.spec.ts`,
-  and `sitemap.spec.ts` take only the `request` fixture and never open a
-  `page`, so Playwright never launches a browser engine for them at all —
-  not WebKit, not Chromium, none — regardless of which project lists them.
-  That's 94 of `webkit-desktop`'s 187 reported tests (verified with
-  `npx playwright test --project=webkit-desktop --grep-invert "@cms" --list`),
-  roughly half the project's count, contributing nothing to real Safari-engine
-  coverage. `routing.spec.ts` says so in its own comment ("Only run in one
-  project — this is pure HTTP, no browser rendering needed"); the same
-  reasoning applies to the other three. An engine-sensitive assertion added
-  to any of those four specs is not exercised by this gate — `webkit-desktop`
-  staying green proves nothing about it — until the spec actually opens a
-  `page`.
+  `tests/guest-session.spec.ts`'s own comment for the underlying probe, and
+  `tests/helpers/webkit.ts` for the shared `browserName`-derived predicate
+  both WebKit projects' skips key off, not a project name); those skips
+  don't fire in `ci.yml` because it runs through the TLS proxy, not plain
+  HTTP — and in `ci.yml` specifically, an unencrypted `BASE_URL` is now a
+  hard failure rather than a silent skip (`playwright.config.ts`), so that
+  drift can't recur unnoticed.
+  KAN-33 also asserted, for the first time on any project, that the guest
+  session cookie's 30-day `maxAge` actually survives the browser round-trip
+  rather than being silently shortened (`tests/guest-session.spec.ts`) — the
+  one half of that concern an automated run can observe. It cannot observe
+  the other half (whether Safari's tracking prevention evicts an established
+  cookie after real-world dormancy, the mechanism the 30-day figure is most
+  at risk from) — that needs real elapsed time on a real device, out of
+  reach for this suite; flagged to Irina rather than guessed at, and the
+  30-day figure itself is unchanged.
+- **Every project's reported test count now means what it says.** `seo.spec.ts`,
+  `redirects.spec.ts`, `routing.spec.ts`, and `sitemap.spec.ts` take only the
+  `request` fixture and never open a `page`, so Playwright never launches a
+  browser engine for them at all — not WebKit, not Chromium, none. They used
+  to run once per project anyway (three, then four, redundant, engine-less
+  executions of the same pure-HTTP assertions), which is what used to inflate
+  `webkit-desktop`'s reported count to 187 when only 93 of those tests ever
+  opened a page. KAN-33 fixed this at the source rather than continuing to
+  document it: `playwright.config.ts`'s `REQUEST_ONLY_SPECS` list excludes
+  those four specs from every project except `chromium-desktop` (the one
+  project whose `browserName` they already force via each file's own
+  `test.use({ browserName: 'chromium' })`), so each test in them now executes
+  exactly once across the whole pipeline, and `routing.spec.ts`'s own "Only
+  run in one project" comment is now literally true rather than aspirational.
+  An engine-sensitive assertion added to any of those four specs is still not
+  exercised by any gate but `chromium-desktop` — that hasn't changed, only
+  which projects redundantly claimed to cover it.
 - `website/src/**/*.typecheck.{ts,tsx}` files (introduced in KAN-27, first
   non-`.tsx` example added in KAN-10) are a third test category alongside
   Vitest and Playwright, with `tsc --noEmit` — the `typecheck` step above —
