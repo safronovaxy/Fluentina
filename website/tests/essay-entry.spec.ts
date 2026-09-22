@@ -12,6 +12,7 @@
  * local Postgres this suite's `webServer` starts the app against.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { fillTextboxAndWaitForWordCount, wordCountText } from './helpers/essay-fill';
 
 const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 
@@ -78,6 +79,13 @@ function withFillerWords(sentence: string, totalWords: number): string {
   return `${sentence} ${filler}`;
 }
 
+// Both locale fixtures' essayText below is padded to exactly this many
+// words — a single named constant, not the bare `60` repeated at each
+// `withFillerWords` call and at the two submitting tests' own
+// `fillTextboxAndWaitForWordCount` calls below, so the two can never
+// quietly drift apart.
+const ESSAY_WORD_COUNT = 60;
+
 interface LocaleFixture {
   readonly locale: 'en' | 'de';
   readonly landingPath: string;
@@ -98,7 +106,7 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     submitName: 'Submit essay',
     essayText: withFillerWords(
       'This is a sample essay written directly in the browser text box for the end-to-end test.',
-      60,
+      ESSAY_WORD_COUNT,
     ),
     successTitle: 'Essay received',
     writeHeading: 'Write your essay',
@@ -111,7 +119,7 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     submitName: 'Aufsatz einreichen',
     essayText: withFillerWords(
       'Dies ist ein Beispielaufsatz, der direkt im Textfeld des Browsers für den End-to-End-Test geschrieben wurde.',
-      60,
+      ESSAY_WORD_COUNT,
     ),
     successTitle: 'Aufsatz erhalten',
     writeHeading: 'Schreibe deinen Aufsatz',
@@ -120,6 +128,15 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
 
 for (const fx of LOCALE_FIXTURES) {
   test.describe(`KAN-14 — essay entry (${fx.locale})`, () => {
+    // Same 90s per-test budget as word-count.spec.ts, for the same reason
+    // (see that file's own comment on this exact line): this spec's two
+    // submitting tests now go through fillTextboxAndWaitForWordCount too,
+    // which can spend up to 20s in ensureEssayFormHydrated's retry loop plus
+    // up to 15s in the post-fill counter wait -- 35s, before this file's own
+    // navigation/action overhead -- comfortably inside 90s, not the stock 30s
+    // this describe block was still running at, unraised, until now.
+    test.describe.configure({ timeout: 90_000 });
+
     test('a first-time visitor reaches the text box and submits an essay in exactly 2 clicks from landing — under the 3-click acceptance criterion', async ({
       page,
       context,
@@ -158,8 +175,13 @@ for (const fx of LOCALE_FIXTURES) {
       await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
 
       // Typing is not a click or a tap — the acceptance criterion counts
-      // clicks/taps, and filling a text box is neither.
-      await page.getByRole('textbox').fill(fx.essayText);
+      // clicks/taps, and filling a text box is neither. Goes through
+      // `fillTextboxAndWaitForWordCount`, not a bare `.fill()`, for the same
+      // reason word-count.spec.ts does — see helpers/essay-fill.ts's own
+      // top comment for the race this closes (KAN-30 found it there; the
+      // exact same unguarded fill()-then-click shape was still here, on
+      // this same page, until this fix).
+      await fillTextboxAndWaitForWordCount(page, fx.essayText, wordCountText(fx.locale, ESSAY_WORD_COUNT));
 
       // Click 2: submit.
       await click(page.getByRole('button', { name: fx.submitName }));
@@ -178,7 +200,8 @@ for (const fx of LOCALE_FIXTURES) {
       await expect(page.getByLabel(/email/i)).toHaveCount(0);
       await expect(page.getByLabel(/password/i)).toHaveCount(0);
 
-      await page.getByRole('textbox').fill(fx.essayText);
+      // Same guard as the test above — see its own comment.
+      await fillTextboxAndWaitForWordCount(page, fx.essayText, wordCountText(fx.locale, ESSAY_WORD_COUNT));
       await page.getByRole('button', { name: fx.submitName }).click();
 
       await expect(page.getByRole('status')).toBeVisible();
