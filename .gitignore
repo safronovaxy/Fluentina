@@ -54,6 +54,9 @@ website/next-env.d.ts
 website/tsconfig.tsbuildinfo
 website/playwright-report/
 website/test-results/
+# KAN-30 — throwaway self-signed cert/key for the TLS-terminated e2e run
+# (scripts/generate-tls-cert.sh), regenerated on every run, never checked in.
+website/.tls/
 # Left from the Vite era; harmless to keep ignoring.
 website/dist/
 website/.env.local
