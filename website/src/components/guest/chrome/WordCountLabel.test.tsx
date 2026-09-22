@@ -48,6 +48,25 @@ describe('WordCountLabel — pluralisation (KAN-15)', () => {
     expect(screen.getByText('220 Wörter')).toBeInTheDocument();
   });
 
+  // KAN-30 round-3 review: pins the grouping behaviour the KAN-30
+  // investigation found — the ICU `#` placeholder formats through the
+  // locale's Intl.NumberFormat, grouping included, so a four-digit count is
+  // "1,000 words" / "1.000 Wörter", never the un-grouped "1000" a naive
+  // `${n}` would produce — at this layer, on every unit run, rather than
+  // only in tests/word-count.spec.ts's Safari-gated browser suite. Written
+  // as a literal, like every other case in this file, not computed via
+  // `toLocaleString`, so a regression in the grouping itself can't also
+  // launder the assertion that's supposed to catch it.
+  it('English: renders "1,000 words" for a four-digit count — grouped, not "1000"', () => {
+    renderWithIntl(<WordCountLabel count={1000} />, { locale: 'en' });
+    expect(screen.getByText('1,000 words')).toBeInTheDocument();
+  });
+
+  it('German: renders "1.000 Wörter" for a four-digit count — grouped, not "1000"', () => {
+    renderWithIntl(<WordCountLabel count={1000} />, { locale: 'de' });
+    expect(screen.getByText('1.000 Wörter')).toBeInTheDocument();
+  });
+
   it('re-renders with an updated count — proves this reflects a live prop, not a value fixed at mount (guards against a vacuous "some number is on screen" test)', () => {
     // Rerendering through renderWithIntl's own `rerender` would replace the
     // whole tree, IntlProvider included, and lose context — wrapping

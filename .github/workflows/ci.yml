@@ -145,31 +145,31 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: website
-        # Desktop + mobile Chromium only in CI (Test Strategy §5). WebKit is
-        # installable locally (`npx playwright test --project=webkit-desktop`)
-        # but isn't required to gate every PR, and a default `npm run
-        # test:e2e` run now SKIPS eleven of its tests on WebKit over plain
-        # HTTP: all five of tests/guest-session.spec.ts (see that file's own
-        # comment), the two per-locale tests in tests/essay-entry.spec.ts
-        # that actually submit an essay (see that file's own comment for why
-        # only those two, not all five, need the skip), and — as of KAN-15 —
-        # the one per-locale test in tests/word-count.spec.ts that also
-        # submits (the 220-word "never blocked" case; the 1000-word "blocked"
-        # case never reaches the point of needing the cookie stored, so it
-        # doesn't skip). Round-1 review: this used to say "five" even once
-        # KAN-14's spec (then blanket-skipping all four of its own tests per
-        # locale) had already made the real number 13 — corrected here to the
-        # true count after that blanket skip was narrowed. Round-2 review:
-        # the "not all four" wording above went stale the moment the same
-        # commit added a fifth test per locale (the horizontal-overflow
-        # check) — corrected to "five"; the headline count of nine itself
-        # was already right, since the number of tests actually needing the
-        # skip (two per locale) never changed. Round-3 review (KAN-15): nine
-        # went stale a second time the moment word-count.spec.ts added its
-        # own skip — corrected to eleven (nine plus one per locale). Only
-        # `npm run test:e2e:live`, against real HTTPS, exercises WebKit for
-        # any of these.
-        run: npx playwright install --with-deps chromium
+        # Desktop + mobile Chromium, plus WebKit (KAN-30) — Safari's engine,
+        # and the default browser on every iPhone, so the guest flow's
+        # cookie-dependent path needs real coverage here, not only locally.
+        # WebKit refuses the `__Host-`-prefixed session cookie (any `Secure`
+        # cookie, in fact) over a plain HTTP connection, even on localhost —
+        # see tests/guest-session.spec.ts's own comment for the probe that
+        # established this — which is exactly why this job now serves the
+        # built app through scripts/tls-proxy.mjs's self-signed TLS proxy
+        # below rather than plain HTTP: without it, WebKit here would still
+        # skip the eleven tests conditioned on the connection being
+        # encrypted (tests/guest-session.spec.ts, tests/essay-entry.spec.ts,
+        # tests/word-count.spec.ts — see each file's own comment) for the
+        # same reason it used to when this job only ran Chromium.
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Generate self-signed TLS certificate
+        working-directory: website
+        # One-day, throwaway — lives only for this job. See
+        # scripts/generate-tls-cert.sh's own comment for why a self-signed
+        # cert is sufficient here (measured, not assumed): Safari stores our
+        # session cookie over an encrypted connection even when the
+        # certificate itself is untrusted. `ignoreHTTPSErrors: true` in
+        # playwright.config.ts is what lets every project — not just
+        # WebKit — connect through it at all.
+        run: npm run tls:generate-cert -- .tls
 
       - name: Start built app
         working-directory: website
@@ -190,6 +190,26 @@ jobs:
           echo "App did not become ready in time" >&2
           exit 1
 
+      - name: Start TLS proxy in front of the built app
+        working-directory: website
+        env:
+          TLS_PROXY_PORT: '8443'
+          TLS_PROXY_TARGET_PORT: '3000'
+          TLS_PROXY_CERT: .tls/localhost-cert.pem
+          TLS_PROXY_KEY: .tls/localhost-key.pem
+        run: |
+          node scripts/tls-proxy.mjs &
+          echo $! > /tmp/tls-proxy.pid
+          for i in $(seq 1 30); do
+            if curl -sfk https://localhost:8443 > /dev/null; then
+              echo "TLS proxy is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "TLS proxy did not become ready in time" >&2
+          exit 1
+
       # Named for what it actually runs: the marketing regression suite, plus
       # — as of KAN-14 — the first funnel spec (tests/essay-entry.spec.ts,
       # guest essay entry end to end; see CONTRIBUTING.md's own note on this)
@@ -203,15 +223,41 @@ jobs:
       # day one for reasons unrelated to any PR, which is how a pipeline gets
       # deleted or marked continue-on-error. They still run against a live site
       # via `npm run test:e2e:live`.
+      #
+      # BASE_URL points through the TLS proxy above (KAN-30), not straight at
+      # the app on :3000 — see that step's own comment for why. `webkit-desktop`
+      # is now a required project here, not an optional local-only extra: it's
+      # what closes the gap the story exists for (Safari, unexercised by any
+      # PR gate before this).
+      #
+      # No `--project` flags here (KAN-30 round-2 review, Test Lead): the
+      # project list comes from playwright.config.ts alone, which is where
+      # the guard that stops `--grep-invert "@cms"` from re-admitting CMS
+      # specs *also* lives (the config's own `projects` array). Naming
+      # chromium-desktop/chromium-mobile/webkit-desktop explicitly here meant
+      # a future edit or merge resolution could drop the `webkit-desktop` flag
+      # and the job would stay green with zero Safari coverage — no error,
+      # nothing — the exact silent-drift shape the throw two steps up exists
+      # to close for the protocol, just one layer higher: for the project
+      # itself instead of the connection it runs over. Dropping Safari now
+      # requires editing playwright.config.ts, same file, so both guards sit
+      # together. Verified this changes nothing about what runs: config's
+      # `projects` array is exactly these three and no more, and
+      # `--list --grep-invert "@cms"` reports the identical 561 tests with
+      # and without the flags.
       - name: E2E (Playwright, no CMS)
         working-directory: website
         env:
-          BASE_URL: http://localhost:3000
+          BASE_URL: https://localhost:8443
           MOCK_GRADING_PROVIDER: '1'
           # This job owns the server lifecycle (Start/Stop steps above), so
           # Playwright must not also try to start one — see playwright.config.ts.
           PLAYWRIGHT_EXTERNAL_SERVER: '1'
-        run: npx playwright test --project=chromium-desktop --project=chromium-mobile --grep-invert "@cms"
+        run: npx playwright test --grep-invert "@cms"
+
+      - name: Stop TLS proxy
+        if: always()
+        run: kill "$(cat /tmp/tls-proxy.pid)" 2>/dev/null || true
 
       - name: Stop built app
         if: always()
