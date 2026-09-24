@@ -157,9 +157,9 @@ jobs:
         # skip the twelve tests, per WebKit project, conditioned on the
         # connection being encrypted (six in tests/guest-session.spec.ts,
         # four in tests/essay-entry.spec.ts, two in tests/word-count.spec.ts
-        # — see each file's own comment, and playwright.config.ts's
-        # REQUEST_ONLY_SPECS comment for the count) for the same reason it
-        # used to when this job only ran Chromium.
+        # — see each file's own comment, and the comment above
+        # playwright.config.ts's HTTPS-in-CI throw for the count) for the
+        # same reason it used to when this job only ran Chromium.
         run: npx playwright install --with-deps chromium webkit
 
       - name: Generate self-signed TLS certificate

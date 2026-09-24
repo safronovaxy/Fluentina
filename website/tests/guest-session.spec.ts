@@ -73,10 +73,10 @@ test.describe('KAN-10 — guest session cookie', () => {
   // directly, the same boundary SESSION_COOKIE_NAME above already keeps) is
   // recorded in a decision record Irina has not yet approved, and had never
   // been asserted on ANY project. What this test can and does prove: the
-  // app's own Set-Cookie header asks for the full 30 days, and this engine
-  // (WebKit, run in this suite via Playwright, over the self-signed TLS
-  // proxy) stores and returns that same value rather than the app itself
-  // shortening it, or the engine truncating it the moment it's set. It is
+  // app's own Set-Cookie header asks for the full 30 days, and each engine
+  // this runs on (including WebKit, over the self-signed TLS proxy) stores
+  // and returns that same value rather than the app itself shortening it,
+  // or the engine truncating it the moment it's set. It is
   // NOT evidence about real Safari's tracking-prevention behaviour on a real
   // device: whether Playwright's WebKit even applies ITP-style cookie
   // eviction at all has not been verified here, and this same-session run

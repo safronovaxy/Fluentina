@@ -12,12 +12,32 @@
  * vitest.config.ts excludes wholesale so Playwright specs never get
  * collected by Vitest — see the narrow, name-pinned include added there for
  * this one file.
+ *
+ * Round-2 review (SA): the WebKit/plain-HTTP case now throws instead of
+ * returning true when `process.env.CI` is set (see webkit.ts's own
+ * comment) — every test below runs with CI stubbed unset unless it's
+ * specifically exercising that throw, so this file's own test run (which
+ * may itself be running inside real CI) doesn't accidentally trip it.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isWebKitOverPlainHttp } from './webkit';
 
 describe('isWebKitOverPlainHttp', () => {
-  it('is true for WebKit over plain HTTP — the one case the skip exists for', () => {
+  const originalCi = process.env.CI;
+
+  beforeEach(() => {
+    delete process.env.CI;
+  });
+
+  afterEach(() => {
+    if (originalCi === undefined) {
+      delete process.env.CI;
+    } else {
+      process.env.CI = originalCi;
+    }
+  });
+
+  it('is true for WebKit over plain HTTP outside CI — the one case the skip exists for', () => {
     expect(isWebKitOverPlainHttp('webkit', true)).toBe(true);
   });
 
@@ -35,5 +55,15 @@ describe('isWebKitOverPlainHttp', () => {
 
   it('is false for Firefox over plain HTTP — not a WebKit engine, so the skip must not apply', () => {
     expect(isWebKitOverPlainHttp('firefox', true)).toBe(false);
+  });
+
+  it('throws, rather than returning true, for WebKit over plain HTTP when CI is set', () => {
+    process.env.CI = 'true';
+    expect(() => isWebKitOverPlainHttp('webkit', true)).toThrow(/WebKit over plain HTTP in CI/);
+  });
+
+  it('does not throw for WebKit over HTTPS when CI is set — the actual CI path', () => {
+    process.env.CI = 'true';
+    expect(() => isWebKitOverPlainHttp('webkit', false)).not.toThrow();
   });
 });

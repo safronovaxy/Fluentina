@@ -186,7 +186,7 @@ for (const fx of LOCALE_FIXTURES) {
       // found it in tests/word-count.spec.ts; the same unguarded
       // fill-then-click shape on this page was fixed via main, in PR #18 —
       // not part of KAN-33 itself, whose only non-comment change to this
-      // file is the browserName-derived skip below).
+      // file is the browserName-derived skip above).
       await fillTextboxAndWaitForWordCount(page, fx.essayText, wordCountText(fx.locale, ESSAY_WORD_COUNT));
 
       // Click 2: submit.

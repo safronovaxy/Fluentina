@@ -84,32 +84,51 @@ const isProduction = !BASE_URL.includes('localhost');
 // executes exactly once across the whole pipeline, not zero and not three
 // times.
 //
-// Anchored to the whole file name (`(^|[\/])name\.spec\.ts$`), not just a
+// Anchored to the whole file name (`[\/]name\.spec\.ts$`), not just a
 // suffix: `testIgnore` matches against the *full path*, so an unanchored
 // `/seo\.spec\.ts$/` also matches something like `tests/blog-seo.spec.ts` or
 // any future spec that merely ends in the same characters — silently
 // dropping an unrelated file from three of the four projects with no error
 // anywhere (round-1 review, reproduced independently by both reviewers with
-// `--list`). The guard right below turns any future version of that same
-// mistake into a thrown error at config-load time instead of a silent gap.
+// `--list`). No `(^|...)` alternative: Playwright matches `testIgnore`
+// against the file's *absolute* path, which never starts with the bare file
+// name, so that branch was dead weight — round-2 review (SA) found it worse
+// than dead, because it let a `^`-anchored typo like `/^seo\.spec\.ts$/`
+// pass the guard below (which, before this fix, tested relative paths) while
+// matching nothing at all once Playwright applied it for real, silently
+// widening webkit-mobile from 94 tests to 154. The guard right below now
+// tests the same absolute-path form Playwright does, so that class of typo
+// fails the guard instead of passing it.
 const REQUEST_ONLY_SPECS = [
-  /(^|[\\/])seo\.spec\.ts$/,
-  /(^|[\\/])redirects\.spec\.ts$/,
-  /(^|[\\/])routing\.spec\.ts$/,
-  /(^|[\\/])sitemap\.spec\.ts$/,
+  /[\\/]seo\.spec\.ts$/,
+  /[\\/]redirects\.spec\.ts$/,
+  /[\\/]routing\.spec\.ts$/,
+  /[\\/]sitemap\.spec\.ts$/,
 ];
 
+// Any file whose test framework a Playwright project might collect — kept in
+// sync with `testMatch` below (widened past `.spec.ts` there for the same
+// reason: a future `.spec.tsx` or `.spec.js` file must not go uncollected by
+// both this guard and testMatch while looking, at a glance, exactly like
+// every other spec).
+const SPEC_FILE_PATTERN = /\.spec\.[cm]?[jt]sx?$/;
+
 // Belt-and-braces for the anchoring fix above: walk the real files under
-// tests/ (Playwright's own testDir) and require each REQUEST_ONLY_SPECS
-// pattern to match exactly one of them. Zero matches means a rename broke
-// the pattern silently; more than one means the pattern is broader than a
-// single file again — either way, that's the exact failure mode the
-// unanchored regex above had, so this throws at config-load time instead of
-// quietly narrowing (or widening) which specs get excluded.
+// tests/ (Playwright's own testDir), build each one's *absolute* path — the
+// same form Playwright's testIgnore matching uses — and require each
+// REQUEST_ONLY_SPECS pattern to match exactly one of them. Zero matches
+// means a rename broke the pattern, or (round-2 review) an over-anchored
+// pattern like `/^seo\.spec\.ts$/` was never going to match a real absolute
+// path in the first place; more than one means the pattern is broader than a
+// single file again. Either way this throws at config-load time instead of
+// quietly narrowing (or widening) which specs get excluded — this guard only
+// catches a pattern/file-count mismatch, not every way testIgnore could
+// still misbehave, so it's not a substitute for checking `--list` counts too.
+const testDir = path.join(__dirname, 'tests');
 {
-  const testFiles = readdirSync(path.join(__dirname, 'tests'), { recursive: true })
-    .map(String)
-    .filter((f) => f.endsWith('.spec.ts'));
+  const testFiles = readdirSync(testDir, { recursive: true })
+    .map((f) => path.join(testDir, String(f)))
+    .filter((f) => SPEC_FILE_PATTERN.test(f));
   for (const pattern of REQUEST_ONLY_SPECS) {
     const matches = testFiles.filter((f) => pattern.test(f));
     if (matches.length !== 1) {
@@ -129,16 +148,20 @@ export default defineConfig({
   // over-skipping mutant: a skip isn't a failure), not a Playwright spec.
   // Playwright's default testMatch picks up any `*.test.ts` under testDir
   // just as readily as `*.spec.ts`, and `vitest` can't be `require()`d from
-  // Playwright's runner. Pinning testMatch to `*.spec.ts` only (rather than
-  // adding a `testIgnore` for this one file) is what keeps this working on
-  // every project, not just the ones without their own `testIgnore`: a
+  // Playwright's runner. Pinning testMatch to the same SPEC_FILE_PATTERN the
+  // REQUEST_ONLY_SPECS guard above uses — any `.spec.ts`/`.spec.tsx`/
+  // `.spec.js`/`.spec.mjs`/`.spec.cjs` file, not `.spec.ts` only (round-2
+  // review: a future `.spec.tsx` or `.spec.js` file would otherwise be
+  // collected by nothing at all, silently) — rather than adding a
+  // `testIgnore` for this one file, is what keeps this working on every
+  // project, not just the ones without their own `testIgnore`: a
   // project-level `testIgnore` array (chromium-mobile, webkit-desktop,
   // webkit-mobile all set one, for REQUEST_ONLY_SPECS) replaces this
   // top-level one for that project rather than merging with it, so a
   // root-level `testIgnore` here would silently stop applying on exactly
   // those three projects — `testMatch`, left unset on every project, stays
   // inherited from here everywhere instead.
-  testMatch: /.*\.spec\.ts$/,
+  testMatch: SPEC_FILE_PATTERN,
   fullyParallel: !isProduction,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
