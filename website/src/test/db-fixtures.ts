@@ -40,10 +40,19 @@ function assertLocalDatabase(): void {
   }
 }
 
-/** Wipes every KAN-10 table between tests. Cascades handle ordering. */
+/**
+ * Wipes every KAN-10 table between tests, plus `rate_limit_counters`
+ * (KAN-25) — without this, a test file's own rate-limit tests would leak
+ * counters into whatever runs after them, in the same file or (were
+ * `fileParallelism` ever re-enabled) another one entirely. Cascades handle
+ * ordering for the first three; `rate_limit_counters` has no FK to anything,
+ * so it's just listed alongside them.
+ */
 export async function resetDatabase(): Promise<void> {
   assertLocalDatabase();
-  await db.execute(sql`TRUNCATE TABLE fluentina.essays, fluentina.guest_sessions, fluentina.users RESTART IDENTITY CASCADE`);
+  await db.execute(
+    sql`TRUNCATE TABLE fluentina.essays, fluentina.guest_sessions, fluentina.users, fluentina.rate_limit_counters RESTART IDENTITY CASCADE`,
+  );
 }
 
 /**

@@ -132,6 +132,15 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
 
 for (const fx of LOCALE_FIXTURES) {
   test.describe(`KAN-14 — essay entry (${fx.locale})`, () => {
+    // Same 90s per-test budget as word-count.spec.ts, for the same reason
+    // (see that file's own comment on this exact line): this spec's two
+    // submitting tests now go through fillTextboxAndWaitForWordCount too,
+    // which can spend up to 20s in ensureEssayFormHydrated's retry loop plus
+    // up to 15s in the post-fill counter wait -- 35s, before this file's own
+    // navigation/action overhead -- comfortably inside 90s, not the stock 30s
+    // this describe block was still running at, unraised, until now.
+    test.describe.configure({ timeout: 90_000 });
+
     test('a first-time visitor reaches the text box and submits an essay in exactly 2 clicks from landing — under the 3-click acceptance criterion', async ({
       page,
       context,

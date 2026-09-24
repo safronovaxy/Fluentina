@@ -83,6 +83,7 @@ export default async function EssayEntryPage({
               successTitle: t('successTitle'),
               successBody: t('successBody'),
               errorGeneric: t('errorGeneric'),
+              rateLimitedError: t('rateLimitedError'),
             }}
           />
         </div>

@@ -80,4 +80,25 @@ describe('message catalogues stay in sync (KAN-9)', () => {
       );
     }
   });
+
+  // KAN-25, round-1 review (Test Lead, blocking): the compile-time mechanism
+  // that makes EssayEntryForm's `reasonMessages` map fail to build without a
+  // `rateLimitedError` string for every locale (rejection-reason.ts's own
+  // comment) proves a string EXISTS — it says nothing about what that string
+  // SAYS. Every assertion up to this point in this file is against a
+  // hand-written component-test fixture (EssayEntryForm.test.tsx), which
+  // cannot catch the real catalogues drifting to the same wording; making
+  // `write.rateLimitedError` character-identical to `write.errorGeneric` in
+  // either language leaves every test above (and every component test) green
+  // — a German guest told to "please try again" for a cap that "try again"
+  // cannot fix, on a product whose whole point is helping them read German.
+  // This is the one place that pins the acceptance criterion against the
+  // catalogues an actual guest is served, not a fixture standing in for them.
+  it('the rate-limit message is never identical to the generic error message, in either language', () => {
+    for (const [locale, messages] of [['en', en], ['de', de]] as const) {
+      const rateLimited = getMessage(messages, 'chrome.guest.write.rateLimitedError');
+      const generic = getMessage(messages, 'chrome.guest.write.errorGeneric');
+      expect(rateLimited, `${locale}: rateLimitedError`).not.toBe(generic);
+    }
+  });
 });
