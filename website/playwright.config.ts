@@ -1,4 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
+import { readdirSync } from 'fs';
+import path from 'path';
 
 /**
  * Playwright configuration for Fluentina regression tests.
@@ -71,17 +73,72 @@ const isProduction = !BASE_URL.includes('localhost');
 // HTTP, no browser rendering needed" comment predates this list and was
 // aspirational until now). Before this, all four still ran once per project
 // anyway — three redundant, engine-less executions of the same pure-HTTP
-// assertions — which is what inflated webkit-desktop's reported count to 187
-// when only 93 of those tests ever opened a page (CONTRIBUTING.md's own
-// "WebKit gates every PR" bullet documented the discrepancy rather than
-// fixing it; this list is the fix). Listed once here and excluded from every
-// project below except chromium-desktop (the one project whose `browserName`
-// they already force), so each test in these four files executes exactly
-// once across the whole pipeline, not zero and not three times.
-const REQUEST_ONLY_SPECS = [/seo\.spec\.ts$/, /redirects\.spec\.ts$/, /routing\.spec\.ts$/, /sitemap\.spec\.ts$/];
+// assertions, which is what these four specs' counts used to look like on
+// webkit-desktop (CONTRIBUTING.md's own "WebKit gates every PR" bullet
+// documented the discrepancy rather than fixing it; this list is the fix,
+// for these four files specifically — it does not make every project's count
+// otherwise-honest; see CONTRIBUTING.md for the one still-request-only test
+// this list doesn't and shouldn't touch). Listed once here and excluded from
+// every project below except chromium-desktop (the one project whose
+// `browserName` they already force), so each test in these four files
+// executes exactly once across the whole pipeline, not zero and not three
+// times.
+//
+// Anchored to the whole file name (`(^|[\/])name\.spec\.ts$`), not just a
+// suffix: `testIgnore` matches against the *full path*, so an unanchored
+// `/seo\.spec\.ts$/` also matches something like `tests/blog-seo.spec.ts` or
+// any future spec that merely ends in the same characters — silently
+// dropping an unrelated file from three of the four projects with no error
+// anywhere (round-1 review, reproduced independently by both reviewers with
+// `--list`). The guard right below turns any future version of that same
+// mistake into a thrown error at config-load time instead of a silent gap.
+const REQUEST_ONLY_SPECS = [
+  /(^|[\\/])seo\.spec\.ts$/,
+  /(^|[\\/])redirects\.spec\.ts$/,
+  /(^|[\\/])routing\.spec\.ts$/,
+  /(^|[\\/])sitemap\.spec\.ts$/,
+];
+
+// Belt-and-braces for the anchoring fix above: walk the real files under
+// tests/ (Playwright's own testDir) and require each REQUEST_ONLY_SPECS
+// pattern to match exactly one of them. Zero matches means a rename broke
+// the pattern silently; more than one means the pattern is broader than a
+// single file again — either way, that's the exact failure mode the
+// unanchored regex above had, so this throws at config-load time instead of
+// quietly narrowing (or widening) which specs get excluded.
+{
+  const testFiles = readdirSync(path.join(__dirname, 'tests'), { recursive: true })
+    .map(String)
+    .filter((f) => f.endsWith('.spec.ts'));
+  for (const pattern of REQUEST_ONLY_SPECS) {
+    const matches = testFiles.filter((f) => pattern.test(f));
+    if (matches.length !== 1) {
+      throw new Error(
+        `REQUEST_ONLY_SPECS entry ${pattern} must match exactly one file under tests/, ` +
+          `matched ${matches.length}: ${matches.join(', ') || '(none)'}`,
+      );
+    }
+  }
+}
 
 export default defineConfig({
   testDir: './tests',
+  // tests/helpers/webkit.test.ts is a Vitest unit test (added for finding 3
+  // of the KAN-33 revision — a plain-Vitest truth table for
+  // `isWebKitOverPlainHttp`, since no Playwright run can catch an
+  // over-skipping mutant: a skip isn't a failure), not a Playwright spec.
+  // Playwright's default testMatch picks up any `*.test.ts` under testDir
+  // just as readily as `*.spec.ts`, and `vitest` can't be `require()`d from
+  // Playwright's runner. Pinning testMatch to `*.spec.ts` only (rather than
+  // adding a `testIgnore` for this one file) is what keeps this working on
+  // every project, not just the ones without their own `testIgnore`: a
+  // project-level `testIgnore` array (chromium-mobile, webkit-desktop,
+  // webkit-mobile all set one, for REQUEST_ONLY_SPECS) replaces this
+  // top-level one for that project rather than merging with it, so a
+  // root-level `testIgnore` here would silently stop applying on exactly
+  // those three projects — `testMatch`, left unset on every project, stays
+  // inherited from here everywhere instead.
+  testMatch: /.*\.spec\.ts$/,
   fullyParallel: !isProduction,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

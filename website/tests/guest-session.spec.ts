@@ -72,17 +72,18 @@ test.describe('KAN-10 — guest session cookie', () => {
   // specs observe the real browser/HTTP surface only, never app internals
   // directly, the same boundary SESSION_COOKIE_NAME above already keeps) is
   // recorded in a decision record Irina has not yet approved, and had never
-  // been asserted on ANY project, let alone the one platform most likely
-  // to shorten it: Safari's tracking prevention has, historically,
-  // independently of anything this app sets, capped a cookie's actual stored
-  // lifetime below what its own Set-Cookie header asked for. This is the one
-  // half of that concern a same-session Playwright run can actually observe
-  // — that the browser accepted and stored the FULL 30 days rather than
-  // silently truncating it the moment it was set. It cannot observe the
-  // other half (whether Safari evicts an established cookie after real-world
-  // dormancy) — that requires letting real time pass on a real device, which
-  // is out of reach for an automated suite; flagged to Irina rather than
-  // guessed at here.
+  // been asserted on ANY project. What this test can and does prove: the
+  // app's own Set-Cookie header asks for the full 30 days, and this engine
+  // (WebKit, run in this suite via Playwright, over the self-signed TLS
+  // proxy) stores and returns that same value rather than the app itself
+  // shortening it, or the engine truncating it the moment it's set. It is
+  // NOT evidence about real Safari's tracking-prevention behaviour on a real
+  // device: whether Playwright's WebKit even applies ITP-style cookie
+  // eviction at all has not been verified here, and this same-session run
+  // can't observe eviction after real-world dormancy regardless — that
+  // requires letting real time pass on a real device, out of reach for an
+  // automated suite either way; flagged to Irina rather than guessed at
+  // here.
   test('the session cookie carries the full 30-day maxAge, not silently shortened', async ({ page, context }) => {
     const EXPECTED_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
     // Generous enough to absorb the seconds between the server minting the

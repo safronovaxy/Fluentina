@@ -23,10 +23,18 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // KAN-33 round-1 review: tests/helpers/webkit.ts's `isWebKitOverPlainHttp`
+    // predicate gates whether a dozen Playwright assertions run or silently
+    // skip (see that file's own comment), with no Playwright run able to
+    // catch an over-skipping mutant — a skip isn't a failure. It needs a
+    // plain unit test, but it lives under tests/, which the `exclude` below
+    // drops wholesale so Playwright specs never get collected here. Naming
+    // this one file explicitly pulls in only it, not the Playwright specs
+    // around it.
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'tests/helpers/webkit.test.ts'],
     // Bare 'node_modules' is not a recursive glob; keep Vitest's defaults and
     // add to them rather than replacing the list.
-    exclude: ['**/node_modules/**', '**/.next/**', 'tests/**'],
+    exclude: ['**/node_modules/**', '**/.next/**', 'tests/**/*.spec.ts'],
     // KAN-10's lib/db test files all share one real Postgres database and
     // TRUNCATE it between tests (src/test/db-fixtures.ts::resetDatabase). Running
     // test files in parallel (Vitest's default) lets one file's reset race

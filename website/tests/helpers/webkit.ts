@@ -2,7 +2,7 @@
  * Shared WebKit-engine predicates.
  *
  * KAN-33 added a second WebKit project (`webkit-mobile`, alongside KAN-30's
- * `webkit-desktop`) and found the same bug shape in two places that each
+ * `webkit-desktop`) and found the same bug shape in three places that each
  * independently keyed a WebKit-specific behaviour off `testInfo.project.name
  * === 'webkit-desktop'`: tests/guest-session.spec.ts, tests/essay-entry.spec.ts
  * and tests/word-count.spec.ts each guard, this way, a case where WebKit

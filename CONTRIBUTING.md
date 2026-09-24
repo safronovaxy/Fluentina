@@ -127,23 +127,28 @@ always releasable but does not itself deploy to production.
   at risk from) — that needs real elapsed time on a real device, out of
   reach for this suite; flagged to Irina rather than guessed at, and the
   30-day figure itself is unchanged.
-- **Every project's reported test count now means what it says.** `seo.spec.ts`,
-  `redirects.spec.ts`, `routing.spec.ts`, and `sitemap.spec.ts` take only the
-  `request` fixture and never open a `page`, so Playwright never launches a
-  browser engine for them at all — not WebKit, not Chromium, none. They used
-  to run once per project anyway (three, then four, redundant, engine-less
-  executions of the same pure-HTTP assertions), which is what used to inflate
-  `webkit-desktop`'s reported count to 187 when only 93 of those tests ever
-  opened a page. KAN-33 fixed this at the source rather than continuing to
-  document it: `playwright.config.ts`'s `REQUEST_ONLY_SPECS` list excludes
-  those four specs from every project except `chromium-desktop` (the one
-  project whose `browserName` they already force via each file's own
+- **The four request-only spec files no longer inflate every project's
+  count.** `seo.spec.ts`, `redirects.spec.ts`, `routing.spec.ts`, and
+  `sitemap.spec.ts` take only the `request` fixture and never open a `page`,
+  so Playwright never launches a browser engine for them at all — not
+  WebKit, not Chromium, none. They used to run once per project anyway
+  (three, then four, redundant, engine-less executions of the same pure-HTTP
+  assertions), which is what used to inflate `webkit-desktop`'s reported
+  count. KAN-33 fixed this at the source rather than continuing to document
+  it: `playwright.config.ts`'s `REQUEST_ONLY_SPECS` list excludes those four
+  specs from every project except `chromium-desktop` (the one project whose
+  `browserName` they already force via each file's own
   `test.use({ browserName: 'chromium' })`), so each test in them now executes
   exactly once across the whole pipeline, and `routing.spec.ts`'s own "Only
   run in one project" comment is now literally true rather than aspirational.
-  An engine-sensitive assertion added to any of those four specs is still not
-  exercised by any gate but `chromium-desktop` — that hasn't changed, only
-  which projects redundantly claimed to cover it.
+  This is not a claim that every project's count is otherwise honest end to
+  end: `navigation.spec.ts`'s T4.11 (`/pricing itself still serves`) is the
+  same request-only shape — `request` fixture, no `page` — and still runs
+  once per project, uncounted by this fix and left alone deliberately (round-1
+  review) rather than folded into a restructure of that file for this ticket.
+  An engine-sensitive assertion added to any of the four `REQUEST_ONLY_SPECS`
+  files is still not exercised by any gate but `chromium-desktop` — that
+  hasn't changed, only which projects redundantly claimed to cover it.
 - `website/src/**/*.typecheck.{ts,tsx}` files (introduced in KAN-27, first
   non-`.tsx` example added in KAN-10) are a third test category alongside
   Vitest and Playwright, with `tsc --noEmit` — the `typecheck` step above —
