@@ -11,10 +11,20 @@ import { Pool } from 'pg';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { assertDatabaseMajorVersion, type VersionQueryable } from '../src/lib/db/postgres-version';
+import { installQueryErrorSanitiser } from '../src/lib/db/query-error-sanitiser';
 
 // quiet: true — see the comment in drizzle.config.ts on dotenv@17's
 // self-promotional console "tips".
 config({ path: '.env.local', quiet: true });
+
+// KAN-36: this script builds its own Drizzle pg client (below) and never
+// imports `src/lib/db/client.ts`, which is where the app installs the
+// query-error sanitiser — and `main().catch` at the bottom prints whatever
+// it is given, raw. Installing here makes the invariant "every process that
+// builds a Drizzle pg client has the patch", not "every process that imports
+// client.ts". Idempotent, and at module scope so a caller of `runMigration`
+// gets it too.
+installQueryErrorSanitiser();
 
 /**
  * The whole migration run: check the version, then apply. `applyMigrations`
