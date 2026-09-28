@@ -33,7 +33,7 @@ export interface GradingProviderInput extends GradingPrompt {
    * `userDataBlock` (which already embed it, wrapped) so a fake/test
    * provider can build a verbatim `quote` without re-parsing the delimiter
    * markers back out of `userDataBlock`. A real provider implementation
-   * (Mistral, and later Claude) never reads this field: it only ever sends
+   * (Claude, Mistral) never reads this field: it only ever sends
    * `system` and `userDataBlock` over the wire, exactly as `prompt.ts`
    * built them.
    */
@@ -50,17 +50,16 @@ export interface GradingProviderOutput {
 }
 
 /**
- * `'mistral'` / `'fake'` today. KAN-16 round-1 review, finding 14: a bare
- * `string` here let `cost.ts`'s rate table silently return `0` for any
- * provider it didn't recognise — adding Claude (ADR-4's documented
- * fallback, the "one-file drop-in" this module's own top comment describes)
- * without also updating `cost.ts` would have every Claude job log
- * `costEstimateUsd: 0` forever, nothing red anywhere. Widen this union (never
- * back to a bare `string`) the same commit a new provider is added — doing so
- * without updating `cost.ts`'s `Record<GradingProviderName, ...>` is then a
- * compile error instead of a silent drift.
+ * `'claude'` / `'mistral'` / `'fake'` today. KAN-16 round-1 review, finding
+ * 14: a bare `string` here let `cost.ts`'s rate table silently return `0` for
+ * any provider it didn't recognise — adding a provider without also updating
+ * `cost.ts` would have every one of its jobs log `costEstimateUsd: 0`
+ * forever, nothing red anywhere. Widen this union (never back to a bare
+ * `string`) the same commit a new provider is added — doing so without
+ * updating `cost.ts`'s `Record<GradingProviderName, ...>` is then a compile
+ * error instead of a silent drift. KAN-44 added `'claude'` exactly that way.
  */
-export type GradingProviderName = 'mistral' | 'fake';
+export type GradingProviderName = 'claude' | 'mistral' | 'fake';
 
 export interface GradingProvider {
   /** Persisted verbatim as `grading_jobs.provider` and logged in KAN-24's telemetry. */

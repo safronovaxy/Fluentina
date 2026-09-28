@@ -1,35 +1,73 @@
 import 'server-only';
 
 /**
- * KAN-16 / ADR-4 — the one place a `GradingProvider` implementation is
- * chosen. Everything else in this codebase calls `createGradingProvider()`,
- * never `createMistralGradingProvider`/`createFakeGradingProvider` directly
- * — the "never call Mistral or Claude directly from feature code" rule
- * applies to the FACTORY choice too, not just the HTTP call itself.
+ * KAN-16 / ADR-4, amended by KAN-44 — the one place a `GradingProvider`
+ * implementation is chosen. Everything else in this codebase calls
+ * `createGradingProvider()`, never `createClaudeGradingProvider`/
+ * `createMistralGradingProvider`/`createFakeGradingProvider` directly — the
+ * "never call Mistral or Claude directly from feature code" rule applies to
+ * the FACTORY choice too, not just the API call itself.
  *
- * `MOCK_GRADING_PROVIDER=1` selects the fake provider — the same
- * environment variable `ci.yml` already sets for the built app and for
- * Playwright (provisioned ahead of this story, see CONTRIBUTING.md's own
- * note), and the one a developer sets locally to run the full guest flow,
- * essay through to a graded result, with zero network calls and no
- * `MISTRAL_API_KEY` configured at all.
+ * Selection, in order:
+ * 1. `MOCK_GRADING_PROVIDER=1` -> the fake provider. The same environment
+ *    variable `ci.yml` already sets for the built app and for Playwright
+ *    (and `vitest.config.ts` sets for the unit suite), and the one a
+ *    developer sets locally to run the full guest flow, essay through to a
+ *    graded result, with zero network calls and no API key configured at all.
+ *    This branch wins over everything below, so no other setting can make a
+ *    test or CI run reach a real provider.
+ * 2. `GRADING_PROVIDER=mistral` -> Mistral, the deferred second step from
+ *    KAN-44. Kept selectable rather than dead code.
+ * 3. Anything else, including unset -> Claude, the Phase 1 primary. An
+ *    unrecognised `GRADING_PROVIDER` value deliberately falls through to the
+ *    primary rather than throwing: `orchestrate-grading.ts` calls this
+ *    factory outside its `try`, after the job is claimed, so a throw here
+ *    would strand the job in `processing`. The cost of a typo is grading on
+ *    the intended default, which is visible in `grading_jobs.provider` —
+ *    and, since that default is the ~20x more expensive provider, it also
+ *    logs one structured warning (`warnUnrecognisedGradingProvider`). Same
+ *    shape as `rate-limit.ts`'s `warnRejectedEnvOverride`: a configuration
+ *    problem for an operator to notice, with the operator-typed raw value.
+ *    Unlike that one it fires per call, not once per process — this factory
+ *    runs per job and route modules load lazily per instance, so there is no
+ *    module-level seam to hang "once" on — and a misconfigured deployment
+ *    should be loud on every job it affects.
  *
- * Adding Claude (ADR-4's documented fallback) later is a one-file drop-in
- * at this exact seam: a `createClaudeGradingProvider()` implementing the
- * same `GradingProvider` interface in its own `providers/claude-provider.ts`,
- * and a branch here selecting it — nothing in `orchestrate-grading.ts`, the
- * prompt module, or the result/telemetry code needs to change, since none of
- * it knows which provider it's talking to. See this story's own handover for
- * exactly what that drop-in still needs (a secret, an SCC review, the
- * side-by-side spike ADR-4 names) before it's more than plumbing.
+ * Neither real provider reads its credential at import or construction —
+ * only inside `grade()` — so this factory never throws for a missing key.
+ * `provider-factory.test.ts` pins that.
  */
 import { createFakeGradingProvider } from './providers/fake-provider';
+import { createClaudeGradingProvider } from './providers/claude-provider';
 import { createMistralGradingProvider } from './providers/mistral-provider';
 import type { GradingProvider } from './provider';
+
+/** Values that select Claude on purpose — anything else non-empty is treated as a typo and warned about. */
+const CLAUDE_ALIASES: ReadonlySet<string> = new Set(['claude']);
+
+function warnUnrecognisedGradingProvider(raw: string, selected: GradingProvider['name']): void {
+  console.warn(
+    JSON.stringify({
+      severity: 'WARNING',
+      event: 'grading_provider_env_unrecognised',
+      name: 'GRADING_PROVIDER',
+      value: raw,
+      selected,
+    }),
+  );
+}
 
 export function createGradingProvider(): GradingProvider {
   if (process.env.MOCK_GRADING_PROVIDER === '1') {
     return createFakeGradingProvider();
   }
-  return createMistralGradingProvider();
+  const raw = process.env.GRADING_PROVIDER;
+  if (raw === 'mistral') {
+    return createMistralGradingProvider();
+  }
+  // Exact match, as before: only a blank or absent value is "not set".
+  if (raw !== undefined && raw.trim() !== '' && !CLAUDE_ALIASES.has(raw)) {
+    warnUnrecognisedGradingProvider(raw, 'claude');
+  }
+  return createClaudeGradingProvider();
 }
