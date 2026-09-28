@@ -51,6 +51,8 @@ interface LocaleFixture {
   readonly resultHeading: string;
   readonly announcementStart: string;
   readonly explanationLabel: string;
+  /** The step indicator's accessible name for the current (Preview) step — no "completed" suffix. */
+  readonly previewStepName: string;
 }
 
 const LOCALE_FIXTURES: readonly LocaleFixture[] = [
@@ -63,6 +65,7 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     resultHeading: 'Your overall score',
     announcementStart: 'Grading finished. Your overall score is',
     explanationLabel: "What's wrong",
+    previewStepName: 'Step 4 of 5: Preview',
   },
   {
     locale: 'de',
@@ -73,6 +76,7 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     resultHeading: 'Deine Gesamtpunktzahl',
     announcementStart: 'Bewertung abgeschlossen. Deine Gesamtpunktzahl:',
     explanationLabel: 'Was nicht stimmt',
+    previewStepName: 'Schritt 4 von 5: Vorschau',
   },
 ];
 
@@ -81,7 +85,7 @@ async function submitEssay(page: Page, fx: LocaleFixture) {
   expect(response?.ok(), `${fx.writePath} should respond 200`).toBe(true);
   await fillTextboxAndWaitForWordCount(page, fx.essayText, wordCountText(fx.locale, ESSAY_WORD_COUNT));
   await page.getByRole('button', { name: fx.submitName }).click();
-  await expect(page).toHaveURL(new RegExp(`${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
+  await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
 }
 
 for (const fx of LOCALE_FIXTURES) {
@@ -104,6 +108,15 @@ for (const fx of LOCALE_FIXTURES) {
       // own essay, inside a sentence of it, and an explanation is shown.
       const mark = page.getByTestId('worked-example-highlight');
       await expect(mark).toBeVisible();
+      // The underline is the non-colour cue, and a class name in jsdom
+      // proves nothing about what a guest sees: ask the engine. Runs in all
+      // four (Chromium, Firefox, WebKit, mobile Safari).
+      const decoration = await mark.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return { line: style.textDecorationLine, style: style.textDecorationStyle };
+      });
+      expect(decoration.line).toContain('underline');
+      expect(decoration.style).toBe('wavy');
       const sentence = await page.getByTestId('worked-example-sentence').innerText();
       // Minus the screen-reader-only boundary markers, which are not essay text.
       const highlighted = await mark.evaluate((el) => {
@@ -118,6 +131,9 @@ for (const fx of LOCALE_FIXTURES) {
 
       // No pending screen left behind.
       await expect(page.getByRole('region')).toHaveAttribute('data-phase', 'complete');
+
+      // The step indicator is on the Preview step — not still on Write.
+      await expect(page.getByRole('listitem', { name: fx.previewStepName })).toHaveAttribute('aria-current', 'step');
     });
 
     test('the explanation is programmatically tied to the highlighted words, and completion is announced', async ({ page, browserName }) => {

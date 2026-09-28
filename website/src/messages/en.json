@@ -71,7 +71,9 @@
         "suggestionLabel": "Try instead",
         "noExample": "We couldn't pinpoint a specific sentence to show as an example for this essay.",
         "flaggedTitle": "We couldn't score this essay",
-        "flaggedBody": "Part of your essay looked like an instruction to the grader rather than an answer to the task, so we haven't given it a score — a score from that essay wouldn't be a fair assessment. This check can be wrong. If you think it is, reword that part and submit your essay again.",
+        "flaggedBody": "Something in your essay reads as an instruction about how to grade it — for example, telling the grader what score to give. We're not showing you a score, because it wouldn't be a fair assessment. This check can be wrong. If you think it is, look for wording that talks about grading or scores, change it, and submit your essay again.",
+        "stalledTitle": "This is taking longer than expected",
+        "stalledBody": "Your essay still hasn't been graded after two minutes, so we've stopped checking. We don't have a score for you, and we haven't guessed one. You can submit your essay again.",
         "failedTitle": "We couldn't grade your essay",
         "failedBody": "No score was produced, and we haven't guessed one. You can submit your essay again.",
         "failedReasons": {

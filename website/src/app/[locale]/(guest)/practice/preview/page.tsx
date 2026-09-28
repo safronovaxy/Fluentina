@@ -119,6 +119,8 @@ export default async function GuestPreviewPage({
               noExample: t('noExample'),
               flaggedTitle: t('flaggedTitle'),
               flaggedBody: t('flaggedBody'),
+              stalledTitle: t('stalledTitle'),
+              stalledBody: t('stalledBody'),
               failedTitle: t('failedTitle'),
               failedBody: t('failedBody'),
               failedReasons: {

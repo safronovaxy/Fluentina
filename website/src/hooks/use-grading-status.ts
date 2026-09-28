@@ -8,8 +8,16 @@
  * torn down on unmount without any of that being this file's to get right.
  *
  * Only the fields the preview needs are read out of the response — see
- * `lib/contracts/grading-job.ts` for the full shape; dates arrive as JSON
- * strings and nothing here needs them.
+ * `lib/contracts/grading-job.ts` for the full shape. `createdAt` arrives as
+ * a JSON string and is read for one thing: bounding the poll (below).
+ *
+ * The poll is bounded, and bounded on the JOB'S age (`createdAt`), not on a
+ * timer started when this hook mounted, so a reload does not restart the
+ * clock. A job stuck `pending`/`processing` is a documented, accepted
+ * failure mode — `start-grading.ts` writes the row before enqueuing, and a
+ * dropped Cloud Task is silently lost (ADR-19) — and without a bound the
+ * guest would be told "this page updates by itself" forever, on the one
+ * screen with no way out.
  *
  * Nothing about the job is logged: a `GradingResult` can carry annotation
  * text that quotes the guest's essay, and this is client code anyway — no
@@ -23,12 +31,29 @@ import { isRejectionReason, type RejectionReason } from '@/lib/contracts/rejecti
 /** ADR-2 says 2-3 seconds; the middle of that range. */
 export const GRADING_POLL_INTERVAL_MS = 2500;
 
+/**
+ * How old a still-unfinished job may get before the poll gives up: two
+ * minutes, roughly 48 polls and well past any real grading latency — a
+ * provider call is seconds, and even a retried one is well inside this.
+ * Short enough that a guest whose job was never enqueued is not left
+ * watching a spinner-less page for long.
+ */
+export const GRADING_POLL_MAX_AGE_MS = 2 * 60 * 1000;
+
 export interface GradingStatus {
   readonly status: GradingJobStatus;
   /** Present only once `status === 'succeeded'`. */
   readonly result: GradingResult | null;
   /** Present only once `status === 'failed'` — and null even then if the server could not name a reason we recognise. */
   readonly failureReason: GradingFailureReason | null;
+  /**
+   * How old the job was when this answer arrived, in ms. Measured against
+   * the server's own clock (the response's `Date` header) where there is
+   * one, so a guest's wrong system clock cannot make every job look
+   * stale — the client's clock is only the fallback. Null for a terminal
+   * job, where it is not used.
+   */
+  readonly jobAgeMs: number | null;
 }
 
 /** The poll itself failed (as opposed to grading failing) — carries only the HTTP status and the route's structured `reason`, never body text. */
@@ -52,6 +77,15 @@ function isTerminal(status: GradingJobStatus): boolean {
   return status === 'succeeded' || status === 'failed';
 }
 
+/**
+ * The job is still unfinished and has been for longer than
+ * `GRADING_POLL_MAX_AGE_MS`: the poll has stopped, and nothing suggests the
+ * job is still coming.
+ */
+export function isStalled(status: GradingStatus | undefined): boolean {
+  return !!status && !isTerminal(status.status) && status.jobAgeMs !== null && status.jobAgeMs > GRADING_POLL_MAX_AGE_MS;
+}
+
 async function fetchGradingStatus(essayId: string): Promise<GradingStatus> {
   const response = await fetch(`/api/essays/${encodeURIComponent(essayId)}/grading`);
   if (!response.ok) {
@@ -65,7 +99,7 @@ async function fetchGradingStatus(essayId: string): Promise<GradingStatus> {
     throw new GradingStatusError(response.status, reason);
   }
 
-  const body = (await response.json()) as Partial<Record<keyof GradingStatus, unknown>> | null;
+  const body = (await response.json()) as Partial<Record<keyof GradingStatus | 'createdAt', unknown>> | null;
   const status = body?.status;
   if (typeof status !== 'string' || !(GRADING_JOB_STATUSES as readonly string[]).includes(status)) {
     throw new GradingStatusError(null);
@@ -75,11 +109,23 @@ async function fetchGradingStatus(essayId: string): Promise<GradingStatus> {
   // failed poll rather than render an empty score.
   if (status === 'succeeded' && result === null) throw new GradingStatusError(null);
 
+  let jobAgeMs: number | null = null;
+  if (!isTerminal(status as GradingJobStatus)) {
+    // Without a readable `createdAt` an unfinished job could never be given
+    // up on, so it is treated like any other malformed answer rather than
+    // polled forever.
+    const createdAt = typeof body?.createdAt === 'string' ? Date.parse(body.createdAt) : Number.NaN;
+    if (Number.isNaN(createdAt)) throw new GradingStatusError(null);
+    const serverNow = Date.parse(response.headers.get('date') ?? '');
+    jobAgeMs = (Number.isNaN(serverNow) ? Date.now() : serverNow) - createdAt;
+  }
+
   const failureReason = body?.failureReason;
   return {
     status: status as GradingJobStatus,
     result,
     failureReason: isGradingFailureReason(failureReason) ? failureReason : null,
+    jobAgeMs,
   };
 }
 
@@ -92,8 +138,9 @@ export function useGradingStatus(essayId: string) {
     staleTime: 0,
     refetchInterval: (query) => {
       if (query.state.status === 'error') return false;
-      const status = query.state.data?.status;
-      return status && isTerminal(status) ? false : GRADING_POLL_INTERVAL_MS;
+      const data = query.state.data;
+      if (!data) return GRADING_POLL_INTERVAL_MS;
+      return isTerminal(data.status) || isStalled(data) ? false : GRADING_POLL_INTERVAL_MS;
     },
     // A dropped connection is `TypeError`, not `GradingStatusError`, and is retryable.
     retry: (failureCount, error) => !(error instanceof GradingStatusError && error.isDefinitive) && failureCount < 3,

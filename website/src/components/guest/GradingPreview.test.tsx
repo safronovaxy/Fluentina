@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import enMessages from '@/messages/en.json';
 import deMessages from '@/messages/de.json';
 import { GradingPreview, BAND_STRING_KEYS, type GradingPreviewStrings } from './GradingPreview';
-import { GRADING_POLL_INTERVAL_MS } from '@/hooks/use-grading-status';
+import { GRADING_POLL_INTERVAL_MS, GRADING_POLL_MAX_AGE_MS } from '@/hooks/use-grading-status';
 import {
   bandForScore,
   GRADING_FAILURE_REASONS,
@@ -53,6 +53,7 @@ function gradingResult(overrides: Partial<GradingResult> = {}): GradingResult {
 interface Reply {
   readonly status?: number;
   readonly body: unknown;
+  readonly headers?: Record<string, string>;
 }
 const pending: Reply = { body: { status: 'pending', result: null, failureReason: null } };
 const processing: Reply = { body: { status: 'processing', result: null, failureReason: null } };
@@ -61,17 +62,30 @@ const failed = (failureReason: GradingFailureReason | null): Reply => ({
   body: { status: 'failed', result: null, failureReason },
 });
 
-/** Replies in order, repeating the last one forever — a poller keeps asking. */
-function stubFetch(...replies: Reply[]) {
+/**
+ * Replies in order, repeating the last one forever — a poller keeps asking.
+ *
+ * An unfinished job's reply is given the `createdAt` the real endpoint always
+ * sends (the poll is bounded on it), fixed when this is called — under fake
+ * timers, "now" is the test's clock, so the job ages as the test advances
+ * time. `jobAgeMs` is how old the job already is at that moment. A body that
+ * sets `createdAt` itself (even to null) is left exactly as written.
+ */
+function stubFetchForJobAged(jobAgeMs: number, ...replies: Reply[]) {
+  const createdAt = new Date(Date.now() - jobAgeMs).toISOString();
   let call = 0;
   const spy = vi.fn(async () => {
     const reply = replies[Math.min(call, replies.length - 1)];
     call += 1;
-    return new Response(JSON.stringify(reply.body), { status: reply.status ?? 200 });
+    const body = reply.body as { status?: string } | null;
+    const unfinished = body?.status === 'pending' || body?.status === 'processing';
+    const withCreatedAt = unfinished && !('createdAt' in body!) ? { ...body, createdAt } : reply.body;
+    return new Response(JSON.stringify(withCreatedAt), { status: reply.status ?? 200, headers: reply.headers });
   });
   vi.stubGlobal('fetch', spy);
   return spy;
 }
+const stubFetch = (...replies: Reply[]) => stubFetchForJobAged(0, ...replies);
 
 const TRY_AGAIN = <a href="/practice/write">try again slot</a>;
 
@@ -130,11 +144,11 @@ describe('GradingPreview — polling (ADR-2: every 2-3 seconds until the job is 
     expect(GRADING_POLL_INTERVAL_MS).toBeGreaterThanOrEqual(2000);
     expect(GRADING_POLL_INTERVAL_MS).toBeLessThanOrEqual(3000);
 
-    await act(() => vi.advanceTimersByTimeAsync(1500));
+    await act(() => vi.advanceTimersByTimeAsync(1900));
     expect(fetchSpy).toHaveBeenCalledTimes(1); // not sooner than 2 seconds
 
-    await act(() => vi.advanceTimersByTimeAsync(1500)); // 3 seconds in
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    await act(() => vi.advanceTimersByTimeAsync(1200)); // 3.1 seconds in
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2)); // and not later than 3
     expect(screen.queryByTestId('overall-score')).toBeNull();
 
     await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS));
@@ -175,6 +189,88 @@ describe('GradingPreview — polling (ADR-2: every 2-3 seconds until the job is 
 
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
     expect(await screen.findByTestId('overall-score')).toBeInTheDocument();
+  });
+
+  // The bound is on the JOB's age (`createdAt`), not on a timer started at
+  // mount, so a reload does not restart it. See the hook's file comment for
+  // why a job stuck `pending` is an accepted, documented failure mode.
+  it('pins the cap at two minutes — about 48 polls, well past any real grading latency', () => {
+    expect(GRADING_POLL_MAX_AGE_MS).toBe(120_000);
+    expect(GRADING_POLL_MAX_AGE_MS / GRADING_POLL_INTERVAL_MS).toBeCloseTo(48, 0);
+  });
+
+  it('keeps polling for the whole window, then gives up: a job that stays pending is not polled forever', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchSpy = stubFetch(pending);
+    renderPreview();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_MAX_AGE_MS - GRADING_POLL_INTERVAL_MS));
+    expect(screen.getByRole('region')).toHaveAttribute('data-phase', 'pending');
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(46);
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS * 3));
+    await waitFor(() => expect(screen.getByRole('region')).toHaveAttribute('data-phase', 'stalled'));
+    const callsWhenGivenUp = fetchSpy.mock.calls.length;
+    expect(callsWhenGivenUp).toBeLessThanOrEqual(51);
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS * 10));
+    expect(fetchSpy).toHaveBeenCalledTimes(callsWhenGivenUp);
+  });
+
+  it('a `processing` job that never finishes is given up on in the same way', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchSpy = stubFetchForJobAged(GRADING_POLL_MAX_AGE_MS - 1000, processing);
+    renderPreview();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('region')).toHaveAttribute('data-phase', 'pending');
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS + 500));
+    await waitFor(() => expect(screen.getByRole('region')).toHaveAttribute('data-phase', 'stalled'));
+    const callsWhenGivenUp = fetchSpy.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS * 5));
+    expect(fetchSpy).toHaveBeenCalledTimes(callsWhenGivenUp);
+  });
+
+  it('a job just inside the cap is still waiting, and still polled', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchSpy = stubFetchForJobAged(GRADING_POLL_MAX_AGE_MS - 60_000, pending);
+    renderPreview();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS * 4));
+
+    expect(screen.getByRole('region')).toHaveAttribute('data-phase', 'pending');
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('a reload does not restart the clock: a job already older than the cap is given up on after one request', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchSpy = stubFetchForJobAged(GRADING_POLL_MAX_AGE_MS + 30_000, pending);
+    renderPreview(); // a fresh mount, as after a reload
+
+    await waitFor(() => expect(screen.getByRole('region')).toHaveAttribute('data-phase', 'stalled'));
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS * 5));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('measures the job\'s age on the server\'s clock (the Date header), so a guest whose own clock is hours fast does not see every job as stalled', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const serverNow = Date.now() - 3 * 60 * 60 * 1000; // this browser's clock is three hours ahead of the server's
+    const body = { status: 'pending', result: null, failureReason: null, createdAt: new Date(serverNow - 5000).toISOString() };
+    stubFetch({ body, headers: { date: new Date(serverNow).toUTCString() } });
+    renderPreview();
+
+    expect(await screen.findByRole('heading', { name: EN.pendingTitle })).toBeInTheDocument();
+    expect(screen.getByRole('region')).toHaveAttribute('data-phase', 'pending');
+  });
+
+  it('an unfinished job with no readable `createdAt` cannot be bounded, so it is a failed poll, not an endless wait', async () => {
+    stubFetch({ body: { status: 'pending', result: null, failureReason: null, createdAt: null } });
+    renderPreview();
+
+    expect(await screen.findByRole('heading', { name: EN.pollErrorTitle })).toBeInTheDocument();
+    expect(screen.getByRole('region')).toHaveAttribute('data-phase', 'pollError');
   });
 
   it('stops polling on unmount', async () => {
@@ -321,6 +417,26 @@ describe('GradingPreview — accessibility of the result (a result arriving afte
     expect(status).toHaveTextContent(`${EN.completeAnnouncement} 80 ${EN.scoreOutOf}, ${EN.bands.pass}.`);
   });
 
+  it('the region is busy only while waiting: aria-busy is "false" once the result arrives, so a screen reader does not treat it as still changing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetch(pending, succeeded(gradingResult()));
+    renderPreview();
+    expect(await screen.findByRole('region', { name: EN.pendingTitle })).toHaveAttribute('aria-busy', 'true');
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS + 500));
+    await screen.findByTestId('overall-score');
+
+    expect(screen.getByRole('region', { name: EN.completeTitle })).toHaveAttribute('aria-busy', 'false');
+  });
+
+  it('the announcement is visually hidden — otherwise its sentence would print on screen next to the score', async () => {
+    stubFetch(succeeded(gradingResult()));
+    renderPreview();
+
+    await screen.findByTestId('overall-score');
+    expect(screen.getByRole('status')).toHaveClass('sr-only');
+  });
+
   it('the live region already exists, empty, while waiting — a region added together with its text is not reliably announced', async () => {
     stubFetch(pending);
     renderPreview();
@@ -436,6 +552,17 @@ describe('GradingPreview — flagged for suspected prompt injection (BR-3.5 resu
     expect(result.dimensions.every((d) => /withheld/i.test(d.comment))).toBe(true);
   });
 
+  // `clampForSuspectedInjection` clamps the scores and replaces the summary
+  // and the comments, but passes `annotations` straight through — so a
+  // flagged result really does still carry the distrusted model's annotation
+  // text. The allow-list test below is only meaningful if there is something
+  // there to leak, and this is what says so.
+  it('the fixture still carries an annotation (the clamp does not touch them), so there is real text to leak', () => {
+    const result = flaggedResult();
+    expect(result.annotations).toHaveLength(1);
+    expect(result.annotations[0].message).toBe('Nach "Gestern" steht das Verb an zweiter Stelle.');
+  });
+
   it('shows a deliberate flagged message with a way to try again — not a result', async () => {
     stubFetch(succeeded(flaggedResult()));
     renderPreview();
@@ -459,10 +586,49 @@ describe('GradingPreview — flagged for suspected prompt injection (BR-3.5 resu
     expect(text).not.toContain(result.summary);
     for (const dimension of result.dimensions) expect(text).not.toContain(dimension.comment);
     expect(text).not.toContain('withheld');
-    expect(text).not.toMatch(/\b55\b/);
+    expect(text).not.toContain(String(result.overallScore));
     expect(text).not.toContain(EN.bands.belowTarget);
     expect(screen.queryByTestId('worked-example-highlight')).toBeNull();
     expect(screen.queryByTestId('worked-example-none')).toBeNull();
+  });
+
+  // The deny-list above names what someone thought of. This is the assertion
+  // the claim "no capped score, no placeholders, no example" actually rests
+  // on: the panel's own text must be EXACTLY its title, its body and the
+  // try-again action, so any leak fails — named or not. It replaced a
+  // `not.toMatch(/\b55\b/)` that a leaked "55" slipped past, because
+  // adjacent elements' text concatenates with no separator ("...again.55try
+  // again slot") and `\b` does not match between a digit and a letter.
+  // Whitespace is collapsed on both sides for the same reason: element text
+  // runs together, so the comparison cannot depend on separators.
+  it('renders nothing but the flagged title, the flagged body and the try-again action — an allow-list, so any leak fails, named or not', async () => {
+    stubFetch(succeeded(flaggedResult()));
+    const { container } = renderPreview();
+
+    const region = await screen.findByRole('region', { name: EN.flaggedTitle });
+    const collapse = (text: string | null) => (text ?? '').replace(/\s+/g, '');
+
+    expect(collapse(region.textContent)).toBe(collapse(`${EN.flaggedTitle}${EN.flaggedBody}try again slot`));
+    expect(collapse(screen.getByRole('status').textContent)).toBe(collapse(EN.flaggedTitle));
+    // ...and the wrapper around both holds nothing else either.
+    expect(collapse(container.textContent)).toBe(
+      collapse(`${EN.flaggedTitle}${EN.flaggedTitle}${EN.flaggedBody}try again slot`),
+    );
+    expect(region.querySelector('mark')).toBeNull();
+  });
+
+  it('the flagged copy names the shape of what tripped the check, not a place in the essay — it cannot know one', () => {
+    // No "reword that part": nothing can tell the guest which part.
+    expect(EN.flaggedBody).not.toMatch(/that part|which part|that sentence/i);
+    expect(DE.flaggedBody).not.toMatch(/diesen Teil|diese Stelle|diesen Satz/i);
+    expect(EN.flaggedBody).toMatch(/instruction about how to grade/i);
+    expect(EN.flaggedBody).toMatch(/check can be wrong/i);
+    // Truer than "we haven't given it a score" — a score was produced, and is not shown.
+    expect(EN.flaggedBody).toMatch(/not showing you a score/i);
+    expect(EN.flaggedBody).not.toMatch(/haven't given/i);
+    expect(DE.flaggedBody).toMatch(/Anweisung/);
+    expect(DE.flaggedBody).toMatch(/Prüfung kann sich irren/);
+    expect(DE.flaggedBody).toMatch(/zeigen dir keine Punktzahl/);
   });
 
   it('announces the flagged outcome, not a score', async () => {
@@ -480,6 +646,72 @@ describe('GradingPreview — flagged for suspected prompt injection (BR-3.5 resu
 
     await screen.findByRole('heading', { name: EN.flaggedTitle });
     expect(screen.getByRole('region').textContent).not.toMatch(/review(ed)? by|our team|we will (look|check|review)/i);
+  });
+});
+
+describe('GradingPreview — stalled: a job that never finishes has a way out', () => {
+  it('says grading did not finish, offers to submit again, and is not busy, and shows no score', async () => {
+    stubFetchForJobAged(GRADING_POLL_MAX_AGE_MS + 1000, pending);
+    renderPreview();
+
+    expect(await screen.findByRole('heading', { name: EN.stalledTitle })).toBeInTheDocument();
+    expect(screen.getByText(EN.stalledBody)).toBeInTheDocument();
+    // The CTA pending never had — the whole point of this state.
+    expect(screen.getByRole('link', { name: 'try again slot' })).toBeInTheDocument();
+    const region = screen.getByRole('region', { name: EN.stalledTitle });
+    expect(region).toHaveAttribute('data-phase', 'stalled');
+    expect(region).toHaveAttribute('aria-busy', 'false');
+    expect(screen.queryByRole('heading', { name: EN.pendingTitle })).toBeNull();
+    expect(screen.queryByTestId('overall-score')).toBeNull();
+    expect(screen.queryByTestId('overall-band')).toBeNull();
+  });
+
+  it('is not presented as a failed job, and makes no claim that grading failed', async () => {
+    stubFetchForJobAged(GRADING_POLL_MAX_AGE_MS + 1000, pending);
+    renderPreview();
+
+    await screen.findByRole('heading', { name: EN.stalledTitle });
+    expect(screen.queryByText(EN.failedTitle)).toBeNull();
+    expect(screen.getByRole('region').textContent).not.toMatch(/review(ed)? by|our team|we will (look|check|review)/i);
+  });
+
+  it('announces the state through the one live region', async () => {
+    stubFetchForJobAged(GRADING_POLL_MAX_AGE_MS + 1000, pending);
+    renderPreview();
+
+    await screen.findByRole('heading', { name: EN.stalledTitle });
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toHaveTextContent(EN.stalledTitle);
+  });
+
+  it('moves focus to its heading, replacing the waiting one', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetchForJobAged(GRADING_POLL_MAX_AGE_MS - 1000, pending);
+    renderPreview();
+    const waiting = await screen.findByRole('heading', { name: EN.pendingTitle });
+    expect(waiting).toHaveFocus();
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS + 500));
+    const stalled = await screen.findByRole('heading', { name: EN.stalledTitle });
+
+    expect(stalled).toHaveFocus();
+  });
+
+  it('has distinct copy in both languages', () => {
+    for (const strings of [EN, DE]) {
+      expect(strings.stalledTitle.length).toBeGreaterThan(0);
+      expect(strings.stalledBody.length).toBeGreaterThan(0);
+      expect(strings.stalledBody).not.toBe(strings.pendingBody);
+      expect(strings.stalledTitle).not.toBe(strings.pendingTitle);
+    }
+  });
+
+  it('renders in German from the German catalogue', async () => {
+    stubFetchForJobAged(GRADING_POLL_MAX_AGE_MS + 1000, pending);
+    renderPreview(DE);
+
+    expect(await screen.findByRole('heading', { name: DE.stalledTitle })).toBeInTheDocument();
+    expect(screen.getByText(DE.stalledBody)).toBeInTheDocument();
   });
 });
 
@@ -593,7 +825,7 @@ describe('GradingPreview — the status request itself fails (not the same as gr
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const fetchSpy = vi
       .fn()
-      .mockImplementationOnce(async () => new Response(JSON.stringify(pending.body), { status: 200 }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify({ ...(pending.body as object), createdAt: new Date().toISOString() }), { status: 200 }))
       .mockImplementationOnce(async () => new Response('{}', { status: 500 }))
       .mockImplementationOnce(async () => new Response('{}', { status: 500 }))
       .mockImplementationOnce(async () => new Response('{}', { status: 500 }))

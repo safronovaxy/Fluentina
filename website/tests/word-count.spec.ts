@@ -186,7 +186,7 @@ for (const fx of LOCALE_FIXTURES) {
       await page.getByRole('button', { name: fx.submitName }).click();
 
       // KAN-18: success now means landing on the preview screen for the essay.
-      await expect(page).toHaveURL(new RegExp(`${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
+      await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
     });
 
     test('a 1000-word essay — the story\'s own "blocked" verification case — is blocked client-side: the submit click never leaves the page, and the too-long message is shown', async ({
@@ -201,7 +201,7 @@ for (const fx of LOCALE_FIXTURES) {
       // Never reached the success state — the click was blocked, not merely
       // slow; there is no pending/network state to wait out.
       await expect(page.getByRole('status')).toHaveCount(0);
-      await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
+      await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.writePath}$`));
     });
 
     // Round-1 review (should-fix #4): the too-short error was never
@@ -221,7 +221,7 @@ for (const fx of LOCALE_FIXTURES) {
 
       await expect(blockingMessage(page)).toHaveText(fx.tooShortError);
       await expect(page.getByRole('status')).toHaveCount(0);
-      await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
+      await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.writePath}$`));
     });
 
     // Round-1 review (should-fix #4, same finding): the counter's own text

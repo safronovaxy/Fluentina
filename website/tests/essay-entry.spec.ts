@@ -186,7 +186,7 @@ for (const fx of LOCALE_FIXTURES) {
 
       // Click 1: the primary CTA.
       await click(page.getByRole('link', { name: fx.ctaName, exact: true }));
-      await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
+      await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.writePath}$`));
 
       // Typing is not a click or a tap — the acceptance criterion counts
       // clicks/taps, and filling a text box is neither. Goes through
@@ -202,7 +202,7 @@ for (const fx of LOCALE_FIXTURES) {
 
       // KAN-18: a successful submission now lands on the preview screen for
       // the created essay (previously an on-page "Essay received" block).
-      await expect(page).toHaveURL(new RegExp(`${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
+      await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
       await expect(page.getByRole('heading', { level: 1 })).toHaveText(fx.previewHeading);
       expect(clicks, 'this known-good path takes exactly 2 clicks/taps — CTA, then submit').toBe(2);
     });
@@ -211,7 +211,7 @@ for (const fx of LOCALE_FIXTURES) {
       skipIfWebkitCannotStoreTheSessionCookie(browserName);
       await gotoOk(page, fx.landingPath);
       await page.getByRole('link', { name: fx.ctaName, exact: true }).click();
-      await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
+      await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.writePath}$`));
 
       // No auth-related field anywhere on the essay-entry screen itself.
       await expect(page.getByLabel(/email/i)).toHaveCount(0);
@@ -224,7 +224,7 @@ for (const fx of LOCALE_FIXTURES) {
       // Submitting leads to the score preview and nowhere else — in
       // particular not to a login/register screen — and that screen asks
       // for no account details either.
-      await expect(page).toHaveURL(new RegExp(`${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
+      await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
       await expect(page.getByLabel(/email/i)).toHaveCount(0);
       await expect(page.getByLabel(/password/i)).toHaveCount(0);
     });

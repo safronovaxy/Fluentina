@@ -21,11 +21,16 @@
  * KAN-6. This deliberately renders none of `summary`, `dimensions` or any
  * annotation past the one example.
  *
- * Five states, one per `phase` below:
+ * Six states, one per `phase` below:
  *  - pending   — job not finished (or first poll not back yet).
  *  - complete  — score, band, worked example.
  *  - flagged   — the result carries `flaggedForReview`. See `resolvePhase`.
  *  - failed    — the JOB failed; no score exists, and none is invented.
+ *  - stalled   — the job is STILL unfinished after `GRADING_POLL_MAX_AGE_MS`
+ *                and polling has stopped: pending is the one phase with no
+ *                way out, so a job that was never enqueued must not sit
+ *                there forever. Not `failed` — nothing failed, we just
+ *                stopped waiting, and saying otherwise would be a claim.
  *  - pollError — the status request itself failed; grading may be fine.
  *
  * Accessibility (a result arriving after a poll is a live region):
@@ -46,7 +51,7 @@
  */
 import { useEffect, useId, useMemo, useRef, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
-import { useGradingStatus, GradingStatusError, type GradingStatus } from '@/hooks/use-grading-status';
+import { useGradingStatus, isStalled, GradingStatusError, type GradingStatus } from '@/hooks/use-grading-status';
 import { bandForScore, type GradingFailureReason, type GradingResult } from '@/lib/contracts/grading';
 import { pickWorkedExample } from './worked-example';
 
@@ -88,6 +93,8 @@ export interface GradingPreviewStrings {
   readonly noExample: string;
   readonly flaggedTitle: string;
   readonly flaggedBody: string;
+  readonly stalledTitle: string;
+  readonly stalledBody: string;
   readonly failedTitle: string;
   readonly failedBody: string;
   readonly failedReasons: Readonly<Record<GradingFailureReason, string>>;
@@ -106,7 +113,7 @@ export interface GradingPreviewProps {
   readonly tryAgainAction: ReactNode;
 }
 
-type Phase = 'pending' | 'complete' | 'flagged' | 'failed' | 'pollError';
+type Phase = 'pending' | 'complete' | 'flagged' | 'failed' | 'stalled' | 'pollError';
 
 /**
  * `flagged` is decided before `complete` on purpose. When
@@ -118,13 +125,20 @@ type Phase = 'pending' | 'complete' | 'flagged' | 'failed' | 'pollError';
  * result's own summary calls them "not a reliable assessment". So nothing
  * from a flagged result is rendered at all: no score, no band, no comments,
  * and no annotation either, since the model that produced them was reading
- * an essay the guard distrusts. An honest B2 essay can land here (KAN-40
- * false positives), which is why the copy says the check can be wrong and
- * points at rewording rather than accusing.
+ * an essay the guard distrusts. (The clamp does NOT touch `annotations` —
+ * a flagged result still carries the distrusted model's annotation text, so
+ * "nothing renders it" is this component's job, pinned by an allow-list test.)
+ * An honest B2 essay can land here (KAN-40 false positives), which is why
+ * the copy says the check can be wrong. It names the SHAPE that trips the
+ * check ("an instruction about how to grade it") and never a location:
+ * `detectPromptInjection` returns no span, and surfacing one would hand an
+ * attacker a filter-bypass oracle. Every resubmission spends one of five per
+ * hour, so the copy must not send the guest hunting blindly either.
  */
 function resolvePhase(status: GradingStatus | undefined, pollFailed: boolean): Phase {
   if (status?.status === 'succeeded' && status.result) return status.result.flaggedForReview ? 'flagged' : 'complete';
   if (status?.status === 'failed') return 'failed';
+  if (isStalled(status)) return 'stalled';
   // Reached after the query's own retries are spent (see the hook), at which
   // point polling has stopped — showing `pending` on would be a screen that
   // never changes again. Say so, and offer a manual retry.
@@ -178,6 +192,8 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
         return strings.flaggedTitle;
       case 'failed':
         return strings.failedTitle;
+      case 'stalled':
+        return strings.stalledTitle;
       case 'pollError':
         return strings.pollErrorTitle;
       // Nothing for `pending`: the guest was just moved to this screen with
@@ -291,6 +307,14 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
               {strings.failedReasons[status?.failureReason ?? 'unknown']}
             </p>
             <p className="mt-1 text-sm text-muted-foreground">{strings.failedBody}</p>
+            <div className="mt-4">{tryAgainAction}</div>
+          </>
+        )}
+
+        {phase === 'stalled' && (
+          <>
+            {heading(strings.stalledTitle)}
+            <p className="mt-2 text-sm text-muted-foreground">{strings.stalledBody}</p>
             <div className="mt-4">{tryAgainAction}</div>
           </>
         )}

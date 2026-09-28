@@ -8,6 +8,7 @@ import { createGuestSession, convertGuestSessionToUser } from '@/lib/db/guest-se
 import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import { GradingPreview } from '@/components/guest/GradingPreview';
+import { GuestFlowShell } from '@/components/guest/chrome/GuestFlowShell';
 import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
 import type { GuestActor } from '@/lib/contracts/actor';
 
@@ -84,6 +85,17 @@ describe('guest preview page — ownership of the essay it renders (KAN-18)', ()
 
     expect(preview?.props.essayId).toBe(essay.id);
     expect(preview?.props.essayContent).toBe(' Mein Aufsatz.\r\nZweite Zeile. ');
+  });
+
+  it('highlights the "preview" step in the guest flow indicator — not "write", which it would silently be if this were copy-pasted from the entry page', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, 'Mein Aufsatz.');
+    cookieValue = actor.sessionId;
+
+    const shell = findElement(await render(essay.id), GuestFlowShell);
+
+    expect(shell?.props.currentStepId).toBe('preview');
   });
 
   it("404s for another guest's essay, and never reads it", async () => {

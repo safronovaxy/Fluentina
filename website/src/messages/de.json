@@ -71,7 +71,9 @@
         "suggestionLabel": "Besser so",
         "noExample": "Für diesen Aufsatz konnten wir keinen bestimmten Satz als Beispiel herausgreifen.",
         "flaggedTitle": "Wir konnten diesen Aufsatz nicht bewerten",
-        "flaggedBody": "Ein Teil deines Aufsatzes sah eher nach einer Anweisung an die Bewertung aus als nach einer Antwort auf die Aufgabe. Deshalb haben wir ihm keine Punktzahl gegeben — sie wäre keine faire Einschätzung. Diese Prüfung kann sich irren. Wenn du das denkst, formuliere diese Stelle um und reiche deinen Aufsatz erneut ein.",
+        "flaggedBody": "Etwas in deinem Aufsatz liest sich wie eine Anweisung dazu, wie er bewertet werden soll — zum Beispiel eine Vorgabe, welche Punktzahl vergeben werden soll. Wir zeigen dir keine Punktzahl, weil sie keine faire Einschätzung wäre. Diese Prüfung kann sich irren. Wenn du das denkst, suche nach Formulierungen, die sich um Bewertung oder Punkte drehen, ändere sie und reiche deinen Aufsatz erneut ein.",
+        "stalledTitle": "Das dauert länger als erwartet",
+        "stalledBody": "Dein Aufsatz ist nach zwei Minuten noch nicht bewertet, deshalb prüfen wir nicht weiter nach. Wir haben keine Punktzahl für dich und auch keine geschätzt. Du kannst deinen Aufsatz erneut einreichen.",
         "failedTitle": "Wir konnten deinen Aufsatz nicht bewerten",
         "failedBody": "Es wurde keine Punktzahl erstellt, und wir haben auch keine geschätzt. Du kannst deinen Aufsatz erneut einreichen.",
         "failedReasons": {
