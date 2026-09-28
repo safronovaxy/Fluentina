@@ -19,6 +19,14 @@ import type { GradingProviderName } from './provider';
  * jobs logging `costEstimateUsd: 0`.
  */
 const APPROX_USD_PER_TOKEN: Readonly<Record<GradingProviderName, { readonly prompt: number; readonly completion: number }>> = {
+  // Claude Opus 5.5 (`claude-opus-5-5`, the model `claude-provider.ts` sends) —
+  // $4 / $20 per MTok input/output, from the Claude models overview and
+  // pricing pages. The completion rate applies to THINKING tokens too:
+  // `usage.output_tokens` includes them and they are billed as output, so
+  // `claude-provider.ts` reports that figure as its completion count. Change
+  // this together with `CLAUDE_MODEL` there; no prompt caching is used, so
+  // cache read/write rates are deliberately absent.
+  claude: { prompt: 4 / 1_000_000, completion: 20 / 1_000_000 },
   // Mistral Large — published list price, prompt/completion split.
   mistral: { prompt: 2 / 1_000_000, completion: 6 / 1_000_000 },
   // The fake provider costs nothing — see fake-provider.ts, which always
