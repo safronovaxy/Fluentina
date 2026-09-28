@@ -13,6 +13,7 @@ import 'server-only';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from './schema';
+import { installQueryErrorSanitiser } from './query-error-sanitiser';
 
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is not set — see website/.env.example');
@@ -26,6 +27,14 @@ const pool = new Pool({
   // that ADR lands.
   max: 10,
 });
+
+// KAN-36: installed here, at the one place `db` is constructed, so importing
+// `db` at all is what turns it on — no query author opts in. Must run before
+// any query does; see query-error-sanitiser.ts for what it scrubs and why the
+// driver's own errors cannot be logged as-is. Deliberately NOT `logger: true`
+// on `drizzle()` below either: Drizzle's query logger prints every bound
+// parameter, the same leak by another route.
+installQueryErrorSanitiser();
 
 export const db = drizzle(pool, { schema });
 
