@@ -12,7 +12,12 @@
  * local Postgres this suite's `webServer` starts the app against.
  */
 import { test, expect, type Page } from '@playwright/test';
-import { fillTextboxAndWaitForWordCount, wordCountText } from './helpers/essay-fill';
+import {
+  ensureEssayFormHydrated,
+  fillTextboxAndWaitForWordCount,
+  wordCountText,
+} from './helpers/essay-fill';
+import { isWebKitOverPlainHttp } from './helpers/webkit';
 
 const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 
@@ -47,9 +52,13 @@ const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3000';
 const isPlainHttp = BASE_URL.startsWith('http://');
 
-function skipIfWebkitCannotStoreTheSessionCookie(testInfo: { project: { name: string } }) {
+// KAN-33: `browserName`, not `testInfo.project.name === 'webkit-desktop'` —
+// see helpers/webkit.ts's own comment on `isWebKitOverPlainHttp` for why
+// the previous, name-pinned form would have silently stopped applying this
+// skip on the new `webkit-mobile` project's plain-HTTP runs.
+function skipIfWebkitCannotStoreTheSessionCookie(browserName: string) {
   test.skip(
-    testInfo.project.name === 'webkit-desktop' && isPlainHttp,
+    isWebKitOverPlainHttp(browserName, isPlainHttp),
     'WebKit refuses to store a __Host--prefixed cookie over plain HTTP, even on localhost, so no essay submission can succeed here — see the comment above isPlainHttp.',
   );
 }
@@ -140,8 +149,9 @@ for (const fx of LOCALE_FIXTURES) {
     test('a first-time visitor reaches the text box and submits an essay in exactly 2 clicks from landing — under the 3-click acceptance criterion', async ({
       page,
       context,
-    }, testInfo) => {
-      skipIfWebkitCannotStoreTheSessionCookie(testInfo);
+      browserName,
+    }) => {
+      skipIfWebkitCannotStoreTheSessionCookie(browserName);
       // Round-1 review: `clicks` is incremented twice in straight-line code
       // below, with no branching, so it is 2 on every run this test can
       // possibly complete — it can never actually observe a third click
@@ -190,8 +200,8 @@ for (const fx of LOCALE_FIXTURES) {
       expect(clicks, 'this known-good path takes exactly 2 clicks/taps — CTA, then submit').toBe(2);
     });
 
-    test('no account or login is required anywhere on the path from landing to a submitted essay', async ({ page }, testInfo) => {
-      skipIfWebkitCannotStoreTheSessionCookie(testInfo);
+    test('no account or login is required anywhere on the path from landing to a submitted essay', async ({ page, browserName }) => {
+      skipIfWebkitCannotStoreTheSessionCookie(browserName);
       await gotoOk(page, fx.landingPath);
       await page.getByRole('link', { name: fx.ctaName, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
@@ -239,17 +249,36 @@ for (const fx of LOCALE_FIXTURES) {
       await gotoOk(page, fx.writePath);
 
       const textarea = page.getByRole('textbox');
-      // Playwright's fill() sets the value directly, exercising the exact
-      // controlled onChange path a real paste triggers in the browser
-      // (see EssayEntryForm.test.tsx for the direct proof pasting isn't
-      // blocked by any handler) — this proves the end-to-end path accepts
-      // whatever ends up in the field, regardless of how it got there.
+      // Round-1 review: this used to assert `toHaveValue(fx.essayText)`, which
+      // reads back the DOM value execCommand had just written — so it passed
+      // whether or not React ever saw the input. In a controlled textarea that
+      // is precisely the failure worth catching: if the `input` event reaches
+      // no onChange (the pre-hydration window essay-fill.ts documents), the
+      // DOM value still stands and the old assertion was green. Asserting the
+      // live counter instead means only a value React actually processed can
+      // satisfy it — the controlled path this test claims to exercise.
+      //
+      // Hydration is proved first, for the same reason every real fill goes
+      // through it: a paste landing before hydration is lost permanently, so
+      // the counter assertion below would be flaky rather than wrong.
+      await ensureEssayFormHydrated(page, fx.essayText);
       await textarea.evaluate((el: HTMLTextAreaElement, text: string) => {
         el.focus();
+        // select() before inserting, because ensureEssayFormHydrated proves
+        // hydration by leaving a probe fill in the field, and insertText
+        // inserts at the caret rather than replacing the content. Without
+        // this the field ends up as the probe text followed by the essay --
+        // which is what turned this test red on all four projects on the
+        // first attempt at this fix. Selecting first also models a real
+        // paste-over-selection more closely than appending did.
+        el.select();
         document.execCommand('insertText', false, text);
       }, fx.essayText);
 
       await expect(textarea).toHaveValue(fx.essayText);
+      await expect(
+        page.getByText(wordCountText(fx.locale, ESSAY_WORD_COUNT), { exact: true }),
+      ).toBeVisible({ timeout: 15_000 });
     });
   });
 }
