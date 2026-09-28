@@ -232,16 +232,43 @@ An approval conditional on a change is not an approval until that change is
 pushed. Merging is still not deploying: `main` is kept releasable, and shipping
 is a separate deliberate `workflow_dispatch` (see the Deployment section).
 
-**Still needs Irina, regardless of the above:**
+**Deploy without asking.** Trigger it deliberately, as its own action — a merge
+deploys nothing (see the Deployment section). `gh workflow run
+deploy-website.yml --ref main` / `deploy-cms.yml`. Then stop: do not monitor the
+run, Irina watches deployment status and reports back. `verify-ci` refuses any
+commit without a successful `ci.yml` run for that exact SHA, so a commit that
+never passed CI cannot ship.
 
-- Deploying. Always a separate, deliberate `workflow_dispatch` — see the
-  Deployment section above, and never assume a merge deployed anything.
-- Force-pushing or rewriting published history, on any branch.
-- Scope, architecture, or security trade-offs the stories do not already
-  settle; and any new Architecture Decision, which goes on the Confluence
-  Architecture Decisions page.
-- Confluence edits (BRD, architecture, strategy pages) — reviewed with Irina
-  before publishing. Jira is the exception, per above.
+One judgement stays with the deployer rather than being waved through: **do not
+deploy a change whose required secrets or cloud resources do not exist yet.**
+Shipping code that reads a missing Secret Manager entry, or enqueues to a queue
+nobody created, breaks the feature in production while looking like a successful
+deploy. That is a blocker to report, not a decision to take.
+
+**Keep Jira and Confluence current without asking.** Jira: transitions, new
+stories, acceptance-criteria edits, comments recording what a review found.
+Confluence: the BRD, Architecture Decisions, Test Strategy and this process's
+own pages — including adding an ADR when an architecture decision surfaces
+during implementation. Write what was actually decided and why, and attribute a
+decision to whoever made it; never record agreement that was not given.
+
+**Escalate only decisions.** The test is not "is this consequential" but "does
+this need a judgement that is not mine to make":
+
+- A genuine product, scope, architecture or security trade-off that the stories
+  and ADRs do not already settle — including one surfaced by a reviewer. Where
+  an agreed decision already covers it, follow the decision.
+- A 4th review round, per above.
+- A blocker only Irina can clear: a secret, a cloud resource, IAM, DNS, a
+  third-party account, a legal or DPA question.
+- Anything irreversible or destructive: force-pushing, rewriting published
+  history, deleting a branch or data, anything that discards someone else's
+  work.
+
+Where different readings of an ambiguous request would lead to materially
+different work, ask. Where they would not, pick the sensible one, say which, and
+carry on. Do not ask for permission to do the work; do ask when the work itself
+contains a decision.
 
 ## Do NOT
 
@@ -250,6 +277,8 @@ is a separate deliberate `workflow_dispatch` (see the Deployment section).
 - Modify `dist/` directly (build output, gitignored)
 - Use `node_modules/` paths for anything
 - Assume a merge to `main` deployed anything — it does not, and has not since the CI/CD rework. Deploys are manual `workflow_dispatch` only (see Deployment section above)
-- Wait for permission to open a PR, or to move a Jira ticket — both are standing authorisations (see Delivery Workflow above)
+- Wait for permission to open a PR, move a Jira ticket, update Confluence, merge a passed review, or deploy — all are standing authorisations (see Delivery Workflow above)
+- Deploy a change whose secrets or cloud resources do not exist yet — report it as a blocker instead
+- Monitor a GitHub Actions run after triggering a deploy (see Deployment section)
 - Merge on a green CI run from an earlier commit, on local checks standing in for CI, or on an approval that was conditional on a change not yet pushed
 - Fold an unrelated chore into a story's branch — it belongs on its own branch, so the story's PR stays reviewable
