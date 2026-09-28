@@ -127,6 +127,24 @@ always releasable but does not itself deploy to production.
   at risk from) — that needs real elapsed time on a real device, out of
   reach for this suite; flagged to Irina rather than guessed at, and the
   30-day figure itself is unchanged.
+  Two of the three mobile-Safari divergences KAN-33 set out to cover are
+  structurally unobservable here, and are called out rather than left to be
+  inferred from "a real Safari project now runs" (round-1 review). **Viewport
+  height under iOS Safari's dynamic toolbar:** Playwright's WebKit has no such
+  toolbar, and `100dvh` and `100vh` resolve identically in a fixed headless
+  viewport, so no browser project can distinguish them — not even a
+  computed-`min-height` assertion. What is enforceable is the class itself, so
+  `GuestFlowShell`'s `min-h-dvh` is pinned in
+  `GuestFlowShell.test.tsx` instead; the e2e suite's only viewport-differential
+  assertions are on the width axis (label collapse, horizontal overflow).
+  **Paste behaviour:** `fill()` and `execCommand('insertText')` dispatch an
+  `input` event but are not a real clipboard paste, so no project exercises a
+  `paste` handler. Nothing is attached to `paste` today, so nothing is missed;
+  the moment something is (enforcing the 300-word ceiling there would be a
+  natural place), it will need coverage no current project provides.
+  `tests/essay-entry.spec.ts`'s paste test does at least now assert the live
+  word counter rather than the DOM value it just wrote, so it can only pass on
+  a value React actually processed through the controlled `onChange` path.
 - **Every project's reported test count now means what it says.** `seo.spec.ts`,
   `redirects.spec.ts`, `routing.spec.ts`, and `sitemap.spec.ts` take only the
   `request` fixture and never open a `page`, so Playwright never launches a
@@ -141,6 +159,16 @@ always releasable but does not itself deploy to production.
   `test.use({ browserName: 'chromium' })`), so each test in them now executes
   exactly once across the whole pipeline, and `routing.spec.ts`'s own "Only
   run in one project" comment is now literally true rather than aspirational.
+  The resulting shape, as of KAN-33: `chromium-desktop` 188, and 94 each for
+  `chromium-mobile`, `webkit-desktop` and `webkit-mobile` — 470 total, down
+  from 561 (187 x 3) while adding a whole engine, because real in-browser
+  executions went UP (93 x 3 = 279 to 94 x 4 = 376) and the drop is entirely
+  the 188 engine-less duplicates. Treat these as a snapshot, not a contract:
+  nothing enforces them, and the first spec anyone adds makes them stale.
+  `REQUEST_ONLY_SPECS`'s patterns are anchored to a path separator so a future
+  `blog-seo.spec.ts` is not silently swept into the exclusion, but the list
+  itself is still hand-maintained -- renaming one of those four specs, or
+  adding a fifth request-only one, drifts without anything going red.
   An engine-sensitive assertion added to any of those four specs is still not
   exercised by any gate but `chromium-desktop` — that hasn't changed, only
   which projects redundantly claimed to cover it.

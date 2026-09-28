@@ -52,8 +52,21 @@ import { isCritical } from './helpers/console-errors';
 const MOBILE_BREAKPOINT_PX = 768;
 
 function isMobileViewport(page: Page): boolean {
-  const width = page.viewportSize()?.width;
-  return width !== undefined && width < MOBILE_BREAKPOINT_PX;
+  const viewport = page.viewportSize();
+  // Throws rather than defaulting: a project (or a test.use) setting
+  // `viewport: null` runs full-window, and viewportSize() is null then. The
+  // previous `width !== undefined && ...` form answered "desktop" for that
+  // case, so such a project would assert labels visible and untruncated at
+  // whatever width the real window happened to be -- the exact wrong-branch
+  // failure this function was rewritten to remove, just reached a different
+  // way. No project does this today; failing loudly keeps it that way
+  // (round-1 review of this PR).
+  if (viewport === null) {
+    throw new Error(
+      'isMobileViewport needs a fixed viewport, but page.viewportSize() is null (viewport: null runs full-window). Give this project an explicit viewport, or branch on something other than width.',
+    );
+  }
+  return viewport.width < MOBILE_BREAKPOINT_PX;
 }
 
 async function gotoOk(page: Page, path: string) {

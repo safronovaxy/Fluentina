@@ -249,4 +249,25 @@ describe('GuestFlowShell', () => {
     // language for assistive tech and translation tools regardless of that.
     expect(screen.getByRole('main').closest('[lang]')).toHaveAttribute('lang', 'de');
   });
+
+  it('KAN-33 — pins min-h-dvh on the shell root, the one part of the iOS dynamic-toolbar divergence a test can hold', () => {
+    renderWithIntl(
+      <GuestFlowShell currentStepId="none">
+        <p>content</p>
+      </GuestFlowShell>,
+    );
+    // Playwright's WebKit has no dynamic browser toolbar, and 100dvh and
+    // 100vh resolve identically in a headless viewport, so no e2e project --
+    // webkit-mobile included -- can observe the behaviour this class exists
+    // for (a bottom-anchored control sliding under iOS Safari's toolbar).
+    // What IS observable is the class itself, so it is pinned here instead:
+    // min-h-screen is what the rest of the codebase uses (Layout.tsx, four
+    // places under placement-test/), which makes "tidying" this to match the
+    // single most likely regression on the line -- and one that would leave
+    // all four browser projects green.
+    const root = screen.getByRole('main').closest('div[lang]');
+    expect(root).not.toBeNull();
+    expect(root).toHaveClass('min-h-dvh');
+    expect(root).not.toHaveClass('min-h-screen');
+  });
 });

@@ -78,7 +78,19 @@ const isProduction = !BASE_URL.includes('localhost');
 // project below except chromium-desktop (the one project whose `browserName`
 // they already force), so each test in these four files executes exactly
 // once across the whole pipeline, not zero and not three times.
-const REQUEST_ONLY_SPECS = [/seo\.spec\.ts$/, /redirects\.spec\.ts$/, /routing\.spec\.ts$/, /sitemap\.spec\.ts$/];
+// Anchored to a path separator (or string start), not bare suffixes: Playwright
+// matches these against the whole file path, so an unanchored /seo\.spec\.ts$/
+// also matches a future tests/blog-seo.spec.ts — plausible in a suite that
+// already has guest-flow-i18n.spec.ts — and would silently exclude it from
+// every project but chromium-desktop. That fails in the coverage-LOSING
+// direction and nothing reports it: the total just quietly comes in lower
+// than expected (round-1 review of this PR).
+const REQUEST_ONLY_SPECS = [
+  /(^|[\\/])seo\.spec\.ts$/,
+  /(^|[\\/])redirects\.spec\.ts$/,
+  /(^|[\\/])routing\.spec\.ts$/,
+  /(^|[\\/])sitemap\.spec\.ts$/,
+];
 
 export default defineConfig({
   testDir: './tests',

@@ -12,7 +12,11 @@
  * local Postgres this suite's `webServer` starts the app against.
  */
 import { test, expect, type Page } from '@playwright/test';
-import { fillTextboxAndWaitForWordCount, wordCountText } from './helpers/essay-fill';
+import {
+  ensureEssayFormHydrated,
+  fillTextboxAndWaitForWordCount,
+  wordCountText,
+} from './helpers/essay-fill';
 import { isWebKitOverPlainHttp } from './helpers/webkit';
 
 const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
@@ -245,17 +249,28 @@ for (const fx of LOCALE_FIXTURES) {
       await gotoOk(page, fx.writePath);
 
       const textarea = page.getByRole('textbox');
-      // Playwright's fill() sets the value directly, exercising the exact
-      // controlled onChange path a real paste triggers in the browser
-      // (see EssayEntryForm.test.tsx for the direct proof pasting isn't
-      // blocked by any handler) — this proves the end-to-end path accepts
-      // whatever ends up in the field, regardless of how it got there.
+      // Round-1 review: this used to assert `toHaveValue(fx.essayText)`, which
+      // reads back the DOM value execCommand had just written — so it passed
+      // whether or not React ever saw the input. In a controlled textarea that
+      // is precisely the failure worth catching: if the `input` event reaches
+      // no onChange (the pre-hydration window essay-fill.ts documents), the
+      // DOM value still stands and the old assertion was green. Asserting the
+      // live counter instead means only a value React actually processed can
+      // satisfy it — the controlled path this test claims to exercise.
+      //
+      // Hydration is proved first, for the same reason every real fill goes
+      // through it: a paste landing before hydration is lost permanently, so
+      // the counter assertion below would be flaky rather than wrong.
+      await ensureEssayFormHydrated(page, fx.essayText);
       await textarea.evaluate((el: HTMLTextAreaElement, text: string) => {
         el.focus();
         document.execCommand('insertText', false, text);
       }, fx.essayText);
 
       await expect(textarea).toHaveValue(fx.essayText);
+      await expect(
+        page.getByText(wordCountText(fx.locale, ESSAY_WORD_COUNT), { exact: true }),
+      ).toBeVisible({ timeout: 15_000 });
     });
   });
 }
