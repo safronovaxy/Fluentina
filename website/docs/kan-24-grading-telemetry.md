@@ -111,14 +111,22 @@ hand-inspected:
   whole suite green before this test existed).
 - `orchestrate-grading.test.ts` spies `console.log` for every branch
   (`wordCountOutOfBounds`, `providerError`, `invalidProviderResponse`,
-  `essayMissing`, both prompt-injection branches, the happy path, the
-  idempotent-redelivery case, and the finding-5 concurrent-claim case) and
-  asserts EXACTLY one `grading_job_completed` line with the expected
-  `success`/`errorType`/`provider`/`spanValidationPassed` shape — including
-  `essayMissing`, reproduced deterministically via a partial mock of
-  `getEssayByIdUnscoped` — no FK bypass needed, contrary to what
-  `orchestrate-grading.test.ts` used to claim in its own comment (this exact
-  contradiction was round-1 review's finding 6).
+  `essayMissing`, both prompt-injection branches, the happy path, and the
+  idempotent-redelivery case) and asserts EXACTLY one `grading_job_completed`
+  line with the expected `success`/`errorType`/`provider`/
+  `spanValidationPassed` shape — including `essayMissing`, reproduced
+  deterministically via a partial mock of `getEssayByIdUnscoped` — no FK
+  bypass needed, contrary to what `orchestrate-grading.test.ts` used to claim
+  in its own comment (this exact contradiction was round-1 review's finding
+  6). Both prompt-injection branches also assert the telemetry line's own
+  `promptInjectionSuspected` value specifically (`true`/`false`), not just
+  the DB row's copy of it (round-2 review, finding 4 — hard-coding that field
+  to `false` on the success path used to leave the whole suite green). The
+  finding-5 concurrent-claim test (`two concurrent deliveries... only ever
+  result in ONE provider call`) does NOT spy `console.log` — it is a
+  timing-dependent illustration of the race, not the deterministic proof of
+  the atomic claim; that proof is `grading-jobs.test.ts`'s own
+  `markGradingJobProcessingUnscoped` tests.
 
 Round-1 review mutation-proved the gap this closes: deleting the telemetry
 call from every failure path, and separately from the success path, both

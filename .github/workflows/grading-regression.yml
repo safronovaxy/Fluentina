@@ -6,7 +6,7 @@ name: AI Grading Golden-Set Regression
 # itself still don't exist (out of KAN-16's own scope — both round-1
 # reviewers agreed), so the job below finds no such script, prints a notice
 # and passes. A green run here is NOT evidence that grading output is sound.
-# See KAN-16's own handover for which follow-up ticket should land this.
+# KAN-39 is filed for building this harness.
 #
 # Once that script exists it becomes the real golden essay-set +
 # structural-invariant harness against the live Mistral/Claude provider
@@ -68,6 +68,6 @@ jobs:
           if node -e "process.exit(require('./package.json').scripts?.['test:grading-regression'] ? 0 : 1)"; then
             npm run test:grading-regression
           else
-            echo "::notice title=Golden-set harness not built yet::The GradingProvider abstraction, prompt template, and golden essay set (KAN-4/KAN-16, Architecture Decisions ADR-4/ADR-5) don't exist in the repo yet, so there's nothing to run against the real provider."
-            echo "::notice::This job becomes a real, deployment-gating check the moment an npm script named 'test:grading-regression' exists in website/package.json implementing Test Strategy §3.1-3.4 (structural invariants + directional golden-set assertions + baseline-diff tolerance)."
+            echo "::notice title=Golden-set harness not built yet::The golden essay set and the 'test:grading-regression' script (KAN-39) don't exist in the repo yet, so there's nothing to run against the real provider."
+            echo "::notice::This job becomes a real, deployment-gating check the moment an npm script named 'test:grading-regression' exists in website/package.json implementing Test Strategy §3.1-3.4 (structural invariants + directional golden-set assertions + baseline-diff tolerance) — see KAN-39."
           fi

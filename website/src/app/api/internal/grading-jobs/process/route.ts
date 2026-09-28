@@ -44,12 +44,25 @@ import { runGradingJob } from '@/lib/domain/grading/orchestrate-grading';
  * telemetry line for it, so asking Cloud Tasks to retry a failure that's
  * already been recorded terminally would risk double-billing a provider
  * call, not recover anything. This route's own retry budget
- * (`MAX_PROVIDER_RETRY_ATTEMPTS`) is independent of whatever the Cloud Tasks
- * queue's own `maxAttempts`/`maxRetryDuration` dispatch config is set to —
- * that queue does not exist in this repo yet (see this story's own
- * handover); state that config, and the dead-letter question (Cloud Tasks
- * has no native DLQ — a task that exhausts `maxAttempts` is simply dropped),
- * explicitly before provisioning it for a route that calls a paid API.
+ * (`MAX_PROVIDER_RETRY_ATTEMPTS`) is self-contained across exactly
+ * `MAX_PROVIDER_RETRY_ATTEMPTS` deliveries (`retryCount` 0, 1, 2 for a
+ * budget of 3): `isFinalAttempt` compares against
+ * `MAX_PROVIDER_RETRY_ATTEMPTS - 1`, not `MAX_PROVIDER_RETRY_ATTEMPTS`,
+ * specifically so the last delivery this budget allows is answered 200
+ * (terminal `failed`, telemetry recorded) rather than a 503 nothing then
+ * redelivers. Round-2 review measured the off-by-one this replaced: at
+ * `retryCount >= MAX_PROVIDER_RETRY_ATTEMPTS`, deliveries 0, 1 and 2 all
+ * still answered 503, so a queue configured with `maxAttempts: 3` (KAN-38)
+ * gave up after its third delivery with the job left `pending` forever —
+ * no terminal row, no telemetry line, silent. This arithmetic is what
+ * removes the trap of needing `maxAttempts >= MAX_PROVIDER_RETRY_ATTEMPTS +
+ * 1` in a separate repo (the Cloud Tasks queue config) to avoid it; state
+ * the queue's own `maxAttempts`/`maxRetryDuration`, and the dead-letter
+ * question (Cloud Tasks has no native DLQ — a task that exhausts
+ * `maxAttempts` is simply dropped), explicitly before provisioning it for a
+ * route that calls a paid API — see this story's own handover, and
+ * KAN-38 for the still-open stuck-`processing` case this doesn't close
+ * (this file's claim function has its own `TODO(KAN-38)`).
  *
  * Deliberately tolerant of a body-less or malformed request in exactly one
  * way: an invalid/missing `jobId` is a 400 (a Cloud Tasks configuration bug,
@@ -64,7 +77,7 @@ import { runGradingJob } from '@/lib/domain/grading/orchestrate-grading';
 /** A misconfigured (empty, or implausibly short/guessable) secret must refuse to serve the route at all, never fall through to comparing against it. */
 const MIN_SECRET_LENGTH = 32;
 
-/** Independent of whatever the Cloud Tasks queue's own `maxAttempts` is configured to — see this file's own top comment. */
+/** The total number of deliveries this route allows before treating a `providerError` as terminal — see this file's own top comment for how `isFinalAttempt` derives that from `retryCount`. */
 const MAX_PROVIDER_RETRY_ATTEMPTS = 3;
 
 const jobIdSchema = z.string().uuid();
@@ -118,7 +131,12 @@ export async function POST(request: NextRequest) {
   // than trusting an absent header to mean "first attempt".
   const retryCountHeader = request.headers.get('x-cloudtasks-taskretrycount');
   const retryCount = retryCountHeader === null ? null : Number(retryCountHeader);
-  const isFinalAttempt = retryCount === null || !Number.isFinite(retryCount) || retryCount >= MAX_PROVIDER_RETRY_ATTEMPTS;
+  // `MAX_PROVIDER_RETRY_ATTEMPTS - 1`, not `MAX_PROVIDER_RETRY_ATTEMPTS`: `retryCount` is
+  // zero-based, so comparing against the raw budget let deliveries 0 through
+  // `MAX_PROVIDER_RETRY_ATTEMPTS - 1` ALL answer 503, and only a delivery beyond the budget was
+  // ever final — see this file's own top comment for the stuck-`pending` failure that produced.
+  const isFinalAttempt =
+    retryCount === null || !Number.isFinite(retryCount) || retryCount >= MAX_PROVIDER_RETRY_ATTEMPTS - 1;
 
   try {
     // `runGradingJob`'s own return value — not a second read of the job row

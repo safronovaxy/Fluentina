@@ -183,6 +183,7 @@ describe('runGradingJob — BR-3.5: prompt-injection handling never silently ret
         },
       }),
     );
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     await runGradingJob(job.id);
 
@@ -196,6 +197,18 @@ describe('runGradingJob — BR-3.5: prompt-injection handling never silently ret
     // from 55 to 80 left `toBeLessThan(100)` green, and 80 is a pass.
     expect(stored?.result?.overallBand.toLowerCase()).not.toContain('pass');
     expect(stored?.result?.overallBand).toBe(bandForScore(stored!.result!.overallScore));
+
+    // Round-2 review: the DB row's own `promptInjectionSuspected` was
+    // already asserted above, but the KAN-24 telemetry line's copy of the
+    // same field was never checked against real behaviour — hard-coding
+    // `promptInjectionSuspected: false` into the `logGradingJobTelemetry`
+    // call on this path left the whole suite green. That field is how "how
+    // often are we being probed" is measured in Cloud Logging; asserting it
+    // here is what makes hard-coding it go red.
+    const events = loggedGradingEvents(logSpy);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ promptInjectionSuspected: true });
+    logSpy.mockRestore();
   });
 
   it('does not clamp or flag an honest essay that never trips the injection heuristic, even at a high score', async () => {
@@ -215,12 +228,20 @@ describe('runGradingJob — BR-3.5: prompt-injection handling never silently ret
         },
       }),
     );
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     await runGradingJob(job.id);
 
     const stored = await getGradingJobByIdUnscoped(SYSTEM_ACTOR, job.id);
     expect(stored?.result?.overallScore).toBe(95);
     expect(stored?.result?.flaggedForReview).toBe(false);
+
+    // The honest-essay counterpart to the assertion above: the telemetry
+    // line must report `false` here, not merely default to it.
+    const events = loggedGradingEvents(logSpy);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ promptInjectionSuspected: false });
+    logSpy.mockRestore();
   });
 });
 

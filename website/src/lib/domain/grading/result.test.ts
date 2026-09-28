@@ -60,8 +60,19 @@ describe('clampForSuspectedInjection — BR-3.5: an injection attempt must never
   // suspected-injection essay never walks away with a passing band" — this
   // pins THAT, so the constant can only ever be retuned in a direction that
   // still satisfies it.
-  it("the cap's own band is never a pass — BR-3.5's actual requirement, independent of the constant's exact value", () => {
-    expect(bandForScore(INJECTION_SUSPECTED_SCORE_CAP).toLowerCase()).not.toContain('pass');
+  //
+  // Round-2 review: asserting only `not.toContain('pass')` pins "never a
+  // pass band" but not the stronger property this file's own comment states
+  // (`INJECTION_SUSPECTED_SCORE_CAP`'s doc comment: "55 sits under
+  // bandForScore's... cutoff of 60"). Mutating the cap from 55 to 74 left
+  // that single assertion green — `bandForScore(74)` is `'B2- (borderline)'`,
+  // which never contains the substring "pass" — silently permitting drift to
+  // one point below an actual pass. Also excluding "borderline" pins the cap
+  // strictly under the borderline cutoff, matching the comment's stated intent.
+  it("the cap's own band is never a pass, nor merely borderline — BR-3.5's actual requirement, independent of the constant's exact value", () => {
+    const band = bandForScore(INJECTION_SUSPECTED_SCORE_CAP).toLowerCase();
+    expect(band).not.toContain('pass');
+    expect(band).not.toContain('borderline');
   });
 
   it('clamping replaces the summary and blanks per-dimension comments — a clamped result never keeps the model\'s original prose (finding 11)', () => {

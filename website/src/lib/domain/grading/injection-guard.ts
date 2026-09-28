@@ -87,8 +87,15 @@ const INJECTION_PATTERNS: readonly RegExp[] = [
 
   // German — "ignoriere/missachte/vergiss die (vorherigen) Anweisungen/Vorgaben/Bewertung/oben"
   new RegExp(String.raw`${LEAD_IN}(ignorier\w*|missachte\w*|vergiss\w*)\b[^.\n]{0,40}\b(anweisung\w*|vorgabe\w*|bewertung\w*|oben|vorherige\w*)\b`, 'i'),
-  // German — "gib (mir/diesem/dem ...) 100/beste/volle/maximale/höchste Punkte/Punktzahl/Note/Bewertung"
-  /\bgib\w*\b[^.\n]{0,30}\b(100|beste\w*|volle\w*|maximale\w*|hochste\w*)\b[^.\n]{0,25}\b(punktzahl\w*|punkte?|note|noten|bewertung)\b/i,
+  // German — imperative "gib/gebt/geben Sie (mir/diesem/dem ...) 100/beste/volle/maximale/höchste
+  // Punkte/Punktzahl/Note/Bewertung". Deliberately imperative forms only, not `\bgib\w*\b`: that
+  // wildcard also matched `gibt` — one of the commonest German verb forms ("es gibt", "die Note
+  // gibt es für...") — and unlike the other German patterns above this one had no LEAD_IN anchor
+  // to rule out mid-sentence prose. Round-2 review measured four ordinary B2 sentences about
+  // school/exams (all containing `gibt`) getting clamped to a fail with no feedback. Adding
+  // LEAD_IN instead of narrowing the verb was rejected: it breaks "... und gib die volle
+  // Punktzahl", since `und` is neither a sentence boundary nor a lead-in word.
+  /\b(gib|gebt|geben sie)\b[^.\n]{0,30}\b(100|beste\w*|volle\w*|maximale\w*|hochste\w*)\b[^.\n]{0,25}\b(punktzahl\w*|punkte?|note|noten|bewertung)\b/i,
   // German — "du bist (jetzt/ab jetzt) ..." role override
   /\bdu bist\s+(jetzt|ab jetzt)\b/i,
   // German — explicit new-instruction framing

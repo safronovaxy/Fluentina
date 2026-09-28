@@ -222,6 +222,40 @@ describe('POST /api/internal/grading-jobs/process — the Cloud Tasks target (pr
       expect(stored?.status).toBe('failed');
     });
 
+    // Round-2 review — `retryCount` is zero-based (Cloud Tasks attaches 0 on
+    // the FIRST delivery), so the budget has to be compared against
+    // `MAX_PROVIDER_RETRY_ATTEMPTS - 1`, not the raw constant. Getting that
+    // wrong (as the pre-fix arithmetic did) meant deliveries 0, 1 AND 2 all
+    // answered 503 for a budget of 3, so a queue configured with
+    // `maxAttempts: 3` (KAN-38) gave up after its third delivery with the
+    // job left `pending` forever — no terminal row, no telemetry line.
+    // These two pin the exact boundary the constant (currently 3) promises:
+    // the second-to-last delivery is still retryable, the last is final.
+    it('pins the boundary: retryCount one below the last allowed delivery is still retryable (503, reverted to pending)', async () => {
+      process.env.GRADING_TASK_SECRET = VALID_SECRET;
+      createGradingProviderMock.mockReturnValue(createFakeGradingProvider({ throws: new GradingProviderError('Mistral responded 503') }));
+      const job = await seedJob();
+
+      const response = await POST(processRequest({ jobId: job.id }, VALID_SECRET, { 'x-cloudtasks-taskretrycount': '1' }));
+
+      expect(response.status).toBe(503);
+      const stored = await getGradingJobByIdUnscoped(SYSTEM_ACTOR, job.id);
+      expect(stored?.status).toBe('pending');
+    });
+
+    it('pins the boundary: retryCount at the last allowed delivery is final (200, recorded failed) — the exact off-by-one round-2 review measured', async () => {
+      process.env.GRADING_TASK_SECRET = VALID_SECRET;
+      createGradingProviderMock.mockReturnValue(createFakeGradingProvider({ throws: new GradingProviderError('Mistral responded 503') }));
+      const job = await seedJob();
+
+      const response = await POST(processRequest({ jobId: job.id }, VALID_SECRET, { 'x-cloudtasks-taskretrycount': '2' }));
+
+      expect(response.status).toBe(200);
+      const stored = await getGradingJobByIdUnscoped(SYSTEM_ACTOR, job.id);
+      expect(stored?.status).toBe('failed');
+      expect(stored?.errorType).toBe('providerError');
+    });
+
     it('an invalidProviderResponse is never retried, regardless of the retry-count header, and is recorded failed immediately', async () => {
       process.env.GRADING_TASK_SECRET = VALID_SECRET;
       createGradingProviderMock.mockReturnValue({

@@ -166,6 +166,13 @@ export async function getGradingJobByIdUnscoped(actor: SystemActor, jobId: strin
  */
 export async function markGradingJobProcessingUnscoped(actor: SystemActor, jobId: string): Promise<boolean> {
   void actor;
+  // TODO(KAN-38): this atomic claim has no way back out of `processing` if the instance that
+  // claimed the job is evicted, OOMs, or is replaced by a deploy before any terminal write. A
+  // redelivery then fails to claim it (correctly — the row isn't `pending`), `runGradingJob`
+  // reports `'noop'`, the route answers 200, Cloud Tasks considers the task done, and the guest
+  // polls forever with no telemetry line recorded. Before this atomicity fix the unconditional
+  // claim made this self-healing; closing it needs a `claimed_at`/`updated_at` column plus either
+  // a reaper or a widened claim predicate — already tracked on KAN-38, deliberately not in this PR.
   const [claimed] = await db
     .update(gradingJobs)
     .set({ status: 'processing' })
