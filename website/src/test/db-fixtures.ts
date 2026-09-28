@@ -47,11 +47,18 @@ function assertLocalDatabase(): void {
  * `fileParallelism` ever re-enabled) another one entirely. Cascades handle
  * ordering for the first three; `rate_limit_counters` has no FK to anything,
  * so it's just listed alongside them.
+ *
+ * `grading_jobs` (KAN-16) is named explicitly too, not left to the
+ * `essays` -> `grading_jobs` FK's own `ON DELETE CASCADE` — round-1 review,
+ * finding 18: it worked either way today (a truncated `essays` row cascades
+ * to its job), but a future edit to that FK (or the FK itself being dropped)
+ * would silently start leaking job rows between tests with nothing here to
+ * catch it. Naming it directly makes that impossible regardless of the FK.
  */
 export async function resetDatabase(): Promise<void> {
   assertLocalDatabase();
   await db.execute(
-    sql`TRUNCATE TABLE fluentina.essays, fluentina.guest_sessions, fluentina.users, fluentina.rate_limit_counters RESTART IDENTITY CASCADE`,
+    sql`TRUNCATE TABLE fluentina.essays, fluentina.grading_jobs, fluentina.guest_sessions, fluentina.users, fluentina.rate_limit_counters RESTART IDENTITY CASCADE`,
   );
 }
 

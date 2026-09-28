@@ -85,8 +85,16 @@ always releasable but does not itself deploy to production.
   container defined below, not a mock — that container is genuinely consumed
   now, by roughly twenty tests, and removing it from CI would silently drop
   that whole suite rather than just tidying up an unused fixture.
-  `MOCK_GRADING_PROVIDER` remains provisioned ahead of the story that will
-  use it and is not consumed by anything yet.
+  `MOCK_GRADING_PROVIDER` now has a real consumer, as of KAN-16:
+  `provider-factory.ts`'s `createGradingProvider()` selects the fake,
+  zero-network-call `GradingProvider` whenever it's exactly `"1"` — set for
+  the built app in `ci.yml`'s "Start built app"/E2E steps, and separately, at
+  the config level (`vitest.config.ts`'s own `test.env`), as the Vitest unit
+  suite's default. Deliberately not set for Vitest in `ci.yml` itself: that
+  would leave local and CI runs able to diverge again depending on whether a
+  developer's own gitignored `.env.local` happens to set it too (KAN-16
+  round-1 review, finding 1 — this is exactly what let the unit suite depend
+  on a file CI doesn't have, undetected, the first time this story landed).
 - Specs tagged `@cms` need a reachable Strapi with published content, so CI
   excludes them by tag and they run against a live site via
   `npm run test:e2e:live`. Without that exclusion the suite is red on every PR
@@ -187,7 +195,7 @@ always releasable but does not itself deploy to production.
   `test:grading-regression` script, prints a notice saying so, and passes.
   Do not read a passing CI run as evidence that grading output is sound.
   It becomes a real check, calling the live provider against a golden essay
-  set, once KAN-4 and KAN-16 land that script. Whether it should then run on
+  set, once KAN-39 lands that script. Whether it should then run on
   every PR or only when the prompt template or a `GradingProvider`
   implementation changes is **deliberately undecided** — that choice only has
   a cost (live API spend and time on each run) once the check does real work,

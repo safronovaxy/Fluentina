@@ -66,7 +66,19 @@ describe('createEssay', () => {
 
     await expect(
       createEssay(actor, 'An essay under a session id that does not exist.'),
-    ).rejects.toThrow(/no guest session found/);
+    ).rejects.toThrow(/guest session no longer exists/);
+  });
+
+  it('KAN-24/KAN-36: the thrown message never embeds the session id — it is a live bearer credential', async () => {
+    const actor = newGuestActor(); // never persisted via createGuestSession
+
+    try {
+      await createEssay(actor, 'An essay under a session id that does not exist.');
+      expect.unreachable('createEssay should have thrown for a session id with no row');
+    } catch (err) {
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).not.toContain(actor.sessionId);
+    }
   });
 
   it('does not leave an essay unattached when the write races a concurrent conversion', async () => {

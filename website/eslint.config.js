@@ -299,7 +299,11 @@ export default [
   // `NextResponse.json` directly until it, too, adopts `rejectionResponse`
   // on purpose.
   {
-    files: ["src/app/api/essays/route.ts", "src/app/api/guest-session/route.ts"],
+    // KAN-16: the grading status route adopts rejectionResponse() the same
+    // way the original two routes did — added here on purpose, per this
+    // block's own comment above ("a future route is free to use
+    // NextResponse.json directly until it, too, adopts rejectionResponse").
+    files: ["src/app/api/essays/route.ts", "src/app/api/guest-session/route.ts", "src/app/api/essays/\\[id\\]/grading/route.ts"],
     rules: {
       "no-restricted-syntax": [
         "error",

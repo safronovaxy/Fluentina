@@ -6,6 +6,7 @@ import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/g
 import { isCrossOriginRequest } from '@/lib/same-origin';
 import { clientIp } from '@/lib/client-ip';
 import { rejectionResponse } from '@/lib/rejection-response';
+import { logGuestSessionRejection } from '@/lib/guest-session-rejection-log';
 
 /**
  * POST /api/guest-session — KAN-10 session issuance, the Node-runtime half.
@@ -139,6 +140,11 @@ import { rejectionResponse } from '@/lib/rejection-response';
  * `clientIp` (`lib/client-ip.ts`) is the same per-IP backstop `/api/essays`
  * uses, looser here to match this endpoint's lower cost (no content, no
  * future grading call — see that module's own comment).
+ *
+ * KAN-24 (carried-over PR note): both 400 branches below now call
+ * `logGuestSessionRejection` — see that module's own comment for why this
+ * exists (a rejection nothing counts is indistinguishable from one that
+ * never fires) and exactly what it does and doesn't log.
  */
 export async function POST(request: NextRequest) {
   if (isCrossOriginRequest(request)) {
@@ -147,6 +153,7 @@ export async function POST(request: NextRequest) {
     // caller sends its own. See `isCrossOriginRequest`'s own doc comment
     // for exactly what counts as a mismatch, including the "absence on
     // both sides is not a match" case a round-2 review found missing here.
+    logGuestSessionRejection(400, 'crossOrigin');
     return rejectionResponse('crossOrigin', 400, 'cross-origin request rejected');
   }
 
@@ -157,6 +164,7 @@ export async function POST(request: NextRequest) {
     // middleware already set moments earlier on the same navigation — see
     // the comment above. Reject outright rather than resolving a session
     // (which would mean minting one) for whoever this actually is.
+    logGuestSessionRejection(400, 'invalidSessionCookie');
     return rejectionResponse('invalidSessionCookie', 400, 'missing or invalid guest session cookie');
   }
 
