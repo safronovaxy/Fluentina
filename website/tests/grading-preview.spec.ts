@@ -4,7 +4,7 @@
  *
  * NOT RUN when this was written: no Playwright browser could be installed in
  * the authoring environment (cdn.playwright.dev is blocked), so CI's e2e job
- * is this file's first real execution. The component's behaviour (all five
+ * is this file's first real execution. The component's behaviour (all six
  * states, polling, focus, live region, the highlight/explanation
  * association) is covered by the unit suite — src/components/guest/
  * GradingPreview.test.tsx — which HAS been run; this spec proves only the
