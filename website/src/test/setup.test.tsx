@@ -32,4 +32,20 @@ describe('vitest environment', () => {
     expect(typeof window.matchMedia).toBe('function');
     expect(window.matchMedia('(min-width: 640px)').matches).toBe(false);
   });
+
+  // KAN-16 round-1 review, finding 1 — the belt-and-suspenders fetch guard.
+  // See setup.ts's own comment: this exists specifically so that if
+  // vitest.config.ts's `MOCK_GRADING_PROVIDER: '1'` default ever regresses,
+  // the suite fails loudly the instant something reaches for a real network
+  // host, rather than silently billing a real provider.
+  it('throws — never silently reaches the network — when something calls fetch against a non-localhost host without stubbing it first', () => {
+    expect(() => fetch('https://api.mistral.ai/v1/chat/completions')).toThrow(/real network fetch/i);
+  });
+
+  it('still lets a localhost fetch through to the real implementation, rather than blocking everything', async () => {
+    // Nothing is listening on this port — this only proves the guard let the
+    // call REACH the real fetch (a network-level rejection), not that the
+    // guard's own "stub it yourself" error fired.
+    await expect(fetch('http://127.0.0.1:1')).rejects.not.toThrow(/real network fetch/i);
+  });
 });

@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST } from './route';
 import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
@@ -57,6 +57,8 @@ describe('POST /api/guest-session — missing or malformed cookie', () => {
   // status code. A mutant that swapped this branch's message for the
   // cross-origin one's (or vice versa) left both suites green.
   it('rejects a request with no cookie at all — 400, "missing or invalid guest session cookie", reason "invalidSessionCookie", no session resolved, no row created', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
     const response = await POST(postWithCookie());
     const body: { error: string; reason?: string } = await response.json();
 
@@ -68,6 +70,13 @@ describe('POST /api/guest-session — missing or malformed cookie', () => {
     // existed.
     expect(body.reason).toBe('invalidSessionCookie');
     expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
+
+    // KAN-24 (carried-over note): this branch used to be silent in Cloud
+    // Logging entirely — nothing counted it.
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(logSpy.mock.calls[0][0] as string);
+    expect(logged).toMatchObject({ event: 'guest_session_rejected', status: 400, reason: 'invalidSessionCookie' });
+    logSpy.mockRestore();
   });
 
   it('rejects a malformed or forged cookie the same way — 400, "missing or invalid guest session cookie", reason "invalidSessionCookie", and the forged value never becomes a row', async () => {
@@ -205,6 +214,20 @@ describe('POST /api/guest-session — cross-origin requests', () => {
     // reason (see this describe block's own comment above).
     expect(body.reason).toBe('crossOrigin');
     expect(await getGuestSessionById({ kind: 'guest', sessionId: validCookie }, validCookie)).toBeNull();
+  });
+
+  it('KAN-24 (carried-over note): the cross-origin branch is also no longer silent in Cloud Logging', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const validCookie = generateGuestSessionId();
+
+    await POST(postWithCookie(validCookie, { origin: 'https://evil.example' }));
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(logSpy.mock.calls[0][0] as string);
+    expect(logged).toMatchObject({ event: 'guest_session_rejected', status: 400, reason: 'crossOrigin' });
+    // Never the session id, even though a well-formed one WAS presented.
+    expect(JSON.stringify(logged)).not.toContain(validCookie);
+    logSpy.mockRestore();
   });
 
   // Round-2 review: this suite had no test carrying a MATCHING Origin at

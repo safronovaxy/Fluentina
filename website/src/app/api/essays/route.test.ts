@@ -6,6 +6,8 @@ import { POST } from './route';
 import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
 import { getGuestSessionById, createGuestSession, convertGuestSessionToUser } from '@/lib/db/guest-sessions';
 import { getEssayById } from '@/lib/db/essays';
+import { getGradingJobByEssayId } from '@/lib/db/grading-jobs';
+import { drainGradingQueueForTests } from '@/lib/domain/grading/queue';
 import { db } from '@/lib/db/client';
 import { essays } from '@/lib/db/schema';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
@@ -1385,5 +1387,128 @@ describe('POST /api/essays — KAN-31: guard-level rejections never leak essay c
     expect(body.reason).toBe('rateLimited');
     expect(rawBody).not.toContain(secretToken);
     expect(rawBody).not.toContain(sessionId);
+  });
+});
+
+/**
+ * KAN-16 — grading dispatch. The "does not block the UI" / "returns
+ * immediately" property itself is proven at the seam that actually decides
+ * it (`lib/domain/grading/queue.test.ts`, against a controllable deferred
+ * promise) rather than re-proved here via timing against a real database,
+ * which would be racy by construction. This only proves the WIRING: a
+ * successful submission actually results in a grading job existing for that
+ * essay, reachable through the real `startGrading` -> `createGradingJob`
+ * path this route calls.
+ *
+ * `drainGradingQueueForTests()` (KAN-16 round-1 review, finding 16): this
+ * suite runs with `GRADING_QUEUE_MODE=off` (`vitest.config.ts`'s own
+ * default), so a submitted essay's grading job is recorded but never
+ * auto-run — every OTHER describe block in this file submits essays with no
+ * interest in grading at all, and letting each of them silently kick off a
+ * real (if fake-provider) grading run raced this file's own `afterEach`
+ * TRUNCATE, reproducibly leaking a job into an unrelated test. Only this
+ * describe block, which actually wants to see a job finish, drains
+ * explicitly — replacing the fixed 50-iteration/20ms polling loop this used
+ * to need with a deterministic, synchronous-from-the-test's-perspective run.
+ */
+describe('POST /api/essays — KAN-16: starts grading after a successful submission', () => {
+  it('a grading job exists for the essay immediately after a 201 response', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    const response = await POST(postEssay({ content: validLengthContent('Grade me.') }, sessionId));
+    const body: { id: string } = await response.json();
+
+    const job = await getGradingJobByEssayId({ kind: 'guest', sessionId }, body.id);
+    expect(job).not.toBeNull();
+    expect(job?.status).toBe('pending'); // recorded, not yet run — GRADING_QUEUE_MODE=off
+  });
+
+  it('eventually reaches "succeeded" via the same inline dispatch path production would use in test/local mode', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+
+    const response = await POST(postEssay({ content: validLengthContent('Grade me too.') }, sessionId));
+    const body: { id: string } = await response.json();
+
+    await drainGradingQueueForTests();
+
+    const actor = { kind: 'guest' as const, sessionId };
+    const job = await getGradingJobByEssayId(actor, body.id);
+    expect(job?.status).toBe('succeeded');
+  });
+});
+
+/**
+ * KAN-24 — the submission endpoint used to emit nothing at all. See
+ * `lib/domain/essay-submission-telemetry.ts`'s own comment for what this
+ * line does and does not carry; asserted here against the real route, not
+ * only the helper function in isolation.
+ */
+describe('POST /api/essays — KAN-24: one structured line per submission attempt', () => {
+  it('logs outcome "created" with a hashed session id and the content length, never the raw session id or the content', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const content = validLengthContent('Logged submission.');
+
+    await POST(postEssay({ content }, sessionId));
+
+    const submissionLine = logSpy.mock.calls.map((call) => JSON.parse(call[0] as string)).find((line) => line.event === 'essay_submission');
+    expect(submissionLine).toBeTruthy();
+    expect(submissionLine.outcome).toBe('created');
+    expect(submissionLine.contentLength).toBe(content.length);
+    const rawLine = JSON.stringify(submissionLine);
+    expect(rawLine).not.toContain(sessionId);
+    expect(rawLine).not.toContain(content);
+    logSpy.mockRestore();
+  });
+});
+
+/**
+ * KAN-24 / KAN-36-class fix — a database failure while resolving the session
+ * or writing the essay row used to become an unguarded framework 500 with no
+ * `reason`, and `lib/db/essays.ts`'s own thrown message used to embed the
+ * live session id. This proves the ROUTE's side of that fix: a failure from
+ * `submitEssay` is caught, answered through `rejectionResponse` like every
+ * other rejection in this file, and logged without leaking the failure
+ * detail.
+ */
+describe('POST /api/essays — KAN-24/KAN-36: a database failure returns a safe, reason-carrying 500', () => {
+  it('returns 500 with reason "internalError", and neither the response nor the submission log leaks the underlying database error or the session id', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Same fault-injection shape `lib/db/rate-limit.test.ts` already uses
+    // for the same class of concern: a raw driver failure whose OWN message
+    // embeds bound parameters (a live session id, in the real
+    // `createEssay`/`resolveGuestSession` case — see `lib/db/essays.ts`'s
+    // own KAN-24 fix) must never reach this route's response or its log.
+    const leakySubstring = 'leak-probe-should-never-reach-the-response-or-a-log-line';
+    const transactionSpy = vi.spyOn(db, 'transaction').mockImplementation(() => {
+      throw new Error(`simulated database failure embedding ${leakySubstring} (${sessionId})`);
+    });
+
+    try {
+      const response = await POST(postEssay({ content: validLengthContent('Will fail to persist.') }, sessionId));
+      const body = await response.json();
+      const rawBody = JSON.stringify(body);
+
+      expect(response.status).toBe(500);
+      expect(body.reason).toBe('internalError');
+      expect(rawBody).not.toContain(sessionId);
+      expect(rawBody).not.toContain(leakySubstring);
+
+      const submissionLine = logSpy.mock.calls
+        .map((call) => JSON.parse(call[0] as string))
+        .find((line) => line.event === 'essay_submission');
+      expect(submissionLine?.outcome).toBe('error');
+      const rawLoggedLine = JSON.stringify(submissionLine);
+      expect(rawLoggedLine).not.toContain(sessionId);
+      expect(rawLoggedLine).not.toContain(leakySubstring);
+    } finally {
+      transactionSpy.mockRestore();
+      logSpy.mockRestore();
+    }
   });
 });

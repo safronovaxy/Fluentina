@@ -289,6 +289,19 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
     bodyTooLarge: strings.errorGeneric,
     invalidJson: strings.errorGeneric,
     invalidSubmission: strings.errorGeneric,
+    // KAN-16: `POST /api/essays` (the only endpoint this form calls) never
+    // produces this reason — it belongs to `GET /api/essays/[id]/grading`'s
+    // ownership guard (lib/contracts/rejection-reason.ts's own comment).
+    // Present only so this map stays exhaustive over the whole
+    // `RejectionReason` union; unreachable from this component.
+    gradingJobNotFound: strings.errorGeneric,
+    // KAN-24: reachable by a real guest — an essay-creation database failure
+    // now returns this instead of an un-`reason`-carrying framework 500 (see
+    // rejection-reason.ts's own comment). No dedicated string exists for it
+    // yet, same placeholder-not-oversight status as `invalidSessionCookie`
+    // above: "try again" is at least directionally sound advice for a
+    // transient database error, unlike for that one.
+    internalError: strings.errorGeneric,
   };
   const submissionError = mutation.error instanceof EssaySubmissionError ? mutation.error : undefined;
   const submissionErrorMessage = submissionError?.reason
