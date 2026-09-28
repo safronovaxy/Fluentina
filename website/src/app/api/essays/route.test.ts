@@ -1,5 +1,6 @@
 /** @vitest-environment node */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { format, inspect } from 'node:util';
 import { NextRequest } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { POST } from './route';
@@ -168,6 +169,57 @@ describe('POST /api/essays — well-formed cookie, row already exists (returning
       logSpy.mockRestore();
       errorSpy.mockRestore();
       warnSpy.mockRestore();
+    }
+  });
+});
+
+describe('POST /api/essays — KAN-36: a database failure on a valid submission leaks neither the essay nor the session id', () => {
+  // The HTTP-boundary half of the KAN-36 severity claim. `query-error-
+  // sanitiser.test.ts` proves the sanitiser scrubs a NUL-byte failure at the
+  // repository layer; THIS is what makes it "any visitor, on demand": an
+  // ordinary POST, a real session cookie, a valid-length essay that merely
+  // contains U+0000 (nothing upstream rejects it, Postgres refuses it with
+  // SQLSTATE 22021), and the failure reaches whatever handles this route's
+  // rejection. It also guards a second failure mode the repository-layer
+  // test cannot see: a future `catch (e) { console.error('essay submit
+  // failed', e, body) }` in route.ts would put the raw body into the log
+  // ABOVE the sanitiser, with every other test in this file still green.
+  it('a NUL-containing, valid-length essay with a real session cookie fails with SQLSTATE 22021, and nothing loggable carries the essay or the session id', async () => {
+    const sessionId = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId });
+    const fragment = 'NULESSAYFRAGMENT-Sehr geehrte Damen und Herren';
+    const content = `${validLengthContent(fragment)}\u0000`;
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation(() => {}),
+    );
+
+    try {
+      let thrown: unknown;
+      try {
+        await POST(postEssay({ content }, sessionId));
+      } catch (error) {
+        thrown = error;
+      }
+
+      // The trigger: the request passed every guard and the database refused it.
+      expect(thrown, 'the route must surface the failure, not swallow it into a 2xx/4xx').toBeInstanceOf(Error);
+      expect((thrown as { cause?: { code?: unknown } }).cause?.code).toBe('22021');
+      expect(await countEssaysForSession(sessionId)).toBe(0);
+
+      // Everything a log could receive: the error itself as `console.error`
+      // and the framework's default handling print it, plus every call made
+      // to any console method while the route ran.
+      const loggable = [
+        inspect(thrown, { depth: null }),
+        format('%s', thrown),
+        String((thrown as Error).stack),
+        ...spies.flatMap((spy) => spy.mock.calls.map((args) => `${format(...args)}\n${inspect(args, { depth: null })}`)),
+      ].join('\n');
+      expect(loggable).not.toContain(fragment);
+      expect(loggable).not.toContain('Wort30');
+      expect(loggable).not.toContain(sessionId);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
     }
   });
 });

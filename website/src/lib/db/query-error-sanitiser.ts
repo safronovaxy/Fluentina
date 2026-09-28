@@ -1,4 +1,10 @@
-import 'server-only';
+// No `import 'server-only'` here, for the same reason schema.ts and
+// postgres-version.ts omit it: this module is loaded by scripts/migrate.ts,
+// which runs in plain Node outside the Next.js bundler, where that marker
+// throws unconditionally (measured: importing this file under `tsx` fails
+// with "This module cannot be imported from a Client Component module").
+// It holds no queries, no client and no secrets, and `client.ts` — the
+// module that actually builds the app's connection — keeps the marker.
 
 /**
  * KAN-36 — the query-error sanitiser: no error carrying bound query
@@ -27,8 +33,12 @@ import 'server-only';
  * after. A control that depends on each author remembering to add it is the
  * shape ADR-14 rejected. So this sits at the one function every query the
  * driver runs passes through — `queryWithCache`, below — and is installed by
- * `client.ts` at import time, i.e. by the same act of importing `db` at all.
- * There is no opt-in.
+ * `client.ts` at import time, i.e. by the same act of importing `db` at all,
+ * and by `scripts/migrate.ts`, the one other place that builds its own
+ * Drizzle pg client. There is no opt-in. (Nothing ENFORCES the second half:
+ * `scripts/**` is outside the ESLint `pg`/`drizzle-orm` restriction, which is
+ * scoped to `src/**`. A new script that builds a client must call
+ * `installQueryErrorSanitiser()` itself.)
  *
  * WHAT IT KEEPS. An error that says nothing is its own problem: someone
  * debugging a failed insert at 2am needs to know WHICH constraint. So the
@@ -37,6 +47,15 @@ import 'server-only';
  * catalogue names `schema`/`table`/`column`/`constraint`/`dataType`, plus
  * `routine` and `position`. Everything else is dropped.
  *
+ * `hint` is dropped with the rest. Dropping it wholesale was considered and
+ * found to cost something real: the hints worth having are class 42
+ * developer-error cases (`42703` "Perhaps you meant to reference the
+ * column ...", `42P10` on a missing `ON CONFLICT` index) whose `hint` names
+ * catalogue objects and never a parameter value. It stays off the allowlist
+ * anyway, because a field is kept by being named and nobody has yet audited
+ * every SQLSTATE that sets one — so if a class 42 hint is ever wanted, add
+ * it deliberately, for class 42 only.
+ *
  * ALLOWLIST, NOT DENYLIST. Fields are kept by name; anything not named is
  * deleted. A denylist ("strip `detail` and `params`") would silently
  * re-open the leak the day a driver upgrade adds a field that echoes a value.
@@ -44,9 +63,21 @@ import 'server-only';
  * Postgres-originated error: it is free text, and `invalid input syntax for
  * type uuid: "<value>"` is exactly the shape that echoes a bound value back.
  * The message is rebuilt from the kept fields instead. Errors with no
- * SQLSTATE (a refused connection, a connect timeout — nothing that ever saw
- * a parameter) keep their message, since `connect ECONNREFUSED 127.0.0.1:5432`
- * is precisely the diagnostic worth having.
+ * SQLSTATE that are POSITIVELY identified as libuv/network errors (`syscall`
+ * or a numeric `errno` — a refused connection, a connect timeout; nothing
+ * that ever saw a parameter) keep their message, since `connect ECONNREFUSED
+ * 127.0.0.1:5432` is precisely the diagnostic worth having.
+ *
+ * `message` is allowlisted like every other field: an error that is NEITHER
+ * Drizzle-shaped, pg-shaped nor libuv-shaped gets a fixed message. That
+ * branch used to keep `message` verbatim, which made it the one fail-open
+ * path — a Drizzle minor that changed `query` to the `{ sql, params }`
+ * object it stores internally, or renamed `params`, would have made
+ * `isDrizzleQueryError` false while the field loop still deleted
+ * `query`/`params`, so the sanitiser would have LOOKED as if it worked while
+ * `message` and the head of `stack` still read `Failed query: <sql>\nparams:
+ * <the whole essay>`. The import-time assertion below guards method removal,
+ * not error-shape drift; this is what guards the latter.
  *
  * WHAT IT MUST NOT DO. It never swallows or replaces control flow: the SAME
  * error object is rethrown (mutated in place), so `instanceof
@@ -74,8 +105,14 @@ const PG_KEEP: ReadonlySet<string> = new Set([
   'position',
 ]);
 
-/** Errors with no SQLSTATE (network / pool layer): kept by name, everything else deleted. */
+/** libuv / network errors (no SQLSTATE, positively identified): kept by name, everything else deleted. */
 const SYSTEM_KEEP: ReadonlySet<string> = new Set(['name', 'code', 'errno', 'syscall', 'address', 'port']);
+
+/** Anything unrecognised: only its name survives, and its message is replaced by `UNRECOGNISED_MESSAGE`. */
+const UNRECOGNISED_KEEP: ReadonlySet<string> = new Set(['name']);
+
+const UNRECOGNISED_MESSAGE =
+  'database error of an unrecognised shape (details withheld: lib/db/query-error-sanitiser.ts could not identify it)';
 
 /**
  * The Drizzle wrapper itself. `query` is the statement with `$n` placeholders
@@ -124,6 +161,15 @@ function isDrizzleQueryError(err: Record<string, unknown>): boolean {
   return typeof err.query === 'string' && Array.isArray(err.params);
 }
 
+/**
+ * A libuv / network error (`ECONNREFUSED`, `ETIMEDOUT`, ...): Node sets a
+ * `syscall` string and a numeric `errno` on these, and they never saw a
+ * bound parameter. The ONLY shape whose own message is kept.
+ */
+function isSystemError(err: Record<string, unknown>): boolean {
+  return typeof err.syscall === 'string' || typeof err.errno === 'number';
+}
+
 function describePostgresError(err: Record<string, unknown>): string {
   const code = String(err.code);
   const conditionName = SQLSTATE_NAMES[code];
@@ -169,14 +215,19 @@ function scrubInPlace(err: unknown, depth: number): void {
 
   const drizzle = isDrizzleQueryError(err);
   const postgres = !drizzle && isPostgresError(err);
-  const keep = drizzle ? DRIZZLE_KEEP : postgres ? PG_KEEP : SYSTEM_KEEP;
+  const system = !drizzle && !postgres && isSystemError(err);
+  // Fail closed: the last branch is "unrecognised", never "keep everything".
+  const keep = drizzle ? DRIZZLE_KEEP : postgres ? PG_KEEP : system ? SYSTEM_KEEP : UNRECOGNISED_KEEP;
 
   // Computed BEFORE any deletion: they read the fields about to be dropped.
+  // Only a positively identified libuv error keeps its own message.
   const newMessage = drizzle
     ? `Failed query: ${String(err.query)}\nparams: [${(err.params as unknown[]).length} value(s) ${REDACTED}]`
     : postgres
       ? describePostgresError(err)
-      : undefined;
+      : system
+        ? undefined
+        : UNRECOGNISED_MESSAGE;
   const redactedParams = drizzle ? (err.params as unknown[]).map(() => REDACTED) : undefined;
   const cause = err.cause;
 
@@ -248,7 +299,8 @@ export function installQueryErrorSanitiser(): void {
   const original = prototype.queryWithCache;
   if (typeof original !== 'function') {
     throw new Error(
-      'drizzle-orm no longer exposes PgPreparedQuery.queryWithCache — the KAN-36 query-error sanitiser cannot ' +
+      'drizzle-orm no longer exposes queryWithCache (NodePgPreparedQuery.prototype, inherited from ' +
+        'PgPreparedQuery.prototype) — the KAN-36 query-error sanitiser cannot ' +
         'be installed, and refusing to run without it (failed query errors would carry bound parameters). ' +
         'See lib/db/query-error-sanitiser.ts.',
     );

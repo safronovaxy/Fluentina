@@ -22,6 +22,14 @@ import type { GuestActor } from '@/lib/contracts/actor';
  * catches a failed write, so the framework's default handling prints the
  * whole tree to stderr (Cloud Logging). See query-error-sanitiser.ts.
  *
+ * What CI does and does not protect: everything here runs in-process under
+ * Vitest against the SOURCE modules, and the "what a log receives" check is
+ * a `vi.spyOn(console, 'error')` on what `console.error(err)` is called
+ * with. That is the in-process `console.error` shape only. Nothing in CI
+ * runs the production bundle or reads a real stderr pipe; the built-app
+ * stderr check (`next start`, a failing insert, the process's real stderr)
+ * was a manual one-off, done once, and is not reproduced by any test.
+ *
  * Every failure below is a REAL failure against the real database, never a
  * mocked throw: the previous per-site test (rate-limit.test.ts) mocks
  * `db.insert` to throw a string it wrote itself, which proves that the catch
@@ -265,7 +273,7 @@ describe('KAN-36 — the same failures with the sanitiser active: nothing bound 
       await db.insert(probe).values({ tag: 'dup', body: 'first' });
       const error = await caught(() => db.insert(probe).values({ tag: 'dup', body: LONG_ESSAY }));
 
-      expectNoneOf(error, [...ESSAY_FRAGMENTS, 'dup"']);
+      expectNoneOf(error, [...ESSAY_FRAGMENTS, '(dup)']);
     });
 
     it('INSERT failing NOT NULL (pg\'s detail is "Failing row contains (...)" — the whole row)', async () => {
@@ -408,7 +416,9 @@ describe('KAN-36 — the diagnostic value that survives (a "scrub everything" si
     const error = await failEssayInsertOnForeignKey();
 
     expect(error.stack).toContain('query-error-sanitiser.test.ts');
-    expect(error.stack).toMatch(/^Error: Failed query: insert into/);
+    // The header was REBUILT, not merely left alone: the unsanitised stack
+    // starts the same way, so only the redacted arity line proves the rewrite.
+    expect(error.stack).toContain('params: [2 value(s) [redacted]]');
   });
 
   it('a network-layer error (no SQLSTATE, never saw a parameter) keeps its message and code', () => {
@@ -431,7 +441,63 @@ describe('KAN-36 — the diagnostic value that survives (a "scrub everything" si
     expect(cause.syscall).toBe('connect');
     expect(cause.port).toBe(5432);
     expect(cause.internalDetail).toBeUndefined();
+    // The same exact-key-set equality the PG_KEEP path has (above): an
+    // allowlist is only proven by what is LEFT, not by one named absentee.
+    expect(Object.keys(cause).sort()).toEqual(['address', 'code', 'errno', 'port', 'syscall']);
     expect(everythingLoggable(result)).not.toContain('SECRET');
+  });
+
+  // KAN-36 architect should-fix 1. The one branch that used to fail OPEN: an
+  // error neither Drizzle-shaped nor pg-shaped nor libuv-shaped kept its
+  // `message` and `stack` verbatim, while the field loop still deleted
+  // `query`/`params` — so a driver upgrade that changed either shape would
+  // have looked fixed and leaked the whole essay.
+  describe('an error of no recognised shape fails closed', () => {
+    const UNRECOGNISED =
+      'database error of an unrecognised shape (details withheld: lib/db/query-error-sanitiser.ts could not identify it)';
+
+    it('a Drizzle-like error whose `query` has become { sql, params }: the essay in message and stack is gone', () => {
+      // Exactly the drift the architect described: `query` is the object
+      // Drizzle stores internally, so `typeof err.query === 'string'` is false.
+      const drifted = Object.assign(new Error(`Failed query: insert $1\nparams: ${LONG_ESSAY}`), {
+        name: 'DrizzleQueryError',
+        query: { sql: 'insert $1', params: [LONG_ESSAY] },
+        params: [LONG_ESSAY],
+        internalDetail: LONG_ESSAY,
+      });
+
+      const result = sanitiseQueryError(drifted) as Error;
+
+      expect(result).toBe(drifted);
+      expectNoneOf(result, [...ESSAY_FRAGMENTS, 'fakeFrame']);
+      expect(result.message).toBe(UNRECOGNISED);
+      expect(result.stack).toContain(UNRECOGNISED);
+      expect(Object.keys(result).sort()).toEqual(['name']);
+    });
+
+    it('any error that is not Drizzle-, pg- or libuv-shaped, with a secret in its message: the secret is gone and the message is fixed', () => {
+      const unknown = Object.assign(new Error('something odd happened with SECRET-VALUE'), {
+        detail: 'SECRET-VALUE',
+        code: 'NOT-A-SQLSTATE-SECRET-VALUE',
+      });
+
+      const result = sanitiseQueryError(unknown) as Error;
+
+      expect(result).toBe(unknown);
+      expect(everythingLoggable(result)).not.toContain('SECRET-VALUE');
+      expect(result.message).toBe(UNRECOGNISED);
+      expect(Object.keys(result).sort()).toEqual([]);
+    });
+
+    it('an unrecognised error on the .cause of a recognised one is scrubbed the same way', () => {
+      const cause = Object.assign(new Error('echoes SECRET-VALUE'), { where: 'SECRET-VALUE' });
+      const wrapped = new DrizzleQueryError('select $1', ['SECRET-VALUE'], cause);
+
+      sanitiseQueryError(wrapped);
+
+      expect(everythingLoggable(wrapped)).not.toContain('SECRET-VALUE');
+      expect((wrapped.cause as Error).message).toBe(UNRECOGNISED);
+    });
   });
 });
 
@@ -496,7 +562,12 @@ describe('KAN-36 — control flow is unchanged: it scrubs the error, never swall
 
 describe('KAN-36 — what an operator\'s log actually receives', () => {
   // The same idiom essay-submission-telemetry.test.ts uses: spy the console
-  // method and inspect exactly what it was called with.
+  // method and inspect exactly what it was called with. This is the
+  // IN-PROCESS `console.error` shape, under Vitest, against the source
+  // modules — not the production bundle and not a real stderr pipe. The
+  // built-app stderr observation (`next start`, a real failing insert) was a
+  // manual one-off; CI does not reproduce it, and this test is not evidence
+  // of it.
   it('console.error(err) — what the framework\'s default handling does — writes no essay text', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
