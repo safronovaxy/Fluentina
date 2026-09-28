@@ -148,7 +148,7 @@ always releasable but does not itself deploy to production.
   `test:grading-regression` script, prints a notice saying so, and passes.
   Do not read a passing CI run as evidence that grading output is sound.
   It becomes a real check, calling the live provider against a golden essay
-  set, once KAN-4 and KAN-16 land that script. Whether it should then run on
+  set, once KAN-39 lands that script. Whether it should then run on
   every PR or only when the prompt template or a `GradingProvider`
   implementation changes is **deliberately undecided** — that choice only has
   a cost (live API spend and time on each run) once the check does real work,
