@@ -56,6 +56,36 @@ describe('createMistralGradingProvider — ADR-4', () => {
     expect(output.completionTokensEstimate).toBe(50);
   });
 
+  // KAN-16 round-1 review, finding 4: neither of these was set at all. A
+  // 300-word essay asking for exhaustive per-word annotations could produce
+  // an unbounded, fully-billed completion before the response schema ever
+  // got a chance to reject it, and a hung connection had nothing to cut it
+  // off before Cloud Run's own request timeout.
+  it('bounds completion length with max_tokens and attaches a request timeout, finding 4', async () => {
+    process.env.MISTRAL_API_KEY = 'test-key';
+    const fetchSpy = vi.fn().mockResolvedValue(mistralHttpResponse(validCompletionJson()));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const provider = createMistralGradingProvider();
+    const prompt = buildGradingPrompt('essay', 1);
+    await provider.grade({ ...prompt, wordCount: 1, essayContent: 'essay' });
+
+    const [, init] = fetchSpy.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.max_tokens).toBeGreaterThan(0);
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('throws GradingProviderError, never MISTRAL_API_KEY, when the request times out', async () => {
+    process.env.MISTRAL_API_KEY = 'test-key';
+    const timeoutError = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(timeoutError));
+    const provider = createMistralGradingProvider();
+    const prompt = buildGradingPrompt('essay', 1);
+
+    await expect(provider.grade({ ...prompt, wordCount: 1, essayContent: 'essay' })).rejects.toBeInstanceOf(GradingProviderError);
+  });
+
   it('throws GradingProviderError, never MISTRAL_API_KEY, when the key is not configured', async () => {
     delete process.env.MISTRAL_API_KEY;
     const provider = createMistralGradingProvider();

@@ -27,6 +27,35 @@ export default defineConfig({
     // Bare 'node_modules' is not a recursive glob; keep Vitest's defaults and
     // add to them rather than replacing the list.
     exclude: ['**/node_modules/**', '**/.next/**', 'tests/**'],
+    env: {
+      // KAN-16 round-1 review, finding 1: this MUST live here, not in
+      // ci.yml, and not rely on a developer's own gitignored `.env.local`.
+      // `createGradingProvider()` (provider-factory.ts) falls through to the
+      // REAL Mistral provider whenever this isn't the literal string '1' —
+      // that's ADR-4's own default. A local `.env.local` (every developer
+      // machine that's ever run `npm run dev`) sets it, so the suite looked
+      // green; CI has no such file, so the exact same suite constructed the
+      // real provider, found no `MISTRAL_API_KEY`, and failed — while
+      // `essays/route.test.ts`'s own rate-limit fixtures alone fire off
+      // close to 300 unawaited grading jobs per run that would otherwise
+      // each reach for it. Setting it here, in the one config file both
+      // environments load, makes local and CI runs identical instead of
+      // merely "usually agreeing". `src/test/setup.ts` adds a second,
+      // independent layer (a fetch guard) so a future regression here still
+      // can't reach a real network host.
+      MOCK_GRADING_PROVIDER: '1',
+      // GRADING_QUEUE_MODE=off: see queue.ts's own comment. Submitting an
+      // essay normally fires the grading job inline, unawaited, the instant
+      // the job is enqueued — across this suite's ~300 essay submissions
+      // (most of them KAN-25 rate-limit fixtures with no interest in
+      // grading at all) that raced this file's own `afterEach`
+      // TRUNCATE (db-fixtures.ts), reproducibly leaking a job into an
+      // unrelated test. 'off' records the job id and runs nothing; the two
+      // tests that actually want to see a job finish
+      // (`essays/route.test.ts`'s KAN-16 describe block) drain it
+      // explicitly via `drainGradingQueueForTests()`.
+      GRADING_QUEUE_MODE: 'off',
+    },
     // KAN-10's lib/db test files all share one real Postgres database and
     // TRUNCATE it between tests (src/test/db-fixtures.ts::resetDatabase). Running
     // test files in parallel (Vitest's default) lets one file's reset race

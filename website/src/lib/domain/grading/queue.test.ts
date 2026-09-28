@@ -9,7 +9,11 @@ describe('enqueueGradingJob — ADR-2 queue seam', () => {
 
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
-    runGradingJobMock.mockClear();
+    // `.mockReset()`, not just `.mockClear()`: the finding-16 'off'-mode
+    // tests below set a custom `.mockImplementation` to observe call order,
+    // which a bare `mockClear()` (call history only) would otherwise leak
+    // into every test running after them in this file.
+    runGradingJobMock.mockReset().mockResolvedValue(undefined);
     vi.unstubAllGlobals();
   });
 
@@ -59,6 +63,69 @@ describe('enqueueGradingJob — ADR-2 queue seam', () => {
     const { enqueueGradingJob } = await import('./queue');
 
     await expect(enqueueGradingJob('job-3')).rejects.toThrow(/GCP_PROJECT_ID/);
+  });
+
+  // KAN-16 round-1 review, finding 16. Every test here drains at its own
+  // START, before asserting or clearing anything — this module-scoped queue
+  // is, by design, shared across every test in this FILE (not just this
+  // describe block), so a leftover, never-drained job from a PRECEDING test
+  // is expected and must not leak into what THIS test asserts about its own
+  // jobs.
+  describe('GRADING_QUEUE_MODE=off — records the job and runs nothing until explicitly drained', () => {
+    it('does not invoke runGradingJob at all while queued', async () => {
+      process.env.GRADING_QUEUE_MODE = 'off';
+      const { enqueueGradingJob, drainGradingQueueForTests } = await import('./queue');
+      await drainGradingQueueForTests();
+      runGradingJobMock.mockClear();
+
+      await enqueueGradingJob('off-job-1');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(runGradingJobMock).not.toHaveBeenCalled();
+    });
+
+    it('drainGradingQueueForTests runs every queued job, in order, and awaits each to completion', async () => {
+      process.env.GRADING_QUEUE_MODE = 'off';
+      const { enqueueGradingJob, drainGradingQueueForTests } = await import('./queue');
+      await drainGradingQueueForTests();
+      runGradingJobMock.mockClear();
+      const callOrder: string[] = [];
+      runGradingJobMock.mockImplementation(async (jobId: string) => {
+        callOrder.push(jobId);
+      });
+
+      await enqueueGradingJob('off-job-2');
+      await enqueueGradingJob('off-job-3');
+      expect(runGradingJobMock).not.toHaveBeenCalled();
+
+      await drainGradingQueueForTests();
+
+      expect(callOrder).toEqual(['off-job-2', 'off-job-3']);
+    });
+
+    it('draining an empty queue is a no-op, not an error', async () => {
+      process.env.GRADING_QUEUE_MODE = 'off';
+      const { drainGradingQueueForTests } = await import('./queue');
+      await drainGradingQueueForTests(); // flush any leftover from a preceding test
+      runGradingJobMock.mockClear();
+
+      await expect(drainGradingQueueForTests()).resolves.toBeUndefined();
+
+      expect(runGradingJobMock).not.toHaveBeenCalled();
+    });
+
+    it('draining twice in a row only runs each job once — the queue is consumed, not re-read', async () => {
+      process.env.GRADING_QUEUE_MODE = 'off';
+      const { enqueueGradingJob, drainGradingQueueForTests } = await import('./queue');
+      await drainGradingQueueForTests();
+      runGradingJobMock.mockClear();
+
+      await enqueueGradingJob('off-job-4');
+      await drainGradingQueueForTests();
+      await drainGradingQueueForTests();
+
+      expect(runGradingJobMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('GRADING_QUEUE_MODE=cloud-tasks builds the expected Cloud Tasks request shape once fully configured', async () => {

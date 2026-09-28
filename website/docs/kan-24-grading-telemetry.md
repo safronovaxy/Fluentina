@@ -17,7 +17,7 @@ carries:
 | `errorType` | a `GradingFailureReason` (`lib/contracts/grading.ts`), or `null` on success |
 | `spanValidationPassed` | whether every annotation's quote resolved verbatim against the essay (`null` when grading never reached annotation resolution at all) |
 | `promptInjectionSuspected` | whether BR-3.5's heuristic fired and the result was capped |
-| `tokenCountEstimate` / `costEstimateUsd` | rough, non-billing-accurate estimates (`lib/domain/grading/cost.ts`) |
+| `tokenCountEstimate` / `costEstimateUsd` | rough, non-billing-accurate estimates (`lib/domain/grading/cost.ts`); `null` (not `0`) when genuinely not known — e.g. `invalidProviderResponse`, where the provider WAS called and billed but no usage figures were surfaced past the thrown error. Only `wordCountOutOfBounds`/`essayMissing` (no provider call at all) log a genuine `0`. |
 
 Never present: essay text, an account email, or a full LLM response body —
 see `telemetry.ts`'s own comment for why the interface's shape makes that
@@ -97,12 +97,32 @@ Cloud Console access does so.
 ## Coverage — "no grading job is silently excluded"
 
 Every `return` inside `runGradingJob` (`orchestrate-grading.ts`) that isn't
-the very first "job row doesn't exist at all" guard is preceded by exactly
-one `logGradingJobTelemetry` call — see that file's own top comment and
-`orchestrate-grading.test.ts`'s coverage of every failure branch
-(`wordCountOutOfBounds`, `providerError`, `invalidProviderResponse`,
-`essayMissing`) plus the success path, each asserted to log exactly the
-expected shape.
+one of the two narrow, documented exceptions (the job-row-gone guard, and the
+KAN-16 round-1 review finding-13 retry path, which reverts an in-flight job
+to `pending` rather than finishing it) is preceded by exactly one
+`logGradingJobTelemetry` call. This is now actually enforced, not just
+hand-inspected:
+
+- `telemetry.test.ts` pins the exact emitted field set (`Object.keys`,
+  sorted) for a success and a failure event directly against
+  `logGradingJobTelemetry`, independent of `orchestrate-grading.ts` — plus
+  that the logged `sessionIdHash` is never the raw session id (KAN-16 round-1
+  review, finding 7 — mutating that one line to log the raw id left the
+  whole suite green before this test existed).
+- `orchestrate-grading.test.ts` spies `console.log` for every branch
+  (`wordCountOutOfBounds`, `providerError`, `invalidProviderResponse`,
+  `essayMissing`, both prompt-injection branches, the happy path, the
+  idempotent-redelivery case, and the finding-5 concurrent-claim case) and
+  asserts EXACTLY one `grading_job_completed` line with the expected
+  `success`/`errorType`/`provider`/`spanValidationPassed` shape — including
+  `essayMissing`, reproduced deterministically via a partial mock of
+  `getEssayByIdUnscoped` — no FK bypass needed, contrary to what
+  `orchestrate-grading.test.ts` used to claim in its own comment (this exact
+  contradiction was round-1 review's finding 6).
+
+Round-1 review mutation-proved the gap this closes: deleting the telemetry
+call from every failure path, and separately from the success path, both
+left 454/454 green before these tests existed.
 
 ## Carried-over logging (KAN-24 PR notes, fixed alongside this story)
 

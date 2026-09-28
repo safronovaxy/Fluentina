@@ -7,9 +7,10 @@ import {
   createGradingJob,
   getGradingJobByEssayId,
   getGradingJobByIdUnscoped,
-  markGradingJobFailed,
-  markGradingJobProcessing,
-  markGradingJobSucceeded,
+  markGradingJobFailedUnscoped,
+  markGradingJobProcessingUnscoped,
+  markGradingJobSucceededUnscoped,
+  revertGradingJobToPendingUnscoped,
   toPublicGradingJob,
 } from './grading-jobs';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
@@ -63,9 +64,36 @@ describe('createGradingJob / getGradingJobByEssayId — ownership joins through 
 
     const job = await createGradingJob(actor, essay.id);
 
-    expect(job.status).toBe('pending');
-    expect(job.provider).toBeNull();
-    expect(job.result).toBeNull();
+    expect(job?.status).toBe('pending');
+    expect(job?.provider).toBeNull();
+    expect(job?.result).toBeNull();
+  });
+
+  // KAN-16 round-1 review, finding 3: `createGradingJob` used to insert a job
+  // row for ANY `essayId`, including another guest's, with `void actor`
+  // satisfying ADR-14's "every write takes an actor" rule in letter only —
+  // nothing below the call site ever checked it.
+  it('finding 3: refuses to create a job for an essay the actor does not own, returning null rather than a job', async () => {
+    const owner = newGuestActor();
+    const stranger = newGuestActor();
+    await createGuestSession(owner);
+    await createGuestSession(stranger);
+    const essay = await createEssay(owner, 'Owned by one guest only.');
+
+    const job = await createGradingJob(stranger, essay.id);
+
+    expect(job).toBeNull();
+    // Not merely rejected at the call site — no row was actually written.
+    expect(await getGradingJobByEssayId(owner, essay.id)).toBeNull();
+  });
+
+  it('finding 3: returns null, the same as "not yours", for an essayId that does not exist at all', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+
+    const job = await createGradingJob(actor, randomUUID());
+
+    expect(job).toBeNull();
   });
 
   it('the owning guest can read their own job by essay id', async () => {
@@ -121,18 +149,19 @@ describe('createGradingJob / getGradingJobByEssayId — ownership joins through 
   });
 });
 
-describe('markGradingJobProcessing / markGradingJobSucceeded / markGradingJobFailed', () => {
+describe('markGradingJobProcessingUnscoped / markGradingJobSucceededUnscoped / markGradingJobFailedUnscoped', () => {
   it('transitions pending -> processing -> succeeded, and the public view exposes the result only once succeeded', async () => {
     const actor = newGuestActor();
     await createGuestSession(actor);
     const essay = await createEssay(actor, 'Essay content.');
-    const job = await createGradingJob(actor, essay.id);
+    const job = (await createGradingJob(actor, essay.id))!;
 
-    await markGradingJobProcessing(SYSTEM_ACTOR, job.id);
+    const claimed = await markGradingJobProcessingUnscoped(SYSTEM_ACTOR, job.id);
+    expect(claimed).toBe(true);
     const processing = await getGradingJobByIdUnscoped(SYSTEM_ACTOR, job.id);
     expect(processing?.status).toBe('processing');
 
-    await markGradingJobSucceeded(SYSTEM_ACTOR, job.id, {
+    await markGradingJobSucceededUnscoped(SYSTEM_ACTOR, job.id, {
       provider: 'fake',
       rawInput: 'the prompt',
       rawOutput: 'the raw response',
@@ -155,9 +184,9 @@ describe('markGradingJobProcessing / markGradingJobSucceeded / markGradingJobFai
     const actor = newGuestActor();
     await createGuestSession(actor);
     const essay = await createEssay(actor, 'Essay content.');
-    const job = await createGradingJob(actor, essay.id);
+    const job = (await createGradingJob(actor, essay.id))!;
 
-    await markGradingJobFailed(SYSTEM_ACTOR, job.id, 'providerError', 'mistral');
+    await markGradingJobFailedUnscoped(SYSTEM_ACTOR, job.id, 'providerError', 'mistral');
 
     const failed = await getGradingJobByIdUnscoped(SYSTEM_ACTOR, job.id);
     const publicView = toPublicGradingJob(failed!);
@@ -165,5 +194,47 @@ describe('markGradingJobProcessing / markGradingJobSucceeded / markGradingJobFai
     expect(publicView.status).toBe('failed');
     expect(publicView.failureReason).toBe('providerError');
     expect(publicView.result).toBeNull();
+  });
+
+  // KAN-16 round-1 review, finding 5: the claim itself must be atomic and
+  // conditional, not an unconditional `WHERE id = $1` — this is the guard
+  // that actually stops two concurrent Cloud Tasks deliveries of the same
+  // job from both calling (and both billing) a provider.
+  describe('finding 5 — the processing claim is atomic and conditional on status = pending', () => {
+    it('claiming an already-processing job fails (returns false) rather than re-claiming it', async () => {
+      const actor = newGuestActor();
+      await createGuestSession(actor);
+      const essay = await createEssay(actor, 'Essay content.');
+      const job = (await createGradingJob(actor, essay.id))!;
+      expect(await markGradingJobProcessingUnscoped(SYSTEM_ACTOR, job.id)).toBe(true);
+
+      // A second, concurrent "delivery" of the same job — must lose.
+      const secondClaim = await markGradingJobProcessingUnscoped(SYSTEM_ACTOR, job.id);
+
+      expect(secondClaim).toBe(false);
+    });
+
+    it('claiming an already-succeeded or already-failed job fails, never re-opening a terminal job', async () => {
+      const actor = newGuestActor();
+      await createGuestSession(actor);
+      const essay = await createEssay(actor, 'Essay content.');
+      const job = (await createGradingJob(actor, essay.id))!;
+      await markGradingJobFailedUnscoped(SYSTEM_ACTOR, job.id, 'providerError', 'mistral');
+
+      expect(await markGradingJobProcessingUnscoped(SYSTEM_ACTOR, job.id)).toBe(false);
+    });
+
+    it('revertGradingJobToPendingUnscoped lets a SUBSEQUENT claim succeed again — the finding-13 retry path', async () => {
+      const actor = newGuestActor();
+      await createGuestSession(actor);
+      const essay = await createEssay(actor, 'Essay content.');
+      const job = (await createGradingJob(actor, essay.id))!;
+      expect(await markGradingJobProcessingUnscoped(SYSTEM_ACTOR, job.id)).toBe(true);
+
+      await revertGradingJobToPendingUnscoped(SYSTEM_ACTOR, job.id);
+
+      expect((await getGradingJobByIdUnscoped(SYSTEM_ACTOR, job.id))?.status).toBe('pending');
+      expect(await markGradingJobProcessingUnscoped(SYSTEM_ACTOR, job.id)).toBe(true);
+    });
   });
 });

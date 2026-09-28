@@ -216,7 +216,15 @@ jobs:
       # — and, as of KAN-15, the second: tests/word-count.spec.ts, the live
       # word-count guidance/warning/block states end to end. Neither is
       # tagged @cms, so both run here alongside everything else.
-      # MOCK_GRADING_PROVIDER has no consumer in the repo today.
+      # MOCK_GRADING_PROVIDER now has a real consumer, as of KAN-16:
+      # `provider-factory.ts`'s `createGradingProvider()` selects the fake,
+      # zero-network-call provider whenever this is exactly "1" — set here,
+      # on the SERVER (the "Start built app" step above), and again for the
+      # Vitest unit suite itself as the config-level default in
+      # vitest.config.ts, not here (KAN-16 round-1 review, finding 1 — a
+      # value set only in `ci.yml` would leave the unit suite depending on a
+      # gitignored `.env.local` for the same thing, which is what let this
+      # exact suite pass locally and fail in CI the first time it existed).
       #
       # @cms specs are excluded: they need a reachable Strapi with published
       # content, and no CMS runs in this job. Without this the suite is red on

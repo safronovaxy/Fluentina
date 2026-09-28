@@ -1,10 +1,12 @@
 name: AI Grading Golden-Set Regression
 
-# PLACEHOLDER — this workflow validates nothing today. The GradingProvider
-# abstraction, prompt template and golden essay set don't exist in the repo
-# yet (KAN-4/KAN-16), so the job below finds no test:grading-regression
-# script, prints a notice and passes. A green run here is NOT evidence that
-# grading output is sound.
+# PLACEHOLDER — this workflow validates nothing today. KAN-16 landed the
+# `GradingProvider` abstraction and the prompt template this harness would
+# exercise, but the golden essay set and the `test:grading-regression` script
+# itself still don't exist (out of KAN-16's own scope — both round-1
+# reviewers agreed), so the job below finds no such script, prints a notice
+# and passes. A green run here is NOT evidence that grading output is sound.
+# See KAN-16's own handover for which follow-up ticket should land this.
 #
 # Once that script exists it becomes the real golden essay-set +
 # structural-invariant harness against the live Mistral/Claude provider

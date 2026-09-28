@@ -16,13 +16,19 @@ import 'server-only';
  * dev machine and this repo's own CI. Only `grade()` — reached exclusively
  * when this provider is actually selected and invoked — checks for the key.
  *
- * No retry logic here: ADR-2 gives the CALLER (Cloud Tasks, via the internal
- * processing endpoint) built-in retries at the JOB level; retrying inside a
- * single provider call as well would double up on that and risk two
- * provider charges for one guest submission. A transient failure here
- * surfaces as a `GradingProviderError`, which `orchestrate-grading.ts` marks
- * the job `failed` with — Cloud Tasks redelivering the task is what
- * actually retries the grading attempt, not this file.
+ * No retry logic here: ADR-2 gives the CALLER retries at the JOB level, not
+ * this file — retrying inside a single provider call too would double up on
+ * that and risk two provider charges for one guest submission. A transient
+ * failure here surfaces as a `GradingProviderError`. What actually happens
+ * to it next is `orchestrate-grading.ts`'s own call, not this file's: per
+ * KAN-16 round-1 review, finding 13, a `GradingProviderError` classified as
+ * `providerError` is retried — reverted to `pending` for Cloud Tasks to
+ * redeliver, up to a capped number of attempts
+ * (`POST /api/internal/grading-jobs/process`'s own
+ * `MAX_PROVIDER_RETRY_ATTEMPTS`) — and only recorded `failed` once that
+ * budget is exhausted, or immediately for any other failure classification.
+ * See that route's own top comment for the full contract; this file only
+ * needs to classify the failure correctly, never to retry it itself.
  */
 import { providerGradingResponseSchema } from '@/lib/contracts/grading';
 import { GradingProviderError, type GradingProvider, type GradingProviderInput, type GradingProviderOutput } from '../provider';
@@ -36,6 +42,30 @@ const MISTRAL_CHAT_COMPLETIONS_URL = 'https://api.mistral.ai/v1/chat/completions
  * line, not a literal buried in a request body.
  */
 const MISTRAL_MODEL = 'mistral-large-latest';
+
+/**
+ * KAN-16 round-1 review, finding 4: the request used to set neither of
+ * these, so completion length was unbounded and driven by guest-controlled
+ * text — a 300-word essay asking for exhaustive per-word annotations could
+ * produce a ~32k-token completion, billed in full, before
+ * `providerGradingResponseSchema` ever got a chance to reject it for
+ * exceeding `MAX_ANNOTATIONS`/`MAX_QUOTE_CHARS`. 3000 tokens is comfortably
+ * above any valid response this schema accepts (four dimension comments plus
+ * a bounded annotation list) and far below a runaway one — sized correctly,
+ * a worst-case essay costs about $0.005 instead of about $0.19.
+ */
+const MAX_COMPLETION_TOKENS = 3000;
+
+/**
+ * Bounds how long a single Mistral call is allowed to hang before this
+ * provider gives up — without it, a stalled connection held the job open
+ * until Cloud Run's own request timeout, blowing BR-5.2's 60-second budget
+ * and risking a Cloud Tasks redelivery re-billing the same essay on top of
+ * whatever the hung request eventually did. Comfortably under Cloud Run's
+ * own request timeout so THIS throws first, with a classifiable error,
+ * rather than the platform cutting the connection with none.
+ */
+const REQUEST_TIMEOUT_MS = 45_000;
 
 /**
  * A rough, provider-published chars-per-token ratio for estimating token
@@ -75,16 +105,22 @@ export function createMistralGradingProvider(): GradingProvider {
           body: JSON.stringify({
             model: MISTRAL_MODEL,
             response_format: { type: 'json_object' },
+            max_tokens: MAX_COMPLETION_TOKENS,
             messages: [
               { role: 'system', content: input.system },
               { role: 'user', content: input.userDataBlock },
             ],
           }),
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
       } catch (err) {
-        // Network-level failure (DNS, TLS, connection reset) — never the
-        // essay content or the API key in the thrown message.
-        throw new GradingProviderError('Mistral request failed (network error)', err);
+        // Network-level failure (DNS, TLS, connection reset) OR the
+        // `AbortSignal.timeout` above firing (a `TimeoutError`/`AbortError`,
+        // per the WHATWG fetch spec `fetch` rejects with on abort) — both
+        // are transient, both classify as `providerError` in
+        // `orchestrate-grading.ts` exactly the same way. Never the essay
+        // content or the API key in the thrown message.
+        throw new GradingProviderError('Mistral request failed (network error or timeout)', err);
       }
 
       const rawBody = await httpResponse.text();

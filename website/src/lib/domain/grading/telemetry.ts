@@ -61,8 +61,19 @@ export interface GradingTelemetryEvent {
   /** Null when grading never reached the point of producing annotations to validate (e.g. the provider call itself failed). */
   readonly spanValidationPassed: boolean | null;
   readonly promptInjectionSuspected: boolean;
-  readonly tokenCountEstimate: number;
-  readonly costEstimateUsd: number;
+  /**
+   * `null` means "not known", never coerced to `0` — KAN-16 round-1 review,
+   * finding 12: `invalidProviderResponse` means the provider WAS called and
+   * DID bill for prompt+completion tokens; the shape check that classifies
+   * it that way only fires after `GradingProvider.grade` has already thrown,
+   * with no token counts surfaced on the way out. Logging `0` there made the
+   * aggregate spend query systematically undercount exactly the traffic most
+   * likely to be hostile (a probe that reliably produces malformed
+   * responses). `wordCountOutOfBounds`/`essayMissing` are genuinely zero —
+   * no provider call was ever made — and still log `0`, not `null`.
+   */
+  readonly tokenCountEstimate: number | null;
+  readonly costEstimateUsd: number | null;
 }
 
 export function logGradingJobTelemetry(event: GradingTelemetryEvent): void {

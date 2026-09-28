@@ -82,15 +82,38 @@ export function toPublicGradingJob(record: GradingJobRecord): GradingJob {
 }
 
 /**
- * Creates the `pending` row for a just-submitted essay. Called once, from
- * `lib/domain/grading/start-grading.ts`, immediately after `createEssay`
- * commits — `essayId` is trusted to already exist (the caller just created
- * it in the same request) and the FK enforces that regardless.
+ * Creates the `pending` row for a just-submitted essay — ownership-scoped,
+ * per KAN-16 round-1 review (finding 3): the only caller today
+ * (`start-grading.ts`) passes an essay it just created itself, so `actor`
+ * owning `essayId` always held in practice, but nothing below this call
+ * site ever checked it. That made the check purely decorative — the
+ * `void actor` this replaced satisfied ADR-14's "every write takes an
+ * actor" rule in letter only, and the very next caller of this function
+ * (a re-grade/retry endpoint being the obvious one) could pass ANY essay
+ * id, including another guest's, and get back a real job that dispatches a
+ * paid provider call against someone else's text.
+ *
+ * Scoped inside a transaction rather than a single `INSERT ... SELECT`:
+ * this codebase's existing idiom for "check ownership, then write"
+ * (`essays.ts`'s own `createEssay`) is a transactional select-then-insert,
+ * and Drizzle's `.insert().select()` column-mapping is untested territory
+ * here — this keeps the same, already-reviewed pattern rather than
+ * introducing a new one for a single call site. Returns `null`, exactly
+ * like every other ownership-scoped read in this file, when the essay
+ * doesn't exist OR isn't `actor`'s — never distinguishable from the
+ * caller's side, same "not found and not yours look identical" rule.
  */
-export async function createGradingJob(actor: OwnerActor, essayId: string): Promise<GradingJobRecord> {
-  void actor; // no owner columns to write here — see this file's own top comment; kept for call-site auditability, matching every other repository function in this codebase.
-  const [row] = await db.insert(gradingJobs).values({ essayId }).returning();
-  return toRecord(row);
+export async function createGradingJob(actor: OwnerActor, essayId: string): Promise<GradingJobRecord | null> {
+  return db.transaction(async (tx) => {
+    const [owned] = await tx
+      .select({ id: essays.id })
+      .from(essays)
+      .where(and(eq(essays.id, essayId), ownedBy(actor, { sessionId: essays.sessionId, userId: essays.userId })));
+    if (!owned) return null;
+
+    const [row] = await tx.insert(gradingJobs).values({ essayId }).returning();
+    return toRecord(row);
+  });
 }
 
 /**
@@ -122,9 +145,33 @@ export async function getGradingJobByIdUnscoped(actor: SystemActor, jobId: strin
   return row ? toRecord(row) : null;
 }
 
-export async function markGradingJobProcessing(actor: SystemActor, jobId: string): Promise<void> {
+/**
+ * Unscoped — renamed from `markGradingJobProcessing` (KAN-16 round-1 review,
+ * finding 3's "related and cheap" item): every other system-only write in
+ * this codebase is named `*Unscoped` specifically so `grep Unscoped` finds
+ * every deliberate ownership bypass in one pass (see `essays.ts`'s own
+ * comment); this one wasn't, which silently broke that audit.
+ *
+ * Also the fix for finding 5: `WHERE id = $1` alone made this an
+ * unconditional claim — two concurrent deliveries of the same job (Cloud
+ * Tasks is at-least-once; ADR-2 says so directly) both read `pending`, both
+ * passed the `orchestrate-grading.ts` guard (which only short-circuits
+ * `succeeded`/`failed`), and both called the provider, double-billing one
+ * guest submission. `AND status = 'pending'` plus `RETURNING id` turns the
+ * claim itself atomic: only the delivery whose UPDATE actually matched a row
+ * gets `true` back, so a second, racing delivery can tell it lost and skip
+ * calling the provider at all. This is what "idempotent by construction" in
+ * `orchestrate-grading.ts`'s own top comment actually requires — it was true
+ * for terminal states and false for in-flight ones before this.
+ */
+export async function markGradingJobProcessingUnscoped(actor: SystemActor, jobId: string): Promise<boolean> {
   void actor;
-  await db.update(gradingJobs).set({ status: 'processing' }).where(eq(gradingJobs.id, jobId));
+  const [claimed] = await db
+    .update(gradingJobs)
+    .set({ status: 'processing' })
+    .where(and(eq(gradingJobs.id, jobId), eq(gradingJobs.status, 'pending')))
+    .returning({ id: gradingJobs.id });
+  return claimed !== undefined;
 }
 
 export interface GradingJobSuccessInput {
@@ -135,7 +182,8 @@ export interface GradingJobSuccessInput {
   readonly promptInjectionSuspected: boolean;
 }
 
-export async function markGradingJobSucceeded(actor: SystemActor, jobId: string, input: GradingJobSuccessInput): Promise<void> {
+/** Unscoped — see `markGradingJobProcessingUnscoped`'s own comment on the naming convention this restores. */
+export async function markGradingJobSucceededUnscoped(actor: SystemActor, jobId: string, input: GradingJobSuccessInput): Promise<void> {
   void actor;
   await db
     .update(gradingJobs)
@@ -151,7 +199,8 @@ export async function markGradingJobSucceeded(actor: SystemActor, jobId: string,
     .where(eq(gradingJobs.id, jobId));
 }
 
-export async function markGradingJobFailed(
+/** Unscoped — see `markGradingJobProcessingUnscoped`'s own comment on the naming convention this restores. */
+export async function markGradingJobFailedUnscoped(
   actor: SystemActor,
   jobId: string,
   errorType: GradingFailureReason,
@@ -162,4 +211,18 @@ export async function markGradingJobFailed(
     .update(gradingJobs)
     .set({ status: 'failed', errorType, provider, completedAt: new Date() })
     .where(eq(gradingJobs.id, jobId));
+}
+
+/**
+ * Reverts a claimed job back to `pending` — KAN-16 round-1 review, finding
+ * 13: used only for a transient `providerError` that hasn't exhausted its
+ * retry budget yet (`orchestrate-grading.ts`'s own comment), so the NEXT
+ * Cloud Tasks redelivery can reclaim it via `markGradingJobProcessingUnscoped`'s
+ * own `WHERE status = 'pending'` condition. Never called for a terminal
+ * outcome — those go through `markGradingJobSucceededUnscoped`/
+ * `markGradingJobFailedUnscoped` instead.
+ */
+export async function revertGradingJobToPendingUnscoped(actor: SystemActor, jobId: string): Promise<void> {
+  void actor;
+  await db.update(gradingJobs).set({ status: 'pending' }).where(eq(gradingJobs.id, jobId));
 }

@@ -7,6 +7,7 @@ import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
 import { getGuestSessionById, createGuestSession, convertGuestSessionToUser } from '@/lib/db/guest-sessions';
 import { getEssayById } from '@/lib/db/essays';
 import { getGradingJobByEssayId } from '@/lib/db/grading-jobs';
+import { drainGradingQueueForTests } from '@/lib/domain/grading/queue';
 import { db } from '@/lib/db/client';
 import { essays } from '@/lib/db/schema';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
@@ -1398,6 +1399,17 @@ describe('POST /api/essays — KAN-31: guard-level rejections never leak essay c
  * successful submission actually results in a grading job existing for that
  * essay, reachable through the real `startGrading` -> `createGradingJob`
  * path this route calls.
+ *
+ * `drainGradingQueueForTests()` (KAN-16 round-1 review, finding 16): this
+ * suite runs with `GRADING_QUEUE_MODE=off` (`vitest.config.ts`'s own
+ * default), so a submitted essay's grading job is recorded but never
+ * auto-run — every OTHER describe block in this file submits essays with no
+ * interest in grading at all, and letting each of them silently kick off a
+ * real (if fake-provider) grading run raced this file's own `afterEach`
+ * TRUNCATE, reproducibly leaking a job into an unrelated test. Only this
+ * describe block, which actually wants to see a job finish, drains
+ * explicitly — replacing the fixed 50-iteration/20ms polling loop this used
+ * to need with a deterministic, synchronous-from-the-test's-perspective run.
  */
 describe('POST /api/essays — KAN-16: starts grading after a successful submission', () => {
   it('a grading job exists for the essay immediately after a 201 response', async () => {
@@ -1409,6 +1421,7 @@ describe('POST /api/essays — KAN-16: starts grading after a successful submiss
 
     const job = await getGradingJobByEssayId({ kind: 'guest', sessionId }, body.id);
     expect(job).not.toBeNull();
+    expect(job?.status).toBe('pending'); // recorded, not yet run — GRADING_QUEUE_MODE=off
   });
 
   it('eventually reaches "succeeded" via the same inline dispatch path production would use in test/local mode', async () => {
@@ -1418,13 +1431,10 @@ describe('POST /api/essays — KAN-16: starts grading after a successful submiss
     const response = await POST(postEssay({ content: validLengthContent('Grade me too.') }, sessionId));
     const body: { id: string } = await response.json();
 
-    const actor = { kind: 'guest' as const, sessionId };
-    let job = await getGradingJobByEssayId(actor, body.id);
-    for (let i = 0; i < 50 && job?.status !== 'succeeded' && job?.status !== 'failed'; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      job = await getGradingJobByEssayId(actor, body.id);
-    }
+    await drainGradingQueueForTests();
 
+    const actor = { kind: 'guest' as const, sessionId };
+    const job = await getGradingJobByEssayId(actor, body.id);
     expect(job?.status).toBe('succeeded');
   });
 });

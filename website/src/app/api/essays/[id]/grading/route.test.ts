@@ -6,7 +6,7 @@ import { GET } from './route';
 import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
 import { createGuestSession, convertGuestSessionToUser } from '@/lib/db/guest-sessions';
 import { createEssay } from '@/lib/db/essays';
-import { createGradingJob, markGradingJobFailed, markGradingJobSucceeded } from '@/lib/db/grading-jobs';
+import { createGradingJob, markGradingJobFailedUnscoped, markGradingJobSucceededUnscoped } from '@/lib/db/grading-jobs';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import { validLengthContent } from '@/test/essay-content-fixtures';
@@ -125,8 +125,8 @@ describe('GET /api/essays/[id]/grading — ADR-2 status polling', () => {
     const actor = newGuestActor();
     await createGuestSession(actor);
     const essay = await createEssay(actor, validLengthContent('Graded already.'));
-    const job = await createGradingJob(actor, essay.id);
-    await markGradingJobSucceeded(SYSTEM_ACTOR, job.id, {
+    const job = (await createGradingJob(actor, essay.id))!;
+    await markGradingJobSucceededUnscoped(SYSTEM_ACTOR, job.id, {
       provider: 'fake',
       rawInput: 'prompt',
       rawOutput: 'raw',
@@ -153,8 +153,8 @@ describe('GET /api/essays/[id]/grading — ADR-2 status polling', () => {
     const actor = newGuestActor();
     await createGuestSession(actor);
     const essay = await createEssay(actor, validLengthContent('Grading failed.'));
-    const job = await createGradingJob(actor, essay.id);
-    await markGradingJobFailed(SYSTEM_ACTOR, job.id, 'providerError', 'mistral');
+    const job = (await createGradingJob(actor, essay.id))!;
+    await markGradingJobFailedUnscoped(SYSTEM_ACTOR, job.id, 'providerError', 'mistral');
 
     const response = await callGet(essay.id, actor.sessionId);
     const body = await response.json();

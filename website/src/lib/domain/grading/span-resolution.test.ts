@@ -66,4 +66,20 @@ describe('resolveAnnotationSpans — BR-3.3 span verification', () => {
     const { annotations } = resolveAnnotationSpans([annotation({ quote: 'Beispiel', suggestion: undefined })], essay);
     expect(annotations[0].suggestion).toBeNull();
   });
+
+  // KAN-16 round-1 review, finding 18: this file's own top comment documents
+  // "indexOf finds the FIRST occurrence only" as an accepted limitation, but
+  // nothing pinned it — switching to `lastIndexOf` (or any other occurrence)
+  // would go unnoticed. Pinned directly against a quote that repeats.
+  it('resolves a repeated quote to its FIRST occurrence, per this file\'s own documented limitation', () => {
+    const essay = 'ein Fehler taucht hier auf, und dann taucht ein Fehler noch einmal auf.';
+    const firstOccurrenceStart = essay.indexOf('ein Fehler');
+    const secondOccurrenceStart = essay.indexOf('ein Fehler', firstOccurrenceStart + 1);
+    expect(secondOccurrenceStart).toBeGreaterThan(firstOccurrenceStart); // sanity: the essay really does repeat the quote
+
+    const { annotations } = resolveAnnotationSpans([annotation({ quote: 'ein Fehler' })], essay);
+
+    expect(annotations[0].start).toBe(firstOccurrenceStart);
+    expect(annotations[0].start).not.toBe(secondOccurrenceStart);
+  });
 });

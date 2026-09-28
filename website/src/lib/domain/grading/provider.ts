@@ -49,9 +49,22 @@ export interface GradingProviderOutput {
   readonly completionTokensEstimate: number;
 }
 
+/**
+ * `'mistral'` / `'fake'` today. KAN-16 round-1 review, finding 14: a bare
+ * `string` here let `cost.ts`'s rate table silently return `0` for any
+ * provider it didn't recognise — adding Claude (ADR-4's documented
+ * fallback, the "one-file drop-in" this module's own top comment describes)
+ * without also updating `cost.ts` would have every Claude job log
+ * `costEstimateUsd: 0` forever, nothing red anywhere. Widen this union (never
+ * back to a bare `string`) the same commit a new provider is added — doing so
+ * without updating `cost.ts`'s `Record<GradingProviderName, ...>` is then a
+ * compile error instead of a silent drift.
+ */
+export type GradingProviderName = 'mistral' | 'fake';
+
 export interface GradingProvider {
-  /** `'mistral'` / `'fake'` today; `'claude'` once ADR-4's fallback is built. Persisted verbatim as `grading_jobs.provider` and logged in KAN-24's telemetry. */
-  readonly name: string;
+  /** Persisted verbatim as `grading_jobs.provider` and logged in KAN-24's telemetry. */
+  readonly name: GradingProviderName;
   grade(input: GradingProviderInput): Promise<GradingProviderOutput>;
 }
 

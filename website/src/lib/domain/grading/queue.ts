@@ -30,6 +30,20 @@ import 'server-only';
  *   this environment to exercise it against, and none should be faked here;
  *   see this module's own tests for what IS asserted about it (the request
  *   shape it builds), without ever making the call.
+ * - `enqueueGradingJobOff` — KAN-16 round-1 review, finding 16. Records the
+ *   job id and runs NOTHING. Selected only when `GRADING_QUEUE_MODE=off`,
+ *   which `vitest.config.ts` sets as the Vitest suite's own default (never
+ *   the inline mode's default, and never set anywhere outside test config).
+ *   Measured: one run of `essays/route.test.ts` alone fires close to 300
+ *   unawaited, auto-running `enqueueGradingJobInline` calls via its own
+ *   rate-limit fixtures — almost none of which have any interest in grading
+ *   at all — each racing every OTHER test's own `afterEach` TRUNCATE
+ *   (`db-fixtures.ts`). The reviewer reproduced a leaked job logging
+ *   `essayMissing` during a completely unrelated test as a direct result.
+ *   'off' mode makes that impossible by construction: nothing runs unless a
+ *   test explicitly calls `drainGradingQueueForTests()` — see its own
+ *   comment — which only `essays/route.test.ts`'s own KAN-16 "starts grading"
+ *   tests do.
  */
 import { runGradingJob } from './orchestrate-grading';
 
@@ -37,8 +51,40 @@ const CLOUD_TASKS_API_BASE = 'https://cloudtasks.googleapis.com/v2';
 const METADATA_TOKEN_URL =
   'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
 
-function queueMode(): 'inline' | 'cloud-tasks' {
-  return process.env.GRADING_QUEUE_MODE === 'cloud-tasks' ? 'cloud-tasks' : 'inline';
+function queueMode(): 'inline' | 'cloud-tasks' | 'off' {
+  if (process.env.GRADING_QUEUE_MODE === 'cloud-tasks') return 'cloud-tasks';
+  if (process.env.GRADING_QUEUE_MODE === 'off') return 'off';
+  return 'inline';
+}
+
+/**
+ * Jobs enqueued while `GRADING_QUEUE_MODE=off`, awaiting an explicit
+ * `drainGradingQueueForTests()` call — see that function's own comment.
+ * Module-scoped, so it only ever accumulates within a single test FILE's own
+ * run (Vitest isolates module state per file by default); safe to leave
+ * undrained entries in here indefinitely, since `runGradingJob` itself is a
+ * documented no-op for a job id whose row is already gone (e.g. TRUNCATEd by
+ * a later test's own `afterEach`) — see that function's own top comment.
+ */
+const pendingOffModeJobIds: string[] = [];
+
+async function enqueueGradingJobOff(jobId: string): Promise<void> {
+  pendingOffModeJobIds.push(jobId);
+}
+
+/**
+ * Test-only escape hatch for `GRADING_QUEUE_MODE=off`. Runs every job
+ * currently queued, in submission order, awaiting each to completion before
+ * returning — deterministic, unlike the fixed-count polling loop this
+ * replaced in `essays/route.test.ts`. Only the tests that genuinely want to
+ * observe a job reach a terminal status call this; every other test in the
+ * suite submits essays whose grading jobs are recorded and never run at all.
+ */
+export async function drainGradingQueueForTests(): Promise<void> {
+  const jobIds = pendingOffModeJobIds.splice(0, pendingOffModeJobIds.length);
+  for (const jobId of jobIds) {
+    await runGradingJob(jobId);
+  }
 }
 
 async function enqueueGradingJobInline(jobId: string): Promise<void> {
@@ -151,8 +197,12 @@ function requireEnv(name: string): string {
 }
 
 export async function enqueueGradingJob(jobId: string): Promise<void> {
-  if (queueMode() === 'cloud-tasks') {
+  const mode = queueMode();
+  if (mode === 'cloud-tasks') {
     return enqueueGradingJobCloudTasks(jobId);
+  }
+  if (mode === 'off') {
+    return enqueueGradingJobOff(jobId);
   }
   return enqueueGradingJobInline(jobId);
 }

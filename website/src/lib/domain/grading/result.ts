@@ -36,14 +36,31 @@ export function buildGradingResult(provider: ProviderGradingResponse, annotation
 }
 
 /**
+ * KAN-16 round-1 review, finding 11: the model's own prose is written for an
+ * UNCLAMPED result and is never re-derived when a result IS clamped, so
+ * passing it through unchanged produced things like `overallScore: 55,
+ * overallBand: "Below B1"` sitting next to `summary: "Ein perfekter
+ * Aufsatz — 100 Punkte."` — internally contradictory, and unexplained, for
+ * exactly the honest guest a false positive (finding 2 shows those are real)
+ * would land on. Fixed, non-model strings, in English (the operator-facing
+ * side of this result; nothing here is guest-facing copy — see KAN-18's own
+ * scope for that screen).
+ */
+const CLAMPED_SUMMARY =
+  'This result was capped because the essay appeared to contain an attempt to influence its own grading. ' +
+  'Scores above are not a reliable assessment of the essay itself and this submission has been flagged for review.';
+const CLAMPED_DIMENSION_COMMENT = 'Comment withheld — see the flagged-for-review summary.';
+
+/**
  * Applied only when `detectPromptInjection` (injection-guard.ts) suspects the
  * essay tried to manipulate its own grading. Caps every score at
  * `INJECTION_SUSPECTED_SCORE_CAP`, recomputes the band off the CAPPED score
- * (never the original), and sets `flaggedForReview` — the field a future
- * preview screen (KAN-18) is expected to surface rather than present this as
- * an ordinary result. Never raises a score; `Math.min` only ever lowers or
- * leaves it unchanged, so a genuinely low-scoring essay that also happens to
- * trip a pattern is not pushed upward toward the cap.
+ * (never the original), replaces the model's own summary/comments (see
+ * `CLAMPED_SUMMARY`'s own comment — finding 11), and sets `flaggedForReview`
+ * — the field a future preview screen (KAN-18) is expected to surface rather
+ * than present this as an ordinary result. Never raises a score; `Math.min`
+ * only ever lowers or leaves it unchanged, so a genuinely low-scoring essay
+ * that also happens to trip a pattern is not pushed upward toward the cap.
  */
 export function clampForSuspectedInjection(result: GradingResult): GradingResult {
   const cappedOverall = Math.min(result.overallScore, INJECTION_SUSPECTED_SCORE_CAP);
@@ -51,7 +68,12 @@ export function clampForSuspectedInjection(result: GradingResult): GradingResult
     ...result,
     overallScore: cappedOverall,
     overallBand: bandForScore(cappedOverall),
-    dimensions: result.dimensions.map((d) => ({ ...d, score: Math.min(d.score, INJECTION_SUSPECTED_SCORE_CAP) })),
+    dimensions: result.dimensions.map((d) => ({
+      ...d,
+      score: Math.min(d.score, INJECTION_SUSPECTED_SCORE_CAP),
+      comment: CLAMPED_DIMENSION_COMMENT,
+    })),
+    summary: CLAMPED_SUMMARY,
     flaggedForReview: true,
   };
 }
