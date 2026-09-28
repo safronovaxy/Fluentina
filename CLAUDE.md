@@ -218,11 +218,22 @@ budget (Ways of Working §4); if agreement has not been reached by then, stop
 looping and take it to Irina with the disagreement stated, rather than
 continuing indefinitely. Rounds 1-3 are handled autonomously.
 
+**Merge without asking once the review has actually passed.** All four Ways of
+Working §5 criteria must hold: Solution Architect approved, Test Lead approved,
+CI green, and the story's acceptance criteria demonstrably met. Then merge, and
+move the ticket to *Done*. "CI green" means a real CI run on the PR's current
+head — not local checks standing in for it, and not a green run on an earlier
+commit. Local checks are never a substitute, particularly where they could not
+run at all: a browser suite that no local environment could execute is unrun,
+not passed, and CI is its first real signal.
+
+If any of the four is missing, do not merge — say which one and what it needs.
+An approval conditional on a change is not an approval until that change is
+pushed. Merging is still not deploying: `main` is kept releasable, and shipping
+is a separate deliberate `workflow_dispatch` (see the Deployment section).
+
 **Still needs Irina, regardless of the above:**
 
-- Merging to `main`. The merge criteria (both reviewers approved, CI green,
-  ACs demonstrably met) are necessary but not sufficient — confirm before
-  merging, because merge is the point of no easy return.
 - Deploying. Always a separate, deliberate `workflow_dispatch` — see the
   Deployment section above, and never assume a merge deployed anything.
 - Force-pushing or rewriting published history, on any branch.
@@ -240,5 +251,5 @@ continuing indefinitely. Rounds 1-3 are handled autonomously.
 - Use `node_modules/` paths for anything
 - Assume a merge to `main` deployed anything — it does not, and has not since the CI/CD rework. Deploys are manual `workflow_dispatch` only (see Deployment section above)
 - Wait for permission to open a PR, or to move a Jira ticket — both are standing authorisations (see Delivery Workflow above)
-- Merge to `main` without Irina's confirmation, however green the PR is
+- Merge on a green CI run from an earlier commit, on local checks standing in for CI, or on an approval that was conditional on a change not yet pushed
 - Fold an unrelated chore into a story's branch — it belongs on its own branch, so the story's PR stays reviewable
