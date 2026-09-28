@@ -41,9 +41,51 @@
         "submitCta": "Submit essay",
         "submittingCta": "Submitting...",
         "successTitle": "Essay received",
-        "successBody": "Your essay has been submitted. We're working on the next steps of the guest flow.",
+        "successBody": "Your essay has been submitted. Taking you to your result...",
         "errorGeneric": "Something went wrong submitting your essay. Please try again.",
         "rateLimitedError": "You've reached the submission limit for now — please wait a bit before submitting another essay."
+      },
+      "preview": {
+        "metaTitle": "Your essay result",
+        "metaDescription": "Your overall score and a worked example from your own essay.",
+        "title": "Your essay result",
+        "description": "Here is how your essay did against the Goethe B2 rubric.",
+        "pendingTitle": "Grading your essay",
+        "pendingBody": "Your essay was received and is being graded. This page updates by itself when your score is ready — there's no need to refresh.",
+        "completeTitle": "Your overall score",
+        "completeAnnouncement": "Grading finished. Your overall score is",
+        "scoreOutOf": "out of 100",
+        "bandLabel": "Band",
+        "bands": {
+          "strongPass": "B2+ (strong pass)",
+          "pass": "B2 (pass)",
+          "borderline": "B2- (borderline)",
+          "belowTarget": "B1 (below target)",
+          "belowB1": "Below B1"
+        },
+        "exampleTitle": "A worked example from your essay",
+        "exampleIntro": "This is a sentence you wrote, with one mistake marked and explained.",
+        "errorMarkerStart": "Marked error:",
+        "errorMarkerEnd": "End of marked error.",
+        "explanationLabel": "What's wrong",
+        "suggestionLabel": "Try instead",
+        "noExample": "We couldn't pinpoint a specific sentence to show as an example for this essay.",
+        "flaggedTitle": "We couldn't score this essay",
+        "flaggedBody": "Part of your essay looked like an instruction to the grader rather than an answer to the task, so we haven't given it a score — a score from that essay wouldn't be a fair assessment. This check can be wrong. If you think it is, reword that part and submit your essay again.",
+        "failedTitle": "We couldn't grade your essay",
+        "failedBody": "No score was produced, and we haven't guessed one. You can submit your essay again.",
+        "failedReasons": {
+          "wordCountOutOfBounds": "Your essay wasn't between 50 and 300 words when we went to grade it.",
+          "providerError": "The grading service didn't respond properly.",
+          "invalidProviderResponse": "The grading service gave an answer we couldn't use.",
+          "essayMissing": "We couldn't find your essay any more.",
+          "unknown": "Something went wrong while grading."
+        },
+        "pollErrorTitle": "We couldn't check on your grade",
+        "pollErrorBody": "We lost contact with the server, so we can't tell whether your essay has been graded yet. Check your connection and try again.",
+        "pollErrorNotFoundBody": "We couldn't find a grade for this essay. You can submit it again.",
+        "retryCta": "Try again",
+        "tryAgainCta": "Submit again"
       }
     },
     "localeSwitcher": {

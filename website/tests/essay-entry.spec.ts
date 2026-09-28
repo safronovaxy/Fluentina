@@ -102,7 +102,9 @@ interface LocaleFixture {
   readonly ctaName: string;
   readonly submitName: string;
   readonly essayText: string;
-  readonly successTitle: string;
+  /** Where a successful submission lands (KAN-18) — the essay id follows. */
+  readonly previewPath: string;
+  readonly previewHeading: string;
   readonly writeHeading: string;
 }
 
@@ -117,7 +119,8 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
       'This is a sample essay written directly in the browser text box for the end-to-end test.',
       ESSAY_WORD_COUNT,
     ),
-    successTitle: 'Essay received',
+    previewPath: '/practice/preview',
+    previewHeading: 'Your essay result',
     writeHeading: 'Write your essay',
   },
   {
@@ -130,7 +133,8 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
       'Dies ist ein Beispielaufsatz, der direkt im Textfeld des Browsers für den End-to-End-Test geschrieben wurde.',
       ESSAY_WORD_COUNT,
     ),
-    successTitle: 'Aufsatz erhalten',
+    previewPath: '/de/practice/preview',
+    previewHeading: 'Dein Aufsatz-Ergebnis',
     writeHeading: 'Schreibe deinen Aufsatz',
   },
 ];
@@ -158,7 +162,7 @@ for (const fx of LOCALE_FIXTURES) {
       // being needed. What DOES fail, on all eight locale/project
       // combinations, if a future change makes this path need more
       // interaction, is the flow itself: an added required step (a
-      // confirmation dialog, an extra screen) means `page.getByRole('status')`
+      // confirmation dialog, an extra screen) means the preview URL
       // below never appears, because nothing here drives that extra step.
       // The count is a document of the two interactions this known-good
       // path takes today, not independent proof of the acceptance
@@ -196,7 +200,10 @@ for (const fx of LOCALE_FIXTURES) {
       // Click 2: submit.
       await click(page.getByRole('button', { name: fx.submitName }));
 
-      await expect(page.getByRole('status')).toHaveText(new RegExp(fx.successTitle));
+      // KAN-18: a successful submission now lands on the preview screen for
+      // the created essay (previously an on-page "Essay received" block).
+      await expect(page).toHaveURL(new RegExp(`${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText(fx.previewHeading);
       expect(clicks, 'this known-good path takes exactly 2 clicks/taps — CTA, then submit').toBe(2);
     });
 
@@ -214,10 +221,12 @@ for (const fx of LOCALE_FIXTURES) {
       await fillTextboxAndWaitForWordCount(page, fx.essayText, wordCountText(fx.locale, ESSAY_WORD_COUNT));
       await page.getByRole('button', { name: fx.submitName }).click();
 
-      await expect(page.getByRole('status')).toBeVisible();
-      // Submitting never redirected anywhere — in particular not to a
-      // login/register route that doesn't exist yet.
-      await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
+      // Submitting leads to the score preview and nowhere else — in
+      // particular not to a login/register screen — and that screen asks
+      // for no account details either.
+      await expect(page).toHaveURL(new RegExp(`${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
+      await expect(page.getByLabel(/email/i)).toHaveCount(0);
+      await expect(page.getByLabel(/password/i)).toHaveCount(0);
     });
 
     test('never renders a file, camera or upload control — text entry only (KAN-14 AC)', async ({ page }) => {
