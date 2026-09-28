@@ -63,3 +63,8 @@ website/.env.local
 website/.env.development.local
 website/.env.production.local
 website/bun.lockb
+
+# Agent worktrees. Each is a live git worktree whose contents belong to the
+# branch checked out inside it, not to this one -- committing them would nest
+# a checkout in the repo that created it. Created and removed by tooling.
+.claude/worktrees/
