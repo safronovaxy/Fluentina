@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { submitEssay } from '@/lib/domain/essay-submission';
 import { resolveGuestSession } from '@/lib/domain/guest-session';
 import { checkEssaySubmissionRateLimit } from '@/lib/domain/rate-limit';
+import { startGrading } from '@/lib/domain/grading/start-grading';
+import { logEssaySubmission } from '@/lib/domain/essay-submission-telemetry';
 import { essaySubmissionRequestSchema, MAX_REQUEST_BODY_BYTES, isEssayLengthRejectionReason } from '@/lib/contracts/essay-submission';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
@@ -353,8 +355,49 @@ export async function POST(request: NextRequest) {
     return rejectionResponse('invalidSubmission', 400, 'invalid essay submission');
   }
 
-  const { actor, reissued } = await resolveGuestSession(rawCookie);
-  const essay = await submitEssay(actor, parsed.data.content);
+  // KAN-24 (carried-over PR note, KAN-36-class fix): resolving the session
+  // and the actual essay insert are wrapped in one try/catch. `createEssay`
+  // (lib/db/essays.ts) can throw on a database failure with nothing above it
+  // in the original call chain to catch it; an uncaught throw here would
+  // become a bare framework 500 with no `reason`, and — before that file's
+  // own KAN-24 fix — could have embedded a live guest session id straight
+  // into the log line Next writes for an unhandled route error. Catching
+  // here closes both: a database failure now gets exactly the same
+  // `rejectionResponse` shape as every guard above, and nothing about `err`
+  // itself (message, stack) is read or logged by this catch — only the
+  // fixed, safe outcome string `logEssaySubmission` takes below.
+  let actor: Awaited<ReturnType<typeof resolveGuestSession>>['actor'];
+  let reissued: boolean;
+  let essay: Awaited<ReturnType<typeof submitEssay>>;
+  try {
+    const resolved = await resolveGuestSession(rawCookie);
+    actor = resolved.actor;
+    reissued = resolved.reissued;
+    essay = await submitEssay(actor, parsed.data.content);
+  } catch {
+    // `cookieParse.data` — the raw, schema-validated cookie value — not
+    // whatever actor `resolveGuestSession` may or may not have reached
+    // resolving before the throw; it's the one session identifier
+    // guaranteed to exist at this point in every failure case below it.
+    logEssaySubmission(cookieParse.data, parsed.data.content.length, 'error');
+    return rejectionResponse('internalError', 500, 'could not submit essay');
+  }
+
+  logEssaySubmission(actor.sessionId, parsed.data.content.length, 'created');
+
+  // KAN-16/ADR-2: enqueues asynchronous grading and returns as soon as the
+  // job is SCHEDULED (see start-grading.ts's own comment). Deliberately its
+  // own try/catch, separate from the one above: the essay itself is already
+  // safely persisted by this point, so a failure to START grading (e.g. the
+  // queue is unreachable) must not turn an otherwise-successful submission
+  // into a 500 — the guest keeps their saved essay either way. A job that
+  // never got enqueued is visible later as a grading status poll stuck on
+  // `pending`, not as a lost essay.
+  try {
+    await startGrading(actor, essay.id);
+  } catch {
+    console.error(JSON.stringify({ severity: 'ERROR', event: 'grading_start_failed', submissionId: essay.id }));
+  }
 
   const response = NextResponse.json({ id: essay.id }, { status: 201 });
   if (reissued) {

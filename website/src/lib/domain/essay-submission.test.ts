@@ -61,9 +61,11 @@ describe('submitEssay', () => {
     // guard from, say, a connection error or an unrelated bug in this
     // codepath — matching the message `createEssay` actually throws (see
     // `lib/db/essays.ts`'s own equivalent test, `essays.test.ts`, which
-    // already pins this same string) is what proves THIS guard fired.
+    // already pins this same string — updated by KAN-24's fix dropping the
+    // session id from that message, see that file's own comment) is what
+    // proves THIS guard fired.
     await expect(submitEssay(neverPersistedActor, 'Should never be persisted.')).rejects.toThrow(
-      /no guest session found/,
+      /guest session no longer exists/,
     );
   });
 });
