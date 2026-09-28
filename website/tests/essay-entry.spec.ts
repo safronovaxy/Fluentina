@@ -264,6 +264,14 @@ for (const fx of LOCALE_FIXTURES) {
       await ensureEssayFormHydrated(page, fx.essayText);
       await textarea.evaluate((el: HTMLTextAreaElement, text: string) => {
         el.focus();
+        // select() before inserting, because ensureEssayFormHydrated proves
+        // hydration by leaving a probe fill in the field, and insertText
+        // inserts at the caret rather than replacing the content. Without
+        // this the field ends up as the probe text followed by the essay --
+        // which is what turned this test red on all four projects on the
+        // first attempt at this fix. Selecting first also models a real
+        // paste-over-selection more closely than appending did.
+        el.select();
         document.execCommand('insertText', false, text);
       }, fx.essayText);
 
