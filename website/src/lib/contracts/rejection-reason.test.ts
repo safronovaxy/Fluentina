@@ -12,6 +12,10 @@ import { REJECTION_REASONS, isRejectionReason } from './rejection-reason';
  * suites already pin individually — a reason silently renamed, dropped, or
  * added without updating this list now fails HERE, not just wherever a
  * route test happens to notice.
+ *
+ * KAN-16 added `gradingJobNotFound` (the status-poll ownership guard) and
+ * `internalError` (the essay-submission database-failure guard) — ten
+ * reasons now, not eight; see rejection-reason.ts's own comment for both.
  */
 const EXPECTED_REJECTION_REASONS = [
   'crossOrigin',
@@ -22,10 +26,12 @@ const EXPECTED_REJECTION_REASONS = [
   'invalidSubmission',
   'tooShort',
   'tooLong',
+  'gradingJobNotFound',
+  'internalError',
 ] as const;
 
 describe('rejection-reason — the KAN-31 union every first-party rejection draws its reason from', () => {
-  it('is exactly this fixed set of eight reasons — nothing missing, nothing extra, nothing renamed', () => {
+  it('is exactly this fixed set of ten reasons — nothing missing, nothing extra, nothing renamed', () => {
     expect([...REJECTION_REASONS].sort()).toEqual([...EXPECTED_REJECTION_REASONS].sort());
   });
 

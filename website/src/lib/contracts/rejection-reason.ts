@@ -47,6 +47,26 @@
  * `reasonMessages` map (`Record<RejectionReason, string>`) fail to compile
  * until a guest-facing message exists for it, in both languages — the
  * mechanism that module's own comment describes for exactly this case.
+ *
+ * KAN-16: `gradingJobNotFound` added for `GET /api/essays/[id]/grading`
+ * (status polling, ADR-2) — the same "not found and not yours look
+ * identical" shape `getEssayById`/`getGradingJobByEssayId` already return
+ * (lib/db), given an HTTP reason of its own here for the same reason every
+ * other guard reason is: so a caller can branch on cause without matching
+ * English prose. Deliberately one reason for both "no such job" and "not
+ * your job" — the ownership rule this codebase already applies everywhere
+ * else (see `ownedBy`'s own comment) never lets a caller distinguish those
+ * two outwardly, and this status route is no exception.
+ *
+ * KAN-24 (carried-over PR note, KAN-36-class fix): `internalError` added for
+ * `POST /api/essays`'s own database write — the KAN-36 note this story
+ * carries forward describes an essay-creation failure that used to become an
+ * unguarded framework 500 (and, worse, one whose thrown message could embed
+ * a live session id — see `lib/db/essays.ts`'s own comment on the fix
+ * there). The route now catches that failure itself and returns a 500
+ * through `rejectionResponse` like every other rejection here, rather than
+ * letting the framework build an un-`reason`-carrying response from an
+ * uncaught throw.
  */
 import { ESSAY_LENGTH_REJECTION_REASONS, type EssayLengthRejectionReason } from './essay-submission';
 
@@ -72,6 +92,8 @@ export const GUARD_REJECTION_REASONS = [
   'bodyTooLarge',
   'invalidJson',
   'invalidSubmission',
+  'gradingJobNotFound',
+  'internalError',
 ] as const;
 export type GuardRejectionReason = (typeof GUARD_REJECTION_REASONS)[number];
 

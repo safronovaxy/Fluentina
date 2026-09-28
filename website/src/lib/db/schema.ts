@@ -39,7 +39,7 @@
  * guest_sessions to determine ownership.
  */
 import { sql } from 'drizzle-orm';
-import { index, integer, pgSchema, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const fluentinaSchema = pgSchema('fluentina');
 
@@ -105,6 +105,89 @@ export const essays = fluentinaSchema.table(
     // gets an index automatically.
     index('essays_session_id_idx').on(table.sessionId),
     index('essays_user_id_idx').on(table.userId),
+  ],
+);
+
+/**
+ * KAN-16 — one row per essay's grading attempt, and the ADR-5 persistence of
+ * that job's raw input/output alongside its structured result: "so a future
+ * fine-tuning dataset doesn't have to be reconstructed retroactively". This
+ * is the Phase 2 calibration dataset KAN-24's own story explicitly is NOT —
+ * that story's telemetry is metadata-only, logged centrally (see
+ * `lib/domain/grading/telemetry.ts`); THIS table is where the essay text
+ * (already stored on `essays.content`), the exact prompt sent, and the
+ * exact provider response body live, joinable back to that telemetry by
+ * `essay_id` (`submissionId` in the telemetry log) — the join key both
+ * stories were told to share rather than inventing two.
+ *
+ * One row per essay by construction (`essay_id` is both the FK and this
+ * table's own primary key) — Phase 1 has no retry-with-a-new-row concept;
+ * a Cloud Tasks redelivery of an already-`succeeded`/`failed` job is a
+ * no-op against the SAME row (see `orchestrate-grading.ts`'s own
+ * idempotency check), never a second attempt recorded alongside the first.
+ *
+ * Ownership: deliberately NO `session_id`/`user_id` columns of its own,
+ * unlike `essays`/`guest_sessions`. A grading job is inherently owned by
+ * whoever owns the essay it grades — `lib/db/grading-jobs.ts`'s
+ * `getGradingJobByEssayId` joins to `essays` and applies `ownedBy()`
+ * against THAT row's columns, rather than this table duplicating them. That
+ * also means the post-conversion cutover (the old guest session id must
+ * stop authorising reads — KAN-10's own non-negotiable) needs no extra
+ * write here at all: the join inherits whatever `essays.user_id` already
+ * says, the moment conversion sets it.
+ *
+ * `raw_input`/`raw_output` are `text`, not `jsonb` — `raw_input` is the
+ * prompt sent (a plain string, never JSON itself) and `raw_output` is the
+ * provider's raw response BODY, kept exactly as received (so a malformed,
+ * non-JSON response is still captured verbatim rather than lost to a parse
+ * failure) — `result`, the STRUCTURED `GradingResult`, is the `jsonb` column
+ * queried/rendered elsewhere.
+ *
+ * Cascades on `essay_id`: deleting an essay (which itself cascades from
+ * deleting its guest session — see `essays`' own comment) deletes its
+ * grading job too, so the 30-day retention sweep and any right-to-erasure
+ * cascade reach this table for free, without a second, separately-tracked
+ * deletion path — the exact "not an untracked second copy of personal data"
+ * requirement KAN-24's own acceptance criteria name for the OTHER (metadata)
+ * record applies here too, for this one.
+ */
+export const gradingJobs = fluentinaSchema.table(
+  'grading_jobs',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    essayId: uuid('essay_id')
+      .notNull()
+      .unique()
+      .references(() => essays.id, { onDelete: 'cascade' }),
+    // 'pending' | 'processing' | 'succeeded' | 'failed' — see
+    // lib/contracts/grading-job.ts's GradingJobStatus. Kept as plain text,
+    // like every other status-shaped column in this schema (e.g.
+    // rate_limit_counters' free-form bucket_key) — the app layer, not a
+    // Postgres CHECK/enum, is the single source of truth for the valid set.
+    status: text('status').notNull().default('pending'),
+    // Null until the job actually starts calling one (see
+    // orchestrate-grading.ts) — 'mistral' | 'fake' today, 'claude' once
+    // ADR-4's fallback is built (provider-factory.ts).
+    provider: text('provider'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    // See lib/contracts/grading.ts's GradingFailureReason — a stable code,
+    // never a raw error message (which could embed provider response
+    // fragments this column has no business holding twice over raw_output).
+    errorType: text('error_type'),
+    // BR-3.5 — true whenever `detectPromptInjection` (injection-guard.ts)
+    // suspected the essay text and this job's result was therefore capped
+    // rather than trusted as-is (result.ts's own clampForSuspectedInjection).
+    promptInjectionSuspected: boolean('prompt_injection_suspected').notNull().default(false),
+    rawInput: text('raw_input'),
+    rawOutput: text('raw_output'),
+    result: jsonb('result'),
+  },
+  (table) => [
+    // essay_id already carries a UNIQUE constraint above, which Postgres
+    // backs with an index automatically — no separate index needed the way
+    // essays.session_id/user_id (plain FKs, not unique) require one.
+    index('grading_jobs_status_idx').on(table.status),
   ],
 );
 

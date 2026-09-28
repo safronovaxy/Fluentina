@@ -61,7 +61,21 @@ export async function createEssay(actor: GuestActor, content: string): Promise<E
       .for('update');
 
     if (!session) {
-      throw new Error(`cannot create essay: no guest session found for id ${actor.sessionId}`);
+      // KAN-24 (round-review, carried over from an earlier PR): this used to
+      // interpolate `actor.sessionId` — a live bearer credential, the only
+      // thing authorising reads of this guest's own essays (see
+      // `guestSessionIdSchema`'s own comment) — straight into the thrown
+      // message. Nothing above this call wraps the transaction, so any
+      // uncaught throw here becomes a framework 500 whose message Next logs
+      // verbatim; a session row that's read here and deleted moments later
+      // (a right-to-erasure cascade, or the 30-day retention sweep catching
+      // it on the boundary — both real, both already-known races per
+      // `resolveGuestSession`'s own `SessionIdUnavailableError` comment)
+      // would put that credential straight into production logs. No
+      // identifier at all here — the route (`POST /api/essays`) is what
+      // logs an outcome for this endpoint (KAN-24), and it does so without
+      // ever needing this message's content.
+      throw new Error('cannot create essay: guest session no longer exists');
     }
 
     const [row] = await tx
