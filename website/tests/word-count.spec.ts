@@ -13,6 +13,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { fillTextboxAndWaitForWordCount } from './helpers/essay-fill';
+import { isWebKitOverPlainHttp } from './helpers/webkit';
 
 const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 
@@ -24,9 +25,13 @@ const SESSION_COOKIE_NAME = '__Host-fluentina_guest_session';
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3000';
 const isPlainHttp = BASE_URL.startsWith('http://');
 
-function skipIfWebkitCannotStoreTheSessionCookie(testInfo: { project: { name: string } }) {
+// KAN-33: `browserName`, not `testInfo.project.name === 'webkit-desktop'` —
+// see helpers/webkit.ts's own comment on `isWebKitOverPlainHttp` for why
+// the previous, name-pinned form would have silently stopped applying this
+// skip on the new `webkit-mobile` project's plain-HTTP runs.
+function skipIfWebkitCannotStoreTheSessionCookie(browserName: string) {
   test.skip(
-    testInfo.project.name === 'webkit-desktop' && isPlainHttp,
+    isWebKitOverPlainHttp(browserName, isPlainHttp),
     'WebKit refuses to store a __Host--prefixed cookie over plain HTTP, even on localhost, so no essay submission can succeed here — see the comment above isPlainHttp.',
   );
 }
@@ -166,8 +171,9 @@ for (const fx of LOCALE_FIXTURES) {
 
     test('a 220-word essay — the story\'s own "never blocked" verification case — submits successfully, with the non-blocking warning shown (not a block) along the way', async ({
       page,
-    }, testInfo) => {
-      skipIfWebkitCannotStoreTheSessionCookie(testInfo);
+      browserName,
+    }) => {
+      skipIfWebkitCannotStoreTheSessionCookie(browserName);
       await gotoOk(page, fx.writePath);
 
       await fillEssay(page, fx, 220);

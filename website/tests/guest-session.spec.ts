@@ -11,6 +11,7 @@
  * called directly.
  */
 import { test, expect } from '@playwright/test';
+import { isWebKitOverPlainHttp } from './helpers/webkit';
 
 // `__Host-` prefixed per review: the browser itself refuses to store a
 // cookie under this name unless it also carries Secure, no Domain
@@ -40,9 +41,13 @@ const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3000';
 const isPlainHttp = BASE_URL.startsWith('http://');
 
 test.describe('KAN-10 — guest session cookie', () => {
-  test.beforeEach(async ({}, testInfo) => {
+  // KAN-33: `browserName`, not `testInfo.project.name === 'webkit-desktop'` —
+  // see helpers/webkit.ts's own comment for why the previous, name-pinned
+  // form would have silently stopped applying this skip on the new
+  // `webkit-mobile` project's plain-HTTP runs.
+  test.beforeEach(async ({ browserName }) => {
     test.skip(
-      testInfo.project.name === 'webkit-desktop' && isPlainHttp,
+      isWebKitOverPlainHttp(browserName, isPlainHttp),
       'WebKit refuses to store a __Host--prefixed cookie over plain HTTP, even on localhost — see the comment above SESSION_COOKIE_NAME. Runs against HTTPS (test:e2e:live) are not skipped.',
     );
   });
@@ -60,6 +65,43 @@ test.describe('KAN-10 — guest session cookie', () => {
     expect(sessionCookie?.secure).toBe(true);
     expect(sessionCookie?.sameSite).toBe('Lax');
     expect(sessionCookie?.path).toBe('/');
+  });
+
+  // KAN-33: the 30-day `maxAge` (lib/guest-session-cookie.ts's own
+  // `THIRTY_DAYS_IN_SECONDS`, re-declared below rather than imported — e2e
+  // specs observe the real browser/HTTP surface only, never app internals
+  // directly, the same boundary SESSION_COOKIE_NAME above already keeps) is
+  // recorded in a decision record Irina has not yet approved, and had never
+  // been asserted on ANY project, let alone the one platform most likely
+  // to shorten it: Safari's tracking prevention has, historically,
+  // independently of anything this app sets, capped a cookie's actual stored
+  // lifetime below what its own Set-Cookie header asked for. This is the one
+  // half of that concern a same-session Playwright run can actually observe
+  // — that the browser accepted and stored the FULL 30 days rather than
+  // silently truncating it the moment it was set. It cannot observe the
+  // other half (whether Safari evicts an established cookie after real-world
+  // dormancy) — that requires letting real time pass on a real device, which
+  // is out of reach for an automated suite; flagged to Irina rather than
+  // guessed at here.
+  test('the session cookie carries the full 30-day maxAge, not silently shortened', async ({ page, context }) => {
+    const EXPECTED_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+    // Generous enough to absorb the seconds between the server minting the
+    // cookie and this assertion reading it back, nowhere near generous
+    // enough to mask a real truncation — ITP's historical cap (7 days) and a
+    // session-only cookie (`expires === -1`) both land far outside it.
+    const TOLERANCE_SECONDS = 300;
+
+    const before = Date.now() / 1000;
+    const response = await page.goto('/practice');
+    expect(response?.ok()).toBe(true);
+
+    const sessionCookie = (await context.cookies()).find((c) => c.name === SESSION_COOKIE_NAME);
+    expect(sessionCookie, 'session cookie should be set on first visit').toBeDefined();
+
+    const expectedExpiry = before + EXPECTED_MAX_AGE_SECONDS;
+    expect(sessionCookie?.expires, 'cookie should carry a fixed expiry, not be session-only (-1)').toBeGreaterThan(0);
+    expect(sessionCookie?.expires).toBeGreaterThan(expectedExpiry - TOLERANCE_SECONDS);
+    expect(sessionCookie?.expires).toBeLessThan(expectedExpiry + TOLERANCE_SECONDS);
   });
 
   test('never readable from client JavaScript — HttpOnly excludes it from document.cookie', async ({ page, context }) => {

@@ -209,7 +209,7 @@ function pickProbeWordCount(currentWordCount: number, upcomingWordCount: number)
   return MAX_PROBE_WORD_COUNT;
 }
 
-async function ensureEssayFormHydrated(page: Page, upcomingContent: string): Promise<void> {
+export async function ensureEssayFormHydrated(page: Page, upcomingContent: string): Promise<void> {
   const textbox = page.getByRole('textbox');
   const counter = liveWordCountLocator(page);
   const upcomingWordCount = wordCount(upcomingContent);
