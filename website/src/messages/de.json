@@ -42,7 +42,8 @@
         "submittingCta": "Wird eingereicht …",
         "successTitle": "Aufsatz erhalten",
         "successBody": "Dein Aufsatz wurde eingereicht. Wir arbeiten an den nächsten Schritten im Gast-Ablauf.",
-        "errorGeneric": "Beim Einreichen deines Aufsatzes ist ein Fehler aufgetreten. Bitte versuche es erneut."
+        "errorGeneric": "Beim Einreichen deines Aufsatzes ist ein Fehler aufgetreten. Bitte versuche es erneut.",
+        "rateLimitedError": "Du hast das Einreichungslimit für jetzt erreicht — bitte warte etwas, bevor du einen weiteren Aufsatz einreichst."
       }
     },
     "localeSwitcher": {

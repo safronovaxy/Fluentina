@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveGuestSession } from '@/lib/domain/guest-session';
+import { checkGuestSessionResolveRateLimit } from '@/lib/domain/rate-limit';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
 import { isCrossOriginRequest } from '@/lib/same-origin';
+import { clientIp } from '@/lib/client-ip';
 import { rejectionResponse } from '@/lib/rejection-response';
 
 /**
@@ -118,6 +120,25 @@ import { rejectionResponse } from '@/lib/rejection-response';
  * `no-restricted-syntax` rule in `eslint.config.js`, scoped to this file and
  * `/api/essays`, is what actually rules that out, by blocking a literal
  * `status >= 400` inside a direct `NextResponse.json(...)` call here).
+ *
+ * KAN-25: the accumulated finding this story owns for THIS route
+ * specifically — the `SessionIdUnavailableError` recovery inside
+ * `resolveGuestSession` (a presented cookie naming an already-converted
+ * session) mints a fresh row on every single call from a client that keeps
+ * presenting that same stale id, and nothing below bounded how many times
+ * that could happen. The check below runs after the cookie guard (the
+ * earliest point a validated `GuestSessionId` exists to count against) and
+ * before `resolveGuestSession` — the call that actually does the write this
+ * guard exists to bound. It counts against the RAW presented cookie value,
+ * not whatever id `resolveGuestSession` eventually resolves to: a client
+ * stuck in exactly the loop this finding describes presents the SAME raw
+ * value on every call (that's what makes it a loop), even though the
+ * resolved, reissued id differs every time — counting the resolved id
+ * instead would give that loop an unbounded budget, one fresh id at a time.
+ * `lib/domain/rate-limit.ts` carries both numbers and their justification;
+ * `clientIp` (`lib/client-ip.ts`) is the same per-IP backstop `/api/essays`
+ * uses, looser here to match this endpoint's lower cost (no content, no
+ * future grading call — see that module's own comment).
  */
 export async function POST(request: NextRequest) {
   if (isCrossOriginRequest(request)) {
@@ -130,12 +151,20 @@ export async function POST(request: NextRequest) {
   }
 
   const raw = request.cookies.get(GUEST_SESSION_COOKIE_NAME)?.value;
-  if (!guestSessionIdSchema.safeParse(raw).success) {
+  const cookieParse = guestSessionIdSchema.safeParse(raw);
+  if (!cookieParse.success) {
     // No legitimate caller on the real path reaches this without a cookie
     // middleware already set moments earlier on the same navigation — see
     // the comment above. Reject outright rather than resolving a session
     // (which would mean minting one) for whoever this actually is.
     return rejectionResponse('invalidSessionCookie', 400, 'missing or invalid guest session cookie');
+  }
+
+  // KAN-25 — see this file's own top comment for why this runs exactly
+  // here, and what it protects.
+  const rateLimitOk = await checkGuestSessionResolveRateLimit(cookieParse.data, clientIp(request));
+  if (!rateLimitOk) {
+    return rejectionResponse('rateLimited', 429, 'too many session requests — try again later');
   }
 
   const { actor, reissued } = await resolveGuestSession(raw);

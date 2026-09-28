@@ -115,17 +115,22 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
 
 /**
  * KAN-30 investigation (Safari CI failure, both the 1000-word block and the
- * 150/201-word live-guidance case) found this race and added the wait; KAN-33
- * lifted the mechanism itself into helpers/essay-fill.ts's
- * `fillTextboxAndWaitForWordCount` (see that function's own comment for the
- * full why) once essay-entry.spec.ts needed the identical fix rather than a
- * second copy of it. This wrapper stays file-local only for the `n`/
- * `LocaleFixture` convenience below.
+ * 150/201-word live-guidance case) found the fill()-then-act race and added
+ * the after-fill counter wait; a later investigation, on the exact same
+ * timeout, found a second and more severe race the first fix cannot catch
+ * (the fill lost entirely, not merely delayed) and closed it with a
+ * before-fill hydration guard. Both fixes now live in
+ * `helpers/essay-fill.ts`'s `fillTextboxAndWaitForWordCount` (see that
+ * file's own top comment for the full account of both races) once
+ * essay-entry.spec.ts needed the identical guards rather than a second copy
+ * of them. This wrapper stays file-local only for the `n`/`LocaleFixture`
+ * convenience below.
  *
- * Precondition (unchanged from the original): `n` must differ from the count
- * already shown on the page (fresh page: any `n > 0`; after a prior
- * `fillEssay` call in the same test: any `n` other than that call's) — see
- * `fillTextboxAndWaitForWordCount`'s own comment for why.
+ * No precondition on `n` relative to a prior call any more (round-1 review:
+ * this used to require `n` differ from the count already shown on the page,
+ * which was silently false for exactly the one-word case — see
+ * `fillTextboxAndWaitForWordCount`'s own comment for why that's now
+ * guaranteed by construction instead).
  */
 async function fillEssay(page: Page, fx: LocaleFixture, n: number): Promise<void> {
   await fillTextboxAndWaitForWordCount(page, wordsContent(n), fx.counterText(n));
@@ -148,7 +153,21 @@ for (const fx of LOCALE_FIXTURES) {
     // investigation found necessary under artificial CPU contention (see
     // fillEssay's own comment); cutting it back to buy margin would risk
     // reintroducing the exact flake this commit closes.
-    test.describe.configure({ timeout: 60_000 });
+    //
+    // Raised again, same reasoning, not a re-litigation of it: a hydration
+    // race that could permanently lose a fill (see helpers/essay-fill.ts's
+    // top comment) needed a real fix — a before-fill readiness guard, bounded
+    // at 20s — not a bigger number on the existing wait; that guard adds up
+    // to 20s ONCE per test (the first fill; every later fill in the same
+    // test resolves it on the first attempt, at negligible cost, since
+    // hydration only ever happens once). Worst case is now the 1000-word
+    // test's single fillEssay call: up to 20s hydrating + up to 15s for the
+    // counter itself, ~35s, plus nav/action/assertion overhead — comfortably
+    // inside 90s, not 60s. This is test-INFRASTRUCTURE budget for a real,
+    // bounded precondition, not the thing the story's "don't extend the
+    // timeout as the fix" instruction rules out: that instruction is about
+    // the counter wait itself, which is unchanged at 15_000ms.
+    test.describe.configure({ timeout: 90_000 });
 
     test('a 220-word essay — the story\'s own "never blocked" verification case — submits successfully, with the non-blocking warning shown (not a block) along the way', async ({
       page,

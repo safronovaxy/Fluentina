@@ -34,10 +34,19 @@
  *   here, not redefined, so there is exactly one place either list is
  *   spelled out, and one type guard that recognises the union of both.
  *
- * Deliberately excludes any placeholder for KAN-25's rate-limit reason: that
- * story adds its own code when it lands (see `essaySubmissionRequestSchema`'s
- * own note on why this route already resolves the actor before any limiter
- * would need one), not before.
+ * KAN-25: `rateLimited` added. One reason, not two, for the same collapsing
+ * reason `bodyTooLarge` already documents above — a caller cannot act
+ * differently on "your session hit its cap" versus "your IP hit its cap"
+ * (or, on `/api/guest-session`, which of ITS two caps), only that it should
+ * slow down, so a second or fourth code would carry no information a client
+ * could use. Shared by both routes for the same reason `crossOrigin` and
+ * `invalidSessionCookie` already are: `/api/essays` and `/api/guest-session`
+ * each run their own two-cap check (`lib/domain/rate-limit.ts`), not one
+ * check reused verbatim, but the reason either produces is the same.
+ * Adding this member is what makes `EssayEntryForm`'s exhaustive
+ * `reasonMessages` map (`Record<RejectionReason, string>`) fail to compile
+ * until a guest-facing message exists for it, in both languages — the
+ * mechanism that module's own comment describes for exactly this case.
  */
 import { ESSAY_LENGTH_REJECTION_REASONS, type EssayLengthRejectionReason } from './essay-submission';
 
@@ -59,6 +68,7 @@ import { ESSAY_LENGTH_REJECTION_REASONS, type EssayLengthRejectionReason } from 
 export const GUARD_REJECTION_REASONS = [
   'crossOrigin',
   'invalidSessionCookie',
+  'rateLimited',
   'bodyTooLarge',
   'invalidJson',
   'invalidSubmission',
