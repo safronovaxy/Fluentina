@@ -22,8 +22,11 @@ import 'server-only';
  *   (Structured outputs docs, "JSON Schema limitations"), so this strips
  *   only the keywords that page lists as unsupported and keeps the rest.
  *
- * The API rejects an unsupported keyword with a 400 rather than ignoring it,
- * so stripping is required, not cosmetic. Stripped constraints are appended
+ * The Structured outputs docs' "Not supported" list is the source for what
+ * is stripped, and they say an unsupported keyword is rejected rather than
+ * ignored, so stripping is treated as required, not cosmetic. That rejection
+ * has NOT been observed against a live response — nothing has been sent to
+ * the real API yet. Stripped constraints are appended
  * to the field's `description` so the model still sees, e.g., "maxLength
  * 1000" — but they are enforced by `providerGradingResponseSchema.parse` in
  * the provider, not by the API.

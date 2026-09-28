@@ -37,5 +37,11 @@ export function createAnthropicApiClient(): ClaudeMessagesClient {
   if (!apiKey) {
     throw new GradingProviderError('ANTHROPIC_API_KEY is not set — see website/.env.example');
   }
-  return new Anthropic({ apiKey });
+  // Pinned, not inherited. The SDK takes its log level from this option and
+  // then from `ANTHROPIC_LOG`, and at debug level it logs the whole response
+  // body — every annotation `quote` (a verbatim slice of the guest's essay)
+  // and the thinking blocks. An operator debugging with `ANTHROPIC_LOG=debug`
+  // on the Cloud Run service would write essay text into Cloud Logging. The
+  // constructor option wins over the env var, so that path can't be reached.
+  return new Anthropic({ apiKey, logLevel: 'warn' });
 }

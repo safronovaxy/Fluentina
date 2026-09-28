@@ -1,4 +1,5 @@
 /** @vitest-environment node */
+import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createClaudeGradingProvider } from './claude-provider';
 import { createAnthropicApiClient, type ClaudeMessagesClient } from './claude-client';
@@ -26,7 +27,7 @@ interface MessageOptions {
 }
 
 /** A Messages API response body, as the real SDK parses it — thinking block first, as Opus 5.5 always returns. */
-function messageBody({ text = JSON.stringify(validCompletion()), stopReason = 'end_turn', usage = { input_tokens: 1700, output_tokens: 5200 } }: MessageOptions = {}) {
+function messageBody({ text = JSON.stringify(validCompletion()), stopReason = 'end_turn', usage = { input_tokens: 1700, output_tokens: 3400 } }: MessageOptions = {}) {
   return {
     id: 'msg_test',
     type: 'message',
@@ -73,7 +74,7 @@ describe('createClaudeGradingProvider — KAN-44, run through the real @anthropi
     return fetchSpy;
   }
 
-  describe('request shape — the API 400s if any of these drift', () => {
+  describe('request shape — what we send (the constraints behind it are from the model docs, not yet observed against the live API)', () => {
     it('sends the shared prompt split at the role boundary, to the Messages API, authenticated with the key read at call time', async () => {
       const fetchSpy = stubFetch(async () => httpResponse(messageBody()));
       const input = gradingInput();
@@ -90,7 +91,7 @@ describe('createClaudeGradingProvider — KAN-44, run through the real @anthropi
       expect(body.messages).toEqual([{ role: 'user', content: input.userDataBlock }]);
     });
 
-    it('sets no thinking, tool_choice, sampling or prefill parameters — thinking is always on and forced tool_choice / assistant prefill 400 on this model', async () => {
+    it('sets no thinking, tool_choice, sampling or prefill parameters — the model docs say thinking is always on and rule out forced tool_choice / assistant prefill', async () => {
       const fetchSpy = stubFetch(async () => httpResponse(messageBody()));
 
       await createClaudeGradingProvider().grade(gradingInput());
@@ -116,26 +117,32 @@ describe('createClaudeGradingProvider — KAN-44, run through the real @anthropi
     // KAN-44 hazard 1. Mistral's 3000 is sized for a response with nothing in
     // front of it; here thinking is billed as output and counts against the
     // same ceiling, so 3000 can be spent before the JSON starts.
-    it('sizes max_tokens for thinking plus the response, not Mistral\'s 3000', async () => {
+    it('sizes max_tokens above Mistral\'s 3000 for thinking plus the response', async () => {
       const fetchSpy = stubFetch(async () => httpResponse(messageBody()));
 
       await createClaudeGradingProvider().grade(gradingInput());
 
-      expect(requestBody(fetchSpy).max_tokens).toBeGreaterThanOrEqual(10_000);
+      expect(requestBody(fetchSpy).max_tokens).toBeGreaterThan(3_000);
     });
 
-    it('attaches a request timeout signal', async () => {
+    // Round-1 review. The other side of hazard 1: a ceiling the 45s timeout
+    // (REQUEST_TIMEOUT_MS) can never let a completion reach turns every
+    // overrun into a timeout -> providerError -> up to three redeliveries,
+    // each a full billed completion. 45s at a generous ~100 tokens/s is 4,500;
+    // 6,000 is the most this bound tolerates. Raise it only together with the
+    // timeout, and against measured latency.
+    it('keeps max_tokens reachable inside the request timeout, so truncation (cheap, terminal) beats a timeout (billed three times)', async () => {
       const fetchSpy = stubFetch(async () => httpResponse(messageBody()));
 
       await createClaudeGradingProvider().grade(gradingInput());
 
-      expect(fetchSpy.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+      expect(requestBody(fetchSpy).max_tokens).toBeLessThanOrEqual(6_000);
     });
   });
 
   describe('successful response', () => {
     it('returns the schema-validated response, ignoring the thinking block, with the raw message and the API-reported usage', async () => {
-      stubFetch(async () => httpResponse(messageBody({ usage: { input_tokens: 1700, output_tokens: 5200 } })));
+      stubFetch(async () => httpResponse(messageBody({ usage: { input_tokens: 1700, output_tokens: 3400 } })));
 
       const output = await createClaudeGradingProvider().grade(gradingInput());
 
@@ -143,7 +150,7 @@ describe('createClaudeGradingProvider — KAN-44, run through the real @anthropi
       expect(output.response.annotations).toHaveLength(1);
       expect(output.promptTokensEstimate).toBe(1700);
       // output_tokens already includes thinking — it is what is billed.
-      expect(output.completionTokensEstimate).toBe(5200);
+      expect(output.completionTokensEstimate).toBe(3400);
       expect(JSON.parse(output.raw).stop_reason).toBe('end_turn');
     });
 
@@ -197,6 +204,9 @@ describe('createClaudeGradingProvider — KAN-44, run through the real @anthropi
       await createClaudeGradingProvider(() => injected).grade(gradingInput());
 
       expect(create).toHaveBeenCalledTimes(1);
+      // Also what stands behind our request timeout: the SDK attaches an
+      // AbortSignal to every request whether or not `timeout` is set, so a
+      // signal on the wire proves nothing about ours.
       expect(create.mock.calls[0][1]).toEqual({ timeout: expect.any(Number), maxRetries: 0 });
       expect(create.mock.calls[0][1].timeout).toBeGreaterThan(0);
     });
@@ -238,7 +248,15 @@ describe('createClaudeGradingProvider — KAN-44, run through the real @anthropi
     it('a refusal is treated the same way — its text is not schema-shaped and redelivery will not change it', async () => {
       stubFetch(async () => httpResponse(messageBody({ text: 'I cannot help with that.', stopReason: 'refusal' })));
 
-      await expect(createClaudeGradingProvider().grade(gradingInput())).rejects.toMatchObject({ name: 'ZodError' });
+      const failure = createClaudeGradingProvider().grade(gradingInput());
+
+      await expect(failure).rejects.toMatchObject({ name: 'ZodError' });
+      // The thrown object must say WHICH case it was, not just that it failed.
+      await failure.catch((err) => {
+        expect(err).not.toBeInstanceOf(GradingProviderError);
+        expect(err.message).toContain('refusal');
+        expect(err.message).not.toContain('max_tokens');
+      });
     });
 
     it('a response with no text block is a GradingProviderError', async () => {
@@ -267,6 +285,36 @@ describe('createClaudeGradingProvider — KAN-44, run through the real @anthropi
 
       await expect(createClaudeGradingProvider().grade(gradingInput())).rejects.toBeInstanceOf(GradingProviderError);
       expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    // The SDK reads `ANTHROPIC_LOG` when the option is absent, and at debug
+    // level logs the response body: annotation quotes (verbatim essay text)
+    // and thinking blocks. `logLevel: 'warn'` in claude-client.ts wins over it.
+    it('createAnthropicApiClient pins logLevel to warn, so ANTHROPIC_LOG=debug cannot log response bodies', () => {
+      vi.stubEnv('ANTHROPIC_LOG', 'debug');
+      try {
+        expect((createAnthropicApiClient() as unknown as { logLevel: string }).logLevel).toBe('warn');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('grading with ANTHROPIC_LOG=debug set writes nothing containing essay text to any console level', async () => {
+      vi.stubEnv('ANTHROPIC_LOG', 'debug');
+      const spies = (['debug', 'info', 'log', 'warn', 'error'] as const).map((level) => vi.spyOn(console, level).mockImplementation(() => {}));
+      try {
+        // The quote is a verbatim slice of the essay, as the real ones are.
+        stubFetch(async () => httpResponse(messageBody({ text: JSON.stringify(validCompletion({ annotations: [{ quote: 'Geheimtext', dimension: 'grammarSyntax', severity: 'minor', message: 'm' }] })) })));
+
+        await createClaudeGradingProvider().grade(gradingInput());
+
+        // `inspect`, not `String`: the SDK passes its details as objects.
+        const logged = spies.flatMap((spy) => spy.mock.calls.map((args) => inspect(args, { depth: null }))).join('\n');
+        expect(logged).not.toContain('Geheimtext');
+      } finally {
+        spies.forEach((spy) => spy.mockRestore());
+        vi.unstubAllEnvs();
+      }
     });
 
     it('createAnthropicApiClient reads the key when called, not at import', () => {

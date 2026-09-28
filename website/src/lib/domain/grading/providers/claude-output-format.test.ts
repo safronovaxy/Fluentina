@@ -29,10 +29,29 @@ describe('gradingOutputFormat — KAN-44, structured outputs derived from provid
     expect(schema.type).toBe('object');
   });
 
-  it('contains none of the keywords the API rejects with a 400', () => {
-    const banned = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength', 'maxItems', '$schema'];
+  // An allow-list, not a deny-list: a check for the ABSENCE of named
+  // keywords cannot catch a keyword nobody thought to name, and that is the
+  // case that matters. Someone adds `.regex()`, `.default()`, `.nullable()` or
+  // a union to `providerGradingResponseSchema`; `zod-to-json-schema` emits
+  // `pattern` / `default` / `anyOf`; a deny-list stays green and the first
+  // real request is the one that finds out. Derived from what the
+  // Structured outputs docs support, as reflected in the SDK's own
+  // transformer (`@anthropic-ai/sdk/lib/transform-json-schema.js`, which
+  // keeps exactly these), plus `enum`, which the docs support and which this
+  // file keeps on purpose (the transformer would fold it into a description).
+  // Extending it is a deliberate act: a new keyword needs a reason to be
+  // believed supported. Unverified against a live response — this pins what we
+  // send, against the docs.
+  it('sends only keywords from the supported allow-list, on every node', () => {
+    const allowed = new Set([
+      'type', 'description', 'title', 'properties', 'additionalProperties', 'required', 'format', 'items', 'minItems', // SDK transformer's kept set
+      'enum', // supported by the docs; kept here deliberately
+    ]);
+    const present = new Set(allNodes(schema).flatMap((node) => Object.keys(node)));
+
+    const unsupported = [...present].filter((keyword) => !allowed.has(keyword));
+    expect(unsupported, `keywords outside the supported set reached the wire schema: ${unsupported.join(', ')}`).toEqual([]);
     for (const node of allNodes(schema)) {
-      for (const key of banned) expect(node, `unsupported keyword "${key}" left in the wire schema`).not.toHaveProperty(key);
       if ('minItems' in node) expect(node.minItems as number).toBeLessThanOrEqual(1);
     }
   });

@@ -23,7 +23,15 @@ import 'server-only';
  *    primary rather than throwing: `orchestrate-grading.ts` calls this
  *    factory outside its `try`, after the job is claimed, so a throw here
  *    would strand the job in `processing`. The cost of a typo is grading on
- *    the intended default, which is visible in `grading_jobs.provider`.
+ *    the intended default, which is visible in `grading_jobs.provider` —
+ *    and, since that default is the ~20x more expensive provider, it also
+ *    logs one structured warning (`warnUnrecognisedGradingProvider`). Same
+ *    shape as `rate-limit.ts`'s `warnRejectedEnvOverride`: a configuration
+ *    problem for an operator to notice, with the operator-typed raw value.
+ *    Unlike that one it fires per call, not once per process — this factory
+ *    runs per job and route modules load lazily per instance, so there is no
+ *    module-level seam to hang "once" on — and a misconfigured deployment
+ *    should be loud on every job it affects.
  *
  * Neither real provider reads its credential at import or construction —
  * only inside `grade()` — so this factory never throws for a missing key.
@@ -34,12 +42,32 @@ import { createClaudeGradingProvider } from './providers/claude-provider';
 import { createMistralGradingProvider } from './providers/mistral-provider';
 import type { GradingProvider } from './provider';
 
+/** Values that select Claude on purpose — anything else non-empty is treated as a typo and warned about. */
+const CLAUDE_ALIASES: ReadonlySet<string> = new Set(['claude']);
+
+function warnUnrecognisedGradingProvider(raw: string, selected: GradingProvider['name']): void {
+  console.warn(
+    JSON.stringify({
+      severity: 'WARNING',
+      event: 'grading_provider_env_unrecognised',
+      name: 'GRADING_PROVIDER',
+      value: raw,
+      selected,
+    }),
+  );
+}
+
 export function createGradingProvider(): GradingProvider {
   if (process.env.MOCK_GRADING_PROVIDER === '1') {
     return createFakeGradingProvider();
   }
-  if (process.env.GRADING_PROVIDER === 'mistral') {
+  const raw = process.env.GRADING_PROVIDER;
+  if (raw === 'mistral') {
     return createMistralGradingProvider();
+  }
+  // Exact match, as before: only a blank or absent value is "not set".
+  if (raw !== undefined && raw.trim() !== '' && !CLAUDE_ALIASES.has(raw)) {
+    warnUnrecognisedGradingProvider(raw, 'claude');
   }
   return createClaudeGradingProvider();
 }

@@ -55,10 +55,11 @@ const CLAUDE_MODEL = 'claude-opus-5-5';
 /**
  * Set explicitly rather than inherited. On Opus 5.5 `medium` is the API
  * default, so this changes nothing today — it pins spend against a future
- * default change. Thinking can't be turned off on this model (`thinking:
- * {type: 'disabled'}` and `budget_tokens` both 400), so effort is the only
- * lever on how much of `MAX_OUTPUT_TOKENS` reasoning consumes before the
- * rubric JSON starts.
+ * default change. Thinking is documented as always on for this model, with
+ * `thinking: {type: 'disabled'}` and `budget_tokens` not supported (from the
+ * model documentation this story was built on; unverified against a live
+ * response), so effort is the only lever on how much of `MAX_OUTPUT_TOKENS`
+ * reasoning consumes before the rubric JSON starts.
  */
 const CLAUDE_EFFORT = 'medium';
 
@@ -68,20 +69,37 @@ const CLAUDE_EFFORT = 'medium';
  * This is deliberately not `mistral-provider.ts`'s 3000: that fits a
  * response with no reasoning in front of it, and here a tight ceiling can be
  * spent on thinking before the JSON begins, surfacing as a truncated
- * completion. A valid response is a few thousand tokens (four comments, up
- * to 60 annotations, a summary); 16k leaves room for `medium`-effort
- * reasoning on top. Unmeasured — the ADR-4 spike should record real
- * thinking/response token counts and tune this. Every token of it is billable:
- * see `cost.ts` and the worst-case figure in this story's handover.
+ * completion.
+ *
+ * Sized against `REQUEST_TIMEOUT_MS` below, not just against the response:
+ * the two must agree, and they once did not (16,000 tokens against 45s). At
+ * any plausible generation rate (order 50-100 tokens/s) 45s delivers roughly
+ * 2,500-4,500 tokens, so a ceiling far above that can never be reached — the
+ * clock fires first. That is the expensive failure: a timeout is a
+ * `providerError`, `orchestrate-grading.ts` reverts the job to `pending`, and
+ * Cloud Tasks redelivers up to `MAX_PROVIDER_RETRY_ATTEMPTS` times, each
+ * attempt generating a full completion server-side before the client aborts
+ * — all billed, and the guest waits minutes for a failure. A truncation is
+ * the cheap failure: terminal, billed once, and `stop_reason` says why. So
+ * the ceiling is set to bind BEFORE the clock, which makes it a real guard
+ * again and the timeout a backstop for a stalled connection rather than the
+ * limit a normal completion runs into. Raise the two together, and only
+ * against measured latency.
+ *
+ * Unmeasured — the ADR-4 spike should record real thinking/response token
+ * counts and latency, and tune both. If truncations turn out to be common at
+ * this ceiling, that is the signal to measure, not to raise it blindly. Every
+ * token of it is billable: see `cost.ts`.
  */
-const MAX_OUTPUT_TOKENS = 16_000;
+const MAX_OUTPUT_TOKENS = 4_000;
 
 /**
  * Same budget-derived bound as `mistral-provider.ts` (BR-5.2's 60 seconds,
  * with headroom, and under Cloud Run's own request timeout). NOT validated
- * against Opus 5.5 latency: a completion that uses much of
- * `MAX_OUTPUT_TOKENS` may not finish in 45s, in which case it times out and
- * is retried at job level. Measure it in the ADR-4 spike before launch.
+ * against Opus 5.5 latency. `MAX_OUTPUT_TOKENS` above is sized to be
+ * reachable inside this window, so a timeout means a stalled request rather
+ * than a normal completion running long — see that comment for why the
+ * difference matters to the bill.
  */
 const REQUEST_TIMEOUT_MS = 45_000;
 
@@ -116,9 +134,11 @@ export function createClaudeGradingProvider(createClient: ClaudeClientFactory = 
           {
             model: CLAUDE_MODEL,
             max_tokens: MAX_OUTPUT_TOKENS,
-            // No `thinking` field (always on, and `disabled`/`budget_tokens`
-            // 400 on this model), no `tool_choice` (forced choice 400s), and
-            // the last message is a user turn (an assistant prefill 400s).
+            // No `thinking` field, no `tool_choice`, and the last message is
+            // a user turn: the model documentation says thinking is always
+            // on, and that a forced tool choice and an assistant prefill are
+            // not supported with it. Not observed against a live response
+            // — what the tests pin is that we never send any of the three.
             output_config: { effort: CLAUDE_EFFORT, format: gradingOutputFormat() },
             system: input.system,
             messages: [{ role: 'user', content: input.userDataBlock }],
