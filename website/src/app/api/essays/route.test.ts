@@ -181,12 +181,24 @@ describe('POST /api/essays — KAN-36: a database failure on a valid submission 
   // repository layer; THIS is what makes it "any visitor, on demand": an
   // ordinary POST, a real session cookie, a valid-length essay that merely
   // contains U+0000 (nothing upstream rejects it, Postgres refuses it with
-  // SQLSTATE 22021), and the failure reaches whatever handles this route's
-  // rejection. It also guards a second failure mode the repository-layer
-  // test cannot see: a future `catch (e) { console.error('essay submit
-  // failed', e, body) }` in route.ts would put the raw body into the log
-  // ABOVE the sanitiser, with every other test in this file still green.
-  it('a NUL-containing, valid-length essay with a real session cookie fails with SQLSTATE 22021, and nothing loggable carries the essay or the session id', async () => {
+  // SQLSTATE 22021), and the request fails inside the real database layer.
+  //
+  // Since KAN-24 the route catches that failure and answers 500
+  // "internalError" (see route.ts) instead of letting it escape to the
+  // framework — this test used to assert the throw, and went red only on the
+  // merge of this branch with main, because the branch was cut before KAN-24
+  // landed. The error is no longer visible to the caller of `POST`, so the
+  // spy on `db.transaction` below passes the REAL call through and records
+  // what it rejected with: that is the error the sanitiser scrubbed, i.e.
+  // exactly what a future `catch (e) { console.error(..., e) }` in route.ts
+  // would print. That is the second failure mode this test guards, which the
+  // repository-layer test cannot see: a raw body logged ABOVE the sanitiser
+  // with every other test in this file still green.
+  //
+  // Unlike the KAN-24 test further down, which injects a synthetic Error, the
+  // failure here is a real Postgres refusal, so it also proves the sanitiser
+  // is wired into the connection this route actually uses.
+  it('a NUL-containing, valid-length essay with a real session cookie fails in the database with SQLSTATE 22021, is answered with a 500, and nothing loggable carries the essay or the session id', async () => {
     const sessionId = generateGuestSessionId();
     await createGuestSession({ kind: 'guest', sessionId });
     const fragment = 'NULESSAYFRAGMENT-Sehr geehrte Damen und Herren';
@@ -194,33 +206,44 @@ describe('POST /api/essays — KAN-36: a database failure on a valid submission 
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
       vi.spyOn(console, method).mockImplementation(() => {}),
     );
+    const realTransaction = db.transaction.bind(db) as (...args: unknown[]) => Promise<unknown>;
+    let surfaced: unknown;
+    const transactionSpy = vi.spyOn(db, 'transaction').mockImplementation(((...args: unknown[]) =>
+      realTransaction(...args).catch((error: unknown) => {
+        surfaced = error;
+        throw error;
+      })) as unknown as typeof db.transaction);
 
     try {
-      let thrown: unknown;
-      try {
-        await POST(postEssay({ content }, sessionId));
-      } catch (error) {
-        thrown = error;
-      }
+      const response = await POST(postEssay({ content }, sessionId));
+      const body: { error: string; reason?: string } = await response.json();
 
-      // The trigger: the request passed every guard and the database refused it.
-      expect(thrown, 'the route must surface the failure, not swallow it into a 2xx/4xx').toBeInstanceOf(Error);
-      expect((thrown as { cause?: { code?: unknown } }).cause?.code).toBe('22021');
+      // The trigger: the request passed every guard and the DATABASE refused
+      // it. Without this, a 500 could come from anything.
+      expect(surfaced, 'the essay insert must have reached the database and been refused').toBeInstanceOf(Error);
+      expect((surfaced as { cause?: { code?: unknown } }).cause?.code).toBe('22021');
+
+      // The route's contract for it: a safe, reason-carrying 500, nothing stored.
+      expect(response.status).toBe(500);
+      expect(body.reason).toBe('internalError');
       expect(await countEssaysForSession(sessionId)).toBe(0);
 
-      // Everything a log could receive: the error itself as `console.error`
-      // and the framework's default handling print it, plus every call made
-      // to any console method while the route ran.
+      // Everything a log or a client could receive: the error itself as
+      // `console.error` and the framework's default handling would print it,
+      // the response body, plus every call made to any console method while
+      // the route ran.
       const loggable = [
-        inspect(thrown, { depth: null }),
-        format('%s', thrown),
-        String((thrown as Error).stack),
+        inspect(surfaced, { depth: null }),
+        format('%s', surfaced),
+        String((surfaced as Error).stack),
+        JSON.stringify(body),
         ...spies.flatMap((spy) => spy.mock.calls.map((args) => `${format(...args)}\n${inspect(args, { depth: null })}`)),
       ].join('\n');
       expect(loggable).not.toContain(fragment);
       expect(loggable).not.toContain('Wort30');
       expect(loggable).not.toContain(sessionId);
     } finally {
+      transactionSpy.mockRestore();
       for (const spy of spies) spy.mockRestore();
     }
   });
