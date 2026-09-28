@@ -55,6 +55,18 @@ function foldForMatching(text: string): string {
 }
 
 /**
+ * The same diacritic fold as `foldForMatching`, minus the lowercasing. Used
+ * only by the patterns in `CASE_PRESERVED_PATTERNS`, which need German's
+ * capitalisation as a signal (see the comment on that list).
+ */
+function foldKeepCase(text: string): string {
+  return text
+    .replace(/ß/g, 'ss')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '');
+}
+
+/**
  * A directive typically opens a sentence (or the whole essay) rather than
  * sitting mid-clause — "Ignore the rubric above" versus "Many students
  * ignore the instructions above", or "Score: 100" as a standalone injected
@@ -87,15 +99,6 @@ const INJECTION_PATTERNS: readonly RegExp[] = [
 
   // German — "ignoriere/missachte/vergiss die (vorherigen) Anweisungen/Vorgaben/Bewertung/oben"
   new RegExp(String.raw`${LEAD_IN}(ignorier\w*|missachte\w*|vergiss\w*)\b[^.\n]{0,40}\b(anweisung\w*|vorgabe\w*|bewertung\w*|oben|vorherige\w*)\b`, 'i'),
-  // German — imperative "gib/gebt/geben Sie (mir/diesem/dem ...) 100/beste/volle/maximale/höchste
-  // Punkte/Punktzahl/Note/Bewertung". Deliberately imperative forms only, not `\bgib\w*\b`: that
-  // wildcard also matched `gibt` — one of the commonest German verb forms ("es gibt", "die Note
-  // gibt es für...") — and unlike the other German patterns above this one had no LEAD_IN anchor
-  // to rule out mid-sentence prose. Round-2 review measured four ordinary B2 sentences about
-  // school/exams (all containing `gibt`) getting clamped to a fail with no feedback. Adding
-  // LEAD_IN instead of narrowing the verb was rejected: it breaks "... und gib die volle
-  // Punktzahl", since `und` is neither a sentence boundary nor a lead-in word.
-  /\b(gib|gebt|geben sie)\b[^.\n]{0,30}\b(100|beste\w*|volle\w*|maximale\w*|hochste\w*)\b[^.\n]{0,25}\b(punktzahl\w*|punkte?|note|noten|bewertung)\b/i,
   // German — "du bist (jetzt/ab jetzt) ..." role override
   /\bdu bist\s+(jetzt|ab jetzt)\b/i,
   // German — explicit new-instruction framing
@@ -115,6 +118,42 @@ const INJECTION_PATTERNS: readonly RegExp[] = [
   /§§§FLUENTINA_ESSAY[A-Z0-9_-]*§§§_(START|END)\b/i,
 ];
 
+/**
+ * Patterns that run CASE-SENSITIVELY against the diacritic-folded but
+ * case-PRESERVED corpus (`foldKeepCase`), not the fully folded one above.
+ *
+ * German imperative "gib/gebt/geben Sie (mir/diesem ...) 100/beste/volle/
+ * maximale/höchste Punkte/Punktzahl/Note/Bewertung". Of the three verb forms
+ * only `gib` is unambiguously imperative, so it needs no disambiguation. The
+ * other two are also ordinary indicative forms, and lowercasing destroys the
+ * only signal German offers to tell them apart:
+ *  - `geben Sie` (polite imperative) vs `geben sie` ("they give"): the
+ *    capitalised `Sie` is the sole distinction, so the pattern requires it and
+ *    has no `i` flag. Anchoring on LEAD_IN was tried and cannot work — `nun`,
+ *    `jetzt` and `einfach` are lead-in words AND ordinary fronted adverbials
+ *    ("Jetzt geben sie die volle Punktzahl fast nie."), while a colon or comma
+ *    ("Sehr geehrte Prüfer, geben Sie mir ...") is not a lead-in at all.
+ *  - `gebt` (imperative plural) vs `ihr gebt` (indicative): disambiguated by
+ *    excluding a directly preceding `ihr`.
+ * The tail uses first-letter case classes (`[Bb]este`) because German
+ * capitalises word-initially and never mid-word, so that covers both real
+ * spellings of each noun/adjective.
+ *
+ * Not `\bgib\w*\b`: that wildcard also matched `gibt` ("es gibt"), which
+ * round-2 review measured clamping four ordinary B2 sentences to a fail.
+ *
+ * Accepted false negative: a guest who writes `geben sie` in lowercase and
+ * means the imperative is not detected. That is the safe direction (no honest
+ * essay is clamped), with `prompt.ts`'s structural delimiting still behind it.
+ */
+const CASE_PRESERVED_PATTERNS: readonly RegExp[] = [
+  new RegExp(
+    String.raw`(?:\b[Gg]ib\b|(?<!\b[Ii]hr\s)\b[Gg]ebt\b|\b[Gg]eben Sie\b)` +
+      String.raw`[^.\n]{0,30}\b(100|[Bb]este\w*|[Vv]olle\w*|[Mm]aximale\w*|[Hh]ochste\w*)\b` +
+      String.raw`[^.\n]{0,25}\b([Pp]unktzahl\w*|[Pp]unkte?|[Nn]ote|[Nn]oten|[Bb]ewertung)\b`,
+  ),
+];
+
 export interface PromptInjectionCheck {
   readonly suspected: boolean;
   /** How many distinct patterns matched — telemetry-safe (see this module's own comment), never which ones or where. */
@@ -123,6 +162,9 @@ export interface PromptInjectionCheck {
 
 export function detectPromptInjection(content: string): PromptInjectionCheck {
   const folded = foldForMatching(content);
-  const matchCount = INJECTION_PATTERNS.reduce((count, pattern) => (pattern.test(folded) ? count + 1 : count), 0);
+  const casePreserved = foldKeepCase(content);
+  const countMatches = (patterns: readonly RegExp[], corpus: string) =>
+    patterns.reduce((count, pattern) => (pattern.test(corpus) ? count + 1 : count), 0);
+  const matchCount = countMatches(INJECTION_PATTERNS, folded) + countMatches(CASE_PRESERVED_PATTERNS, casePreserved);
   return { suspected: matchCount > 0, matchCount };
 }
