@@ -18,6 +18,72 @@ import { Client, type Pool } from 'pg';
 const PASSWORD = 'Sup3r-S3cret-Pw!';
 const DATABASE_URL = `postgres://fluentina_app:${PASSWORD}@10.20.30.40:5432/fluentina?sslmode=require`;
 
+/**
+ * Stands in for the guest's essay. `query-error-sanitiser.ts` documents that
+ * `pg`'s `detail` carries `Key (col)=(<the value>)` and `Failing row contains
+ * (<the whole row>)`, so on a real constraint error these fields ARE essay
+ * text. The line must never contain it, from any field.
+ */
+const ESSAY_MARKER = 'Meine Heimatstadt ist sehr schoen ESSAY-MARKER-7f3a';
+
+/** Every field a `pg` `DatabaseError` (or Drizzle's wrapper around one) can carry that is not a short token. */
+const PG_ERROR_FIELDS = [
+  'severity',
+  'detail',
+  'hint',
+  'position',
+  'internalPosition',
+  'internalQuery',
+  'where',
+  'schema',
+  'table',
+  'column',
+  'dataType',
+  'constraint',
+  'file',
+  'line',
+  'routine',
+  'query',
+] as const;
+
+const LOGGED_KEYS = [
+  'errorCode',
+  'errorName',
+  'event',
+  'poolIdle',
+  'poolMax',
+  'poolTotal',
+  'poolWaiting',
+  'severity',
+  'syscall',
+  'timestamp',
+].sort();
+
+/**
+ * An error dirty in every place a leak could come from: the message and stack,
+ * each `pg` field above, Drizzle's `params`, and the `client` that `pg-pool`
+ * itself hangs on the error (`err.client = client`, whose parameters hold the
+ * password). Only `name`/`code`/`syscall` vary, because what the handler does
+ * with them decides which branch runs: a valid token is used, an invalid or
+ * absent one is where a careless fallback to another field would leak.
+ */
+function pgErrorCarryingSecrets(tokens: { name: unknown; code: unknown; syscall: unknown }): Error {
+  const err = new Error(`connection to ${DATABASE_URL} failed: read ECONNRESET`);
+  const planted = Object.fromEntries(PG_ERROR_FIELDS.map((f) => [f, `${f}: ${ESSAY_MARKER} ${DATABASE_URL}`]));
+  return Object.assign(err, planted, {
+    length: 123,
+    errno: -104,
+    address: '10.20.30.40',
+    port: 5432,
+    params: [ESSAY_MARKER, PASSWORD],
+    connectionString: DATABASE_URL,
+    client: { connectionParameters: { user: 'fluentina_app', password: PASSWORD, host: '10.20.30.40' } },
+    dsn: { host: '10.20.30.40', user: 'fluentina_app', password: PASSWORD },
+    cause: new Error(DATABASE_URL),
+    ...tokens,
+  });
+}
+
 type ClientModule = typeof import('./client');
 
 async function importClientWith(url: string): Promise<{ mod: ClientModule; pool: Pool }> {
@@ -25,6 +91,10 @@ async function importClientWith(url: string): Promise<{ mod: ClientModule; pool:
   vi.stubEnv('DATABASE_URL', url);
   const mod = await import('./client');
   return { mod, pool: mod.db.$client as Pool };
+}
+
+function throwsTheUrl(): never {
+  throw new Error(`getter failed for ${DATABASE_URL}`);
 }
 
 function spyOnEveryConsoleMethod() {
@@ -86,21 +156,10 @@ describe('client.ts — KAN-43: an error on an idle pooled client must not kill 
         'error',
         Object.assign(new Error('read ECONNRESET'), { name: 'Error', code: 'ECONNRESET', errno: -104, syscall: 'read' }),
       );
-      const entry = JSON.parse(console_.lines()[0]);
-      expect(Object.keys(entry).sort()).toEqual(
-        [
-          'errorCode',
-          'errorName',
-          'event',
-          'poolIdle',
-          'poolMax',
-          'poolTotal',
-          'poolWaiting',
-          'severity',
-          'syscall',
-          'timestamp',
-        ].sort(),
-      );
+      const lines = console_.lines();
+      expect(lines).toHaveLength(1);
+      const entry = JSON.parse(lines[0]);
+      expect(Object.keys(entry).sort()).toEqual(LOGGED_KEYS);
       expect(entry).toMatchObject({
         errorName: 'Error',
         errorCode: 'ECONNRESET',
@@ -130,7 +189,31 @@ describe('client.ts — KAN-43: an error on an idle pooled client must not kill 
           routine: 'ProcessInterrupts',
         }),
       );
-      expect(JSON.parse(console_.lines()[0])).toMatchObject({ errorName: 'error', errorCode: '57P01', syscall: null });
+      const lines = console_.lines();
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0])).toMatchObject({ errorName: 'error', errorCode: '57P01', syscall: null });
+    } finally {
+      await mod.closePool();
+    }
+  });
+
+  // The handler runs inside `emit`. If it throws, that throw is itself the
+  // uncaught exception it exists to prevent, and there is no outer catch.
+  it.each([
+    ['name', () => Object.defineProperty(new Error('x'), 'name', { get: throwsTheUrl })],
+    ['code', () => Object.defineProperty(new Error('x'), 'code', { get: throwsTheUrl })],
+    ['syscall', () => Object.defineProperty(new Error('x'), 'syscall', { get: throwsTheUrl })],
+    ['every property (a Proxy)', () => new Proxy(new Error('x'), { get: throwsTheUrl })],
+  ])('fails closed: an error whose %s accessor throws still does not escape emit()', async (_label, makeError) => {
+    const { mod, pool } = await importClientWith(DATABASE_URL);
+    const console_ = spyOnEveryConsoleMethod();
+    try {
+      expect(() => pool.emit('error', makeError())).not.toThrow();
+      const lines = console_.lines();
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0])).toEqual({ severity: 'WARNING', event: 'db_pool_idle_client_error' });
+      expect(lines[0]).not.toContain('postgres://');
+      expect(lines[0]).not.toContain(PASSWORD);
     } finally {
       await mod.closePool();
     }
@@ -146,49 +229,57 @@ describe('client.ts — KAN-43: the logged line never carries the connection str
     expect(line).not.toContain('fluentina_app');
     expect(line).not.toContain('10.20.30.40');
     expect(line).not.toContain(encodeURIComponent(PASSWORD));
+    // The guest's essay text (see ESSAY_MARKER) — what `detail`/`where`/... hold.
+    expect(line).not.toContain('ESSAY-MARKER');
+    expect(line).not.toContain('Heimatstadt');
   }
 
-  it('does not copy err.message, err.stack or any other field off a password-bearing error', async () => {
-    const { mod, pool } = await importClientWith(DATABASE_URL);
-    const console_ = spyOnEveryConsoleMethod();
-    try {
-      const err = Object.assign(new Error(`connection to ${DATABASE_URL} failed: read ECONNRESET`), {
-        code: 'ECONNRESET',
-        errno: -104,
-        syscall: 'read',
-        address: '10.20.30.40',
-        port: 5432,
-        connectionString: DATABASE_URL,
-        dsn: { host: '10.20.30.40', user: 'fluentina_app', password: PASSWORD },
-        detail: `password authentication failed for user "fluentina_app" (${DATABASE_URL})`,
-        cause: new Error(DATABASE_URL),
-      });
-      expect(err.stack).toContain(PASSWORD); // the leak is real before the listener runs
+  // The same dirty error is run down each branch of the short-token handling.
+  // A leak is only possible where a field OTHER than the three short tokens is
+  // read, and that only happens as a fallback when a token is missing or
+  // invalid — so the absent and hostile cases are the ones that matter, and
+  // the valid case is what proves the allowlist is not simply logging nothing.
+  it.each([
+    [
+      'valid name, code and syscall',
+      { name: 'error', code: 'ECONNRESET', syscall: 'read' },
+      { errorName: 'error', errorCode: 'ECONNRESET', syscall: 'read' },
+    ],
+    [
+      'name, code and syscall all absent',
+      { name: undefined, code: undefined, syscall: undefined },
+      { errorName: null, errorCode: null, syscall: null },
+    ],
+    [
+      'name, code and syscall that are really the connection string',
+      { name: DATABASE_URL, code: DATABASE_URL, syscall: DATABASE_URL },
+      { errorName: null, errorCode: null, syscall: null },
+    ],
+  ])(
+    'copies nothing but the allowlist off an error carrying the password and essay text in every pg field: %s',
+    async (_label, tokens, expected) => {
+      const { mod, pool } = await importClientWith(DATABASE_URL);
+      const console_ = spyOnEveryConsoleMethod();
+      try {
+        const err = pgErrorCarryingSecrets(tokens);
+        expect(err.stack).toContain(PASSWORD); // the leak is real before the listener runs
+        for (const field of PG_ERROR_FIELDS) expect(String((err as never)[field])).toContain(ESSAY_MARKER);
 
-      pool.emit('error', err);
+        pool.emit('error', err);
 
-      const lines = console_.lines();
-      expect(lines).toHaveLength(1);
-      assertNoCredentialIn(lines[0]);
-      expect(JSON.parse(lines[0])).toMatchObject({ errorCode: 'ECONNRESET', syscall: 'read' });
-    } finally {
-      await mod.closePool();
-    }
-  });
-
-  it('does not trust the short fields either: a code, name or syscall that is really the URL is dropped', async () => {
-    const { mod, pool } = await importClientWith(DATABASE_URL);
-    const console_ = spyOnEveryConsoleMethod();
-    try {
-      pool.emit('error', Object.assign(new Error('x'), { name: DATABASE_URL, code: DATABASE_URL, syscall: DATABASE_URL }));
-      const lines = console_.lines();
-      expect(lines).toHaveLength(1);
-      assertNoCredentialIn(lines[0]);
-      expect(JSON.parse(lines[0])).toMatchObject({ errorName: null, errorCode: null, syscall: null });
-    } finally {
-      await mod.closePool();
-    }
-  });
+        const lines = console_.lines();
+        expect(lines).toHaveLength(1);
+        assertNoCredentialIn(lines[0]);
+        const entry = JSON.parse(lines[0]);
+        expect(Object.keys(entry).sort()).toEqual(LOGGED_KEYS);
+        // Numbers stay numbers: a pg field smuggled into a pool count is a string.
+        expect(entry).toMatchObject({ ...expected, poolMax: 10, poolTotal: 0, poolIdle: 0, poolWaiting: 0 });
+        expect(entry).toMatchObject({ severity: 'WARNING', event: 'db_pool_idle_client_error' });
+      } finally {
+        await mod.closePool();
+      }
+    },
+  );
 
   it.each([
     ['a bare string', DATABASE_URL],
@@ -219,11 +310,19 @@ describe('client.ts — KAN-43: against a real database, a killed idle connectio
     const uncaught = vi.fn();
     process.on('uncaughtException', uncaught);
     try {
-      const client = await pool.connect();
-      const { rows } = await client.query<{ pid: number }>('select pg_backend_pid() as pid');
-      client.release(); // idle again: nothing is awaiting a result on this connection
+      // Three real connections, all released: idle, and counted by the pool.
+      const clients = await Promise.all([pool.connect(), pool.connect(), pool.connect()]);
+      const { rows } = await clients[0].query<{ pid: number }>('select pg_backend_pid() as pid');
+      clients.forEach((c) => c.release()); // idle again: nothing is awaiting a result on these
+      expect(pool.totalCount).toBe(3);
+      expect(pool.idleCount).toBe(3);
 
-      const killed = new Promise<void>((resolve) => pool.once('error', () => resolve()));
+      // The production listener must be the ONLY one. Any other 'error'
+      // listener (say, one this test added to await the event) satisfies
+      // EventEmitter on its own, so emit could never throw and the
+      // uncaughtException check below could not fail whatever client.ts did.
+      expect(pool.listenerCount('error')).toBe(1);
+
       // A separate connection, outside the pool, plays the part of Cloud SQL.
       const admin = new Client({ connectionString: process.env.DATABASE_URL });
       await admin.connect();
@@ -232,16 +331,52 @@ describe('client.ts — KAN-43: against a real database, a killed idle connectio
       } finally {
         await admin.end();
       }
-      await killed;
+      // Wait on the thing the listener does. If it were missing, emit would
+      // throw inside pg's socket callback (an uncaughtException, recorded
+      // below) and no line would ever appear.
+      await vi.waitFor(() => expect(console_.lines()).toHaveLength(1), { timeout: 5000 });
 
       const lines = console_.lines();
       expect(lines).toHaveLength(1);
-      expect(JSON.parse(lines[0])).toMatchObject({ event: 'db_pool_idle_client_error', errorCode: '57P01' });
+      const entry = JSON.parse(lines[0]);
+      expect(entry).toMatchObject({ event: 'db_pool_idle_client_error', errorCode: '57P01', poolMax: 10 });
+      // Counts are read when the event fires, not at module load: the dead
+      // client is already out of the pool, the other two are not.
+      expect(entry).toMatchObject({ poolTotal: 2, poolIdle: 2, poolWaiting: 0 });
       expect(uncaught).not.toHaveBeenCalled();
 
       await expect(pool.query('select 1 as ok')).resolves.toMatchObject({ rows: [{ ok: 1 }] });
     } finally {
       process.off('uncaughtException', uncaught);
+      await mod.closePool();
+    }
+  });
+
+  // `poolWaiting` cannot be non-zero on a REAL idle-client error: `pg` hands an
+  // idle client straight to a queued request, so an idle client and a waiting
+  // one never coexist. So this one emits synthetically, against a genuinely
+  // saturated pool, to prove the field reads the live queue and is not a
+  // constant that merely happens to be right.
+  it('reads every pool count live, at the moment the event fires (saturated pool, two requests queued)', async () => {
+    vi.resetModules();
+    vi.unstubAllEnvs();
+    const mod = await import('./client');
+    const pool = mod.db.$client as Pool;
+    const console_ = spyOnEveryConsoleMethod();
+    try {
+      const held = await Promise.all(Array.from({ length: 10 }, () => pool.connect()));
+      const queued = [pool.connect(), pool.connect()];
+      await vi.waitFor(() => expect(pool.waitingCount).toBe(2));
+
+      pool.emit('error', Object.assign(new Error('x'), { code: 'ECONNRESET' }));
+
+      const lines = console_.lines();
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0])).toMatchObject({ poolMax: 10, poolTotal: 10, poolIdle: 0, poolWaiting: 2 });
+
+      held.forEach((c) => c.release());
+      (await Promise.all(queued)).forEach((c) => c.release());
+    } finally {
       await mod.closePool();
     }
   });

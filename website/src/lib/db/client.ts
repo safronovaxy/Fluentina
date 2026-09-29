@@ -44,12 +44,19 @@ installQueryErrorSanitiser();
 // discarded the dead client by the time this fires, so logging is the whole
 // job; the next `pool.query` opens a fresh connection.
 //
-// Attached before `drizzle(pool)` below so there is no window in which the
-// pool exists without one. NOT an empty handler: one line per event goes out
-// in the same one-JSON-object-per-line idiom as `rate-limit.ts` and
-// `grading/telemetry.ts`, with the pool's own counts, because a run of these
-// is the evidence ADR-16 (pool sizing / Cloud SQL connection limits) is
-// waiting for.
+// Attached before `drizzle(pool)` below, but the ordering is not what closes
+// the window: this module body is synchronous and `new Pool()` opens no socket
+// (`pg` connects lazily, on the first query), so no client can exist, let
+// alone go idle and die, before this line has run. NOT an empty handler: one
+// line per event goes out in the same one-JSON-object-per-line idiom as
+// `rate-limit.ts` and `grading/telemetry.ts`, with the pool's own counts as
+// diagnostic context for the error — how much of the pool went with it. They
+// are sampled AFTER `pg` has removed the dead client, so they show what is
+// left, not the peak; and `poolWaiting` is effectively always 0 here, because
+// `pg` hands an idle client straight to a pending request, so an idle client
+// and a queued one never coexist. This line is NOT the saturation evidence
+// ADR-16 (pool sizing) needs; that is `waitingCount`/`totalCount` sampled
+// under load, which is a separate piece of work.
 //
 // METADATA ONLY, by allowlist. `err.message` is never copied, and neither is
 // `stack` or any other property: `pg` builds its connection errors from the
@@ -58,6 +65,16 @@ installQueryErrorSanitiser();
 // (SQLSTATE, libuv errno name, syscall) and is dropped if it does not match.
 // This is the pool-level counterpart to `query-error-sanitiser.ts`, which
 // covers errors that reach a QUERY's promise and never sees these.
+//
+// The shape check bounds LENGTH and CHARSET, not provenance: any alphanumeric
+// `err.name` of 40 characters or fewer is logged verbatim. That is deliberate
+// (a class name is not sensitive), but do not read it as "this field is safe
+// whatever put it there" — widening the fallback to another `pg` field
+// (`detail`, `where`, `severity`) would put row values into the log.
+//
+// Fails CLOSED, like `query-error-sanitiser.ts`: this runs inside `emit`, so a
+// throw from here (a getter on the error object that throws, say) would be the
+// very uncaught exception the listener exists to prevent.
 const SQLSTATE_OR_ERRNO_NAME = /^(?:[0-9A-Z]{5}|E[A-Z0-9_]{2,30})$/;
 const SYSCALL_NAME = /^[a-z_]{2,20}$/;
 const ERROR_CLASS_NAME = /^[A-Za-z][A-Za-z0-9]{0,39}$/;
@@ -67,21 +84,25 @@ function shortToken(value: unknown, shape: RegExp): string | null {
 }
 
 function logIdleClientError(err: unknown): void {
-  const e = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : {};
-  console.warn(
-    JSON.stringify({
-      severity: 'WARNING',
-      event: 'db_pool_idle_client_error',
-      timestamp: new Date().toISOString(),
-      errorName: shortToken(e.name, ERROR_CLASS_NAME),
-      errorCode: shortToken(e.code, SQLSTATE_OR_ERRNO_NAME),
-      syscall: shortToken(e.syscall, SYSCALL_NAME),
-      poolMax: pool.options.max ?? null,
-      poolTotal: pool.totalCount,
-      poolIdle: pool.idleCount,
-      poolWaiting: pool.waitingCount,
-    }),
-  );
+  try {
+    const e = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : {};
+    console.warn(
+      JSON.stringify({
+        severity: 'WARNING',
+        event: 'db_pool_idle_client_error',
+        timestamp: new Date().toISOString(),
+        errorName: shortToken(e.name, ERROR_CLASS_NAME),
+        errorCode: shortToken(e.code, SQLSTATE_OR_ERRNO_NAME),
+        syscall: shortToken(e.syscall, SYSCALL_NAME),
+        poolMax: pool.options.max ?? null,
+        poolTotal: pool.totalCount,
+        poolIdle: pool.idleCount,
+        poolWaiting: pool.waitingCount,
+      }),
+    );
+  } catch {
+    console.warn('{"severity":"WARNING","event":"db_pool_idle_client_error"}');
+  }
 }
 
 pool.on('error', logIdleClientError);
