@@ -7,18 +7,20 @@ import 'server-only';
  * columns, rather than duplicating them.
  *
  * `GradingJobRecord` (this file's own, internal type) carries `rawInput`/
- * `rawOutput` — the ADR-5 persistence a future fine-tuning dataset needs.
- * `lib/contracts/grading-job.ts`'s `GradingJob` (the PUBLIC shape) does not
- * — `toPublicGradingJob` below is the one place a raw prompt/response could
- * leak into an HTTP response, and it deliberately never reads those two
- * columns off `row` when building that shape.
+ * `rawOutput` — the ADR-5 persistence a future fine-tuning dataset needs, and
+ * the full `GradingResult`. Nothing in this file produces an HTTP-facing
+ * shape, on purpose (KAN-19): a `toPublic…` mapper here took a record and
+ * returned the full result with no actor anywhere in its signature, which is
+ * the hazard. What a caller may be told about a job is decided by
+ * `lib/domain/grading/grading-status.ts::getGradingStatus`, which cannot be
+ * called without an `OwnerActor`; this file's job is ownership (`ownedBy`).
  */
 import { eq, and } from 'drizzle-orm';
 import { db } from './client';
 import { gradingJobs, essays } from './schema';
 import { ownedBy } from './ownership';
 import type { OwnerActor, SystemActor } from '@/lib/contracts/actor';
-import type { GradingJob, GradingJobStatus } from '@/lib/contracts/grading-job';
+import type { GradingJobStatus } from '@/lib/contracts/grading-job';
 import { isGradingFailureReason, type GradingFailureReason, type GradingResult } from '@/lib/contracts/grading';
 
 /** Internal-only row shape — includes the ADR-5 raw persistence. Never returned from an ownership-scoped read; see this file's own top comment. */
@@ -67,20 +69,6 @@ function toRecord(row: typeof gradingJobs.$inferSelect): GradingJobRecord {
   };
 }
 
-/** The public, HTTP-safe view — see this file's own top comment for why `rawInput`/`rawOutput` never reach here. */
-export function toPublicGradingJob(record: GradingJobRecord): GradingJob {
-  return {
-    id: record.id,
-    essayId: record.essayId,
-    status: record.status,
-    provider: record.provider,
-    createdAt: record.createdAt,
-    completedAt: record.completedAt,
-    result: record.status === 'succeeded' ? record.result : null,
-    failureReason: record.status === 'failed' ? record.errorType : null,
-  };
-}
-
 /**
  * Creates the `pending` row for a just-submitted essay — ownership-scoped,
  * per KAN-16 round-1 review (finding 3): the only caller today
@@ -117,8 +105,8 @@ export async function createGradingJob(actor: OwnerActor, essayId: string): Prom
 }
 
 /**
- * Ownership-scoped read, joined through `essays` — this is what
- * `GET /api/essays/[id]/grading` calls, and the only place a guest or
+ * Ownership-scoped read, joined through `essays` — what `getGradingStatus`
+ * (behind `GET /api/essays/[id]/grading`) calls, and the only place a guest or
  * registered user ever reads a grading job. Returns null both when no job
  * exists for that essay and when the essay itself isn't `actor`'s (or
  * doesn't exist at all) — the same "not found and not yours are outwardly

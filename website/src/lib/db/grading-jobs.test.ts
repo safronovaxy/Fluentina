@@ -1,6 +1,7 @@
 /** @vitest-environment node */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import * as gradingJobsRepository from './grading-jobs';
 import { createEssay } from './essays';
 import { createGuestSession, convertGuestSessionToUser } from './guest-sessions';
 import {
@@ -11,7 +12,6 @@ import {
   markGradingJobProcessingUnscoped,
   markGradingJobSucceededUnscoped,
   revertGradingJobToPendingUnscoped,
-  toPublicGradingJob,
 } from './grading-jobs';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
@@ -150,7 +150,7 @@ describe('createGradingJob / getGradingJobByEssayId — ownership joins through 
 });
 
 describe('markGradingJobProcessingUnscoped / markGradingJobSucceededUnscoped / markGradingJobFailedUnscoped', () => {
-  it('transitions pending -> processing -> succeeded, and the public view exposes the result only once succeeded', async () => {
+  it('transitions pending -> processing -> succeeded, persisting the result and the raw input alongside it', async () => {
     const actor = newGuestActor();
     await createGuestSession(actor);
     const essay = await createEssay(actor, 'Essay content.');
@@ -173,14 +173,9 @@ describe('markGradingJobProcessingUnscoped / markGradingJobSucceededUnscoped / m
     expect(succeeded?.status).toBe('succeeded');
     expect(succeeded?.result?.overallScore).toBe(70);
     expect(succeeded?.rawInput).toBe('the prompt');
-
-    const publicView = toPublicGradingJob(succeeded!);
-    expect(publicView.result?.overallScore).toBe(70);
-    expect((publicView as unknown as Record<string, unknown>).rawInput).toBeUndefined();
-    expect((publicView as unknown as Record<string, unknown>).rawOutput).toBeUndefined();
   });
 
-  it('a failed job carries a failure reason in the public view, and no result', async () => {
+  it('a failed job records its failure reason, and no result', async () => {
     const actor = newGuestActor();
     await createGuestSession(actor);
     const essay = await createEssay(actor, 'Essay content.');
@@ -189,11 +184,10 @@ describe('markGradingJobProcessingUnscoped / markGradingJobSucceededUnscoped / m
     await markGradingJobFailedUnscoped(SYSTEM_ACTOR, job.id, 'providerError', 'mistral');
 
     const failed = await getGradingJobByIdUnscoped(SYSTEM_ACTOR, job.id);
-    const publicView = toPublicGradingJob(failed!);
 
-    expect(publicView.status).toBe('failed');
-    expect(publicView.failureReason).toBe('providerError');
-    expect(publicView.result).toBeNull();
+    expect(failed?.status).toBe('failed');
+    expect(failed?.errorType).toBe('providerError');
+    expect(failed?.result).toBeNull();
   });
 
   // KAN-16 round-1 review, finding 5: the claim itself must be atomic and
@@ -236,5 +230,19 @@ describe('markGradingJobProcessingUnscoped / markGradingJobSucceededUnscoped / m
       expect((await getGradingJobByIdUnscoped(SYSTEM_ACTOR, job.id))?.status).toBe('pending');
       expect(await markGradingJobProcessingUnscoped(SYSTEM_ACTOR, job.id)).toBe(true);
     });
+  });
+});
+
+// KAN-19: `toPublicGradingJob` took a stored job and returned an
+// HTTP-serialisable object holding the full `GradingResult`, with no actor
+// anywhere in its signature. What a caller may be told about a job is decided
+// by `getGradingStatus`, which cannot be called without an `OwnerActor`;
+// nothing here produces a wire shape. A name check is a tripwire, not a proof
+// (a differently named mapper would slip past it) — the proof that the
+// response contract is enforced is the route's serialisation test.
+describe('lib/db/grading-jobs — produces no wire shape (KAN-19)', () => {
+  it('exports no public-view mapper', () => {
+    const mappers = Object.keys(gradingJobsRepository).filter((name) => /public|wire|view|serialis|dto/i.test(name));
+    expect(mappers).toEqual([]);
   });
 });

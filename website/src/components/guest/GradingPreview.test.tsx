@@ -13,7 +13,7 @@ import {
   type GradingFailureReason,
   type GradingResult,
 } from '@/lib/contracts/grading';
-import { buildGradingResult, clampForSuspectedInjection } from '@/lib/domain/grading/result';
+import type { GradingReportView, WorkedExampleView } from '@/lib/contracts/grading-report';
 
 // The REAL catalogues, not hand-written stand-ins: a key missing from the
 // `preview` block is a compile error in the page that builds `strings` and
@@ -50,16 +50,60 @@ function gradingResult(overrides: Partial<GradingResult> = {}): GradingResult {
   };
 }
 
+/**
+ * The three shapes of `report` the server can send (KAN-19). What each MAY
+ * contain is the server's rule and is pinned where it is decided
+ * (`grading-status.test.ts`, the route test); these are hand-built wire
+ * values, so this file tests only what the screen does with each.
+ */
+function exampleView(overrides: Partial<WorkedExampleView> = {}): WorkedExampleView {
+  return {
+    dimension: 'grammarSyntax',
+    severity: 'major',
+    message: 'Nach "Gestern" steht das Verb an zweiter Stelle.',
+    suggestion: 'Gestern bin ich zu Hause geblieben',
+    before: 'Gestern ',
+    highlighted: ERROR_QUOTE,
+    after: ', weil es regnete.',
+    ...overrides,
+  };
+}
+
+type LockedReport = Extract<GradingReportView, { access: 'locked' }>;
+
+function lockedReport(overrides: Partial<LockedReport> = {}): LockedReport {
+  return {
+    access: 'locked',
+    overallScore: 80,
+    overallBand: bandForScore(80),
+    annotationCount: 5,
+    annotationCountByDimension: {
+      textStructureCohesion: 1,
+      vocabularyLexicalDensity: 0,
+      grammarSyntax: 3,
+      topicRelevanceContentCoverage: 1,
+    },
+    workedExample: exampleView(),
+    ...overrides,
+  };
+}
+
+const withheldReport: GradingReportView = { access: 'withheld', reason: 'flaggedForReview' };
+
+function fullReport(result: GradingResult = gradingResult()): GradingReportView {
+  return { access: 'full', result, workedExample: exampleView() };
+}
+
 interface Reply {
   readonly status?: number;
   readonly body: unknown;
   readonly headers?: Record<string, string>;
 }
-const pending: Reply = { body: { status: 'pending', result: null, failureReason: null } };
-const processing: Reply = { body: { status: 'processing', result: null, failureReason: null } };
-const succeeded = (result: GradingResult): Reply => ({ body: { status: 'succeeded', result, failureReason: null } });
+const pending: Reply = { body: { status: 'pending', report: null, failureReason: null } };
+const processing: Reply = { body: { status: 'processing', report: null, failureReason: null } };
+const succeeded = (report: unknown): Reply => ({ body: { status: 'succeeded', report, failureReason: null } });
 const failed = (failureReason: GradingFailureReason | null): Reply => ({
-  body: { status: 'failed', result: null, failureReason },
+  body: { status: 'failed', report: null, failureReason },
 });
 
 /**
@@ -117,7 +161,7 @@ function renderPreview(strings: GradingPreviewStrings = EN) {
   const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
   return render(
     <QueryClientProvider client={client}>
-      <GradingPreview essayId={ESSAY_ID} essayContent={ESSAY} strings={strings} tryAgainAction={TRY_AGAIN} />
+      <GradingPreview essayId={ESSAY_ID} strings={strings} tryAgainAction={TRY_AGAIN} />
     </QueryClientProvider>,
   );
 }
@@ -159,7 +203,7 @@ describe('GradingPreview — pending: a plain, honest waiting state', () => {
 describe('GradingPreview — polling (ADR-2: every 2-3 seconds until the job is ready)', () => {
   it('asks again after 2-3 seconds, keeps asking while pending, and shows the score the moment the job succeeds', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const fetchSpy = stubFetch(pending, processing, succeeded(gradingResult()));
+    const fetchSpy = stubFetch(pending, processing, succeeded(lockedReport()));
     renderPreview();
 
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
@@ -179,7 +223,7 @@ describe('GradingPreview — polling (ADR-2: every 2-3 seconds until the job is 
   });
 
   it.each([
-    ['succeeded', succeeded(gradingResult())],
+    ['succeeded', succeeded(lockedReport())],
     ['failed', failed('providerError')],
   ])('stops polling once the job has %s', async (_name, terminal) => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -196,11 +240,11 @@ describe('GradingPreview — polling (ADR-2: every 2-3 seconds until the job is 
   // The app's shared QueryClient (components/Providers.tsx) sets a
   // 5-minute staleTime for CMS content; a `pending` answer is stale at once.
   it('coming back to a screen whose cached answer was still pending asks again immediately, even under the app\'s 5-minute staleTime', async () => {
-    const fetchSpy = stubFetch(pending, succeeded(gradingResult()));
+    const fetchSpy = stubFetch(pending, succeeded(lockedReport()));
     const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0, staleTime: 5 * 60 * 1000 } } });
     const ui = (
       <QueryClientProvider client={client}>
-        <GradingPreview essayId={ESSAY_ID} essayContent={ESSAY} strings={EN} tryAgainAction={TRY_AGAIN} />
+        <GradingPreview essayId={ESSAY_ID} strings={EN} tryAgainAction={TRY_AGAIN} />
       </QueryClientProvider>
     );
     const first = render(ui);
@@ -279,7 +323,7 @@ describe('GradingPreview — polling (ADR-2: every 2-3 seconds until the job is 
   it('measures the job\'s age on the server\'s clock (the Date header), so a guest whose own clock is hours fast does not see every job as stalled', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const serverNow = Date.now() - 3 * 60 * 60 * 1000; // this browser's clock is three hours ahead of the server's
-    const body = { status: 'pending', result: null, failureReason: null, createdAt: new Date(serverNow - 5000).toISOString() };
+    const body = { status: 'pending', report: null, failureReason: null, createdAt: new Date(serverNow - 5000).toISOString() };
     stubFetch({ body, headers: { date: new Date(serverNow).toUTCString() } });
     renderPreview();
 
@@ -288,7 +332,7 @@ describe('GradingPreview — polling (ADR-2: every 2-3 seconds until the job is 
   });
 
   it('an unfinished job with no readable `createdAt` cannot be bounded, so it is a failed poll, not an endless wait', async () => {
-    stubFetch({ body: { status: 'pending', result: null, failureReason: null, createdAt: null } });
+    stubFetch({ body: { status: 'pending', report: null, failureReason: null, createdAt: null } });
     renderPreview();
 
     expect(await screen.findByRole('heading', { name: EN.pollErrorTitle })).toBeInTheDocument();
@@ -310,7 +354,7 @@ describe('GradingPreview — polling (ADR-2: every 2-3 seconds until the job is 
 
 describe('GradingPreview — complete (KAN-18 AC: overall band score and at least one fully worked example)', () => {
   it('shows the overall score and the band', async () => {
-    stubFetch(succeeded(gradingResult({ overallScore: 80, overallBand: bandForScore(80) })));
+    stubFetch(succeeded(lockedReport({ overallScore: 80, overallBand: bandForScore(80) })));
     renderPreview();
 
     expect(await screen.findByTestId('overall-score')).toHaveTextContent('80');
@@ -321,7 +365,7 @@ describe('GradingPreview — complete (KAN-18 AC: overall band score and at leas
   });
 
   it('shows a real sentence from the guest\'s own essay with the error highlighted', async () => {
-    stubFetch(succeeded(gradingResult()));
+    stubFetch(succeeded(lockedReport()));
     renderPreview();
 
     const sentence = await screen.findByTestId('worked-example-sentence');
@@ -340,7 +384,7 @@ describe('GradingPreview — complete (KAN-18 AC: overall band score and at leas
   });
 
   it('explains the error, and offers the suggested fix', async () => {
-    stubFetch(succeeded(gradingResult()));
+    stubFetch(succeeded(lockedReport()));
     renderPreview();
 
     const explanation = await screen.findByTestId('worked-example-explanation');
@@ -349,7 +393,7 @@ describe('GradingPreview — complete (KAN-18 AC: overall band score and at leas
   });
 
   it('omits the suggestion line when the annotation has none, rather than printing an empty label', async () => {
-    stubFetch(succeeded(gradingResult({ annotations: [annotation(ERROR_QUOTE, { suggestion: null })] })));
+    stubFetch(succeeded(lockedReport({ workedExample: exampleView({ suggestion: null }) })));
     renderPreview();
 
     const explanation = await screen.findByTestId('worked-example-explanation');
@@ -357,7 +401,7 @@ describe('GradingPreview — complete (KAN-18 AC: overall band score and at leas
   });
 
   it('renders annotation text as text, never as markup — it is model output', async () => {
-    stubFetch(succeeded(gradingResult({ annotations: [annotation(ERROR_QUOTE, { message: '<img src=x onerror=alert(1)>Fehler' })] })));
+    stubFetch(succeeded(lockedReport({ workedExample: exampleView({ message: '<img src=x onerror=alert(1)>Fehler' }) })));
     const { container } = renderPreview();
 
     const explanation = await screen.findByTestId('worked-example-explanation');
@@ -366,32 +410,14 @@ describe('GradingPreview — complete (KAN-18 AC: overall band score and at leas
   });
 
   it('marks the sentence as German so a screen reader pronounces it correctly in an English page', async () => {
-    stubFetch(succeeded(gradingResult()));
+    stubFetch(succeeded(lockedReport()));
     renderPreview();
 
     expect(await screen.findByTestId('worked-example-sentence')).toHaveAttribute('lang', 'de');
   });
 
-  it('uses the most serious annotation as the example when there are several', async () => {
-    stubFetch(
-      succeeded(
-        gradingResult({
-          annotations: [
-            annotation('heute', { severity: 'minor', message: 'Kleinigkeit.' }),
-            annotation(ERROR_QUOTE, { severity: 'major' }),
-          ],
-        }),
-      ),
-    );
-    renderPreview();
-
-    const mark = await screen.findByTestId('worked-example-highlight');
-    expect(mark).toHaveTextContent(ERROR_QUOTE);
-    expect(screen.queryByText('Kleinigkeit.')).toBeNull();
-  });
-
   it('is honest when no annotation can be anchored: the score still shows, no example is invented', async () => {
-    stubFetch(succeeded(gradingResult({ annotations: [] })));
+    stubFetch(succeeded(lockedReport({ annotationCount: 0, workedExample: null })));
     renderPreview();
 
     expect(await screen.findByTestId('overall-score')).toHaveTextContent('80');
@@ -399,36 +425,138 @@ describe('GradingPreview — complete (KAN-18 AC: overall band score and at leas
     expect(screen.queryByTestId('worked-example-highlight')).toBeNull();
     expect(screen.queryByTestId('worked-example-explanation')).toBeNull();
   });
+});
 
-  it('does not highlight anything when the only annotation\'s offsets do not fit the essay text', async () => {
-    stubFetch(succeeded(gradingResult({ annotations: [annotation(ERROR_QUOTE, { start: 400, end: 430 })] })));
+describe('GradingPreview — the locked report (KAN-19 BR-4.2: a guest sees a teaser; the rest is withheld by the server)', () => {
+  it('says how many marked passages exist and how many are shown — derived from one total, not two numbers', async () => {
+    stubFetch(succeeded(lockedReport({ annotationCount: 7 })));
     renderPreview();
 
-    expect(await screen.findByTestId('overall-score')).toBeInTheDocument();
-    expect(screen.getByTestId('worked-example-none')).toBeInTheDocument();
-    expect(screen.queryByTestId('worked-example-highlight')).toBeNull();
+    expect(await screen.findByTestId('locked-count')).toHaveTextContent('1 of 7 marked passages shown');
   });
 
-  it('is KAN-6\'s to show the rest: no summary, dimension comments or extra annotations appear here', async () => {
+  it('shows 0 when no example could be anchored, rather than claiming one was shown', async () => {
+    stubFetch(succeeded(lockedReport({ annotationCount: 7, workedExample: null })));
+    renderPreview();
+
+    expect(await screen.findByTestId('locked-count')).toHaveTextContent('0 of 7 marked passages shown');
+  });
+
+  it('breaks the marked passages down by rubric area, zeros included, in the guest\'s language', async () => {
+    stubFetch(succeeded(lockedReport()));
+    renderPreview();
+
+    const counts = await screen.findByTestId('locked-dimension-counts');
+    expect(within(counts).getByText(EN.dimensions.grammarSyntax)).toBeInTheDocument();
+    expect(screen.getByTestId('locked-count-grammarSyntax')).toHaveTextContent('3');
+    expect(screen.getByTestId('locked-count-textStructureCohesion')).toHaveTextContent('1');
+    expect(screen.getByTestId('locked-count-topicRelevanceContentCoverage')).toHaveTextContent('1');
+    // "Nothing marked under vocabulary" is shown as a 0, not left out.
+    expect(screen.getByTestId('locked-count-vocabularyLexicalDensity')).toHaveTextContent('0');
+    for (const dimension of RUBRIC_DIMENSIONS) expect(within(counts).getByText(EN.dimensions[dimension])).toBeInTheDocument();
+  });
+
+  it('names what the full report holds — as copy, the same for every essay — and that it needs an account (provisional copy)', async () => {
+    stubFetch(succeeded(lockedReport()));
+    renderPreview();
+
+    const includes = await screen.findByTestId('locked-includes');
+    expect(includes).toHaveTextContent(EN.lockedItemSummary);
+    expect(includes).toHaveTextContent(EN.lockedItemDimensions);
+    expect(includes).toHaveTextContent(EN.lockedItemAnnotations);
+    // Presence of the copy, not a claim that the wording is settled: the
+    // `lockedNote` text is unreviewed, BR-4.2 did not specify it, and there is
+    // no CTA because no registration route exists until KAN-20.
+    expect(screen.getByTestId('locked-report')).toHaveTextContent(EN.lockedNote);
+    expect(screen.getByRole('group', { name: EN.lockedTitle })).toBe(screen.getByTestId('locked-report'));
+  });
+
+  it('an essay with nothing marked says so, and shows no empty per-area table', async () => {
     stubFetch(
       succeeded(
-        gradingResult({
-          annotations: [annotation(ERROR_QUOTE), annotation('regnete', { severity: 'minor', message: 'Zweiter Fehler.' })],
+        lockedReport({
+          annotationCount: 0,
+          annotationCountByDimension: {
+            textStructureCohesion: 0,
+            vocabularyLexicalDensity: 0,
+            grammarSyntax: 0,
+            topicRelevanceContentCoverage: 0,
+          },
+          workedExample: null,
         }),
       ),
     );
     renderPreview();
 
+    expect(await screen.findByTestId('locked-count')).toHaveTextContent(EN.lockedCountNone);
+    expect(screen.queryByTestId('locked-dimension-counts')).toBeNull();
+  });
+
+  it('keeps the locked panel out of the live region — the announcement stays the score alone', async () => {
+    stubFetch(succeeded(lockedReport()));
+    renderPreview();
+
+    await screen.findByTestId('locked-report');
+    expect(screen.getByRole('status')).toHaveTextContent(`${EN.completeAnnouncement} 80 ${EN.scoreOutOf}, ${EN.bands.pass}.`);
+    expect(screen.getByRole('status')).not.toHaveTextContent(EN.lockedTitle);
+  });
+
+  it('a `full` report (a registered owner) shows the score and example without the locked panel', async () => {
+    stubFetch(succeeded(fullReport()));
+    renderPreview();
+
+    expect(await screen.findByTestId('overall-score')).toHaveTextContent('80');
+    expect(screen.getByTestId('overall-band')).toHaveTextContent(EN.bands.pass);
+    expect(screen.getByTestId('worked-example-highlight')).toHaveTextContent(ERROR_QUOTE);
+    expect(screen.queryByTestId('locked-report')).toBeNull();
+  });
+
+  it('a `full` report is not rendered beyond the score and example here — the summary and comments are a later screen\'s', async () => {
+    stubFetch(succeeded(fullReport()));
+    renderPreview();
+
     await screen.findByTestId('overall-score');
     expect(screen.queryByText('Eine echte Zusammenfassung.')).toBeNull();
     expect(screen.queryByText('Ein echter Kommentar.')).toBeNull();
-    expect(screen.queryByText('Zweiter Fehler.')).toBeNull();
+  });
+
+  it('renders the locked panel from the German catalogue', async () => {
+    stubFetch(succeeded(lockedReport({ annotationCount: 7 })));
+    renderPreview(DE);
+
+    expect(await screen.findByTestId('locked-count')).toHaveTextContent('1 von 7 markierten Stellen angezeigt');
+    expect(screen.getByRole('group', { name: DE.lockedTitle })).toBeInTheDocument();
+    expect(screen.getByTestId('locked-includes')).toHaveTextContent(DE.lockedItemSummary);
+  });
+
+  it('every locked-panel string exists, and is distinct, in both catalogues; the count line keeps both placeholders', () => {
+    const keys = [
+      'lockedTitle',
+      'lockedCount',
+      'lockedCountNone',
+      'lockedByDimensionLabel',
+      'lockedIncludesLabel',
+      'lockedItemSummary',
+      'lockedItemDimensions',
+      'lockedItemAnnotations',
+      'lockedNote', // provisional wording — unreviewed, not specified by BR-4.2
+    ] as const;
+    for (const key of keys) {
+      expect(EN[key], `en ${key}`).toBeTruthy();
+      expect(DE[key], `de ${key}`).toBeTruthy();
+      expect(DE[key], `de ${key} is translated`).not.toBe(EN[key]);
+    }
+    for (const strings of [EN, DE]) {
+      expect(strings.lockedCount).toContain('{shown}');
+      expect(strings.lockedCount).toContain('{total}');
+      for (const dimension of RUBRIC_DIMENSIONS) expect(strings.dimensions[dimension], dimension).toBeTruthy();
+    }
   });
 });
 
 describe('GradingPreview — accessibility of the result (a result arriving after a poll is a live region)', () => {
   it('announces completion, with the score and band, through exactly one polite status region', async () => {
-    stubFetch(succeeded(gradingResult()));
+    stubFetch(succeeded(lockedReport()));
     renderPreview();
 
     await screen.findByTestId('overall-score');
@@ -441,7 +569,7 @@ describe('GradingPreview — accessibility of the result (a result arriving afte
 
   it('the region is busy only while waiting: aria-busy is "false" once the result arrives, so a screen reader does not treat it as still changing', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    stubFetch(pending, succeeded(gradingResult()));
+    stubFetch(pending, succeeded(lockedReport()));
     renderPreview();
     expect(await screen.findByRole('region', { name: EN.pendingTitle })).toHaveAttribute('aria-busy', 'true');
 
@@ -452,7 +580,7 @@ describe('GradingPreview — accessibility of the result (a result arriving afte
   });
 
   it('the announcement is visually hidden — otherwise its sentence would print on screen next to the score', async () => {
-    stubFetch(succeeded(gradingResult()));
+    stubFetch(succeeded(lockedReport()));
     renderPreview();
 
     await screen.findByTestId('overall-score');
@@ -469,7 +597,7 @@ describe('GradingPreview — accessibility of the result (a result arriving afte
 
   it('the same live-region node carries the announcement when the result arrives, rather than a new one being added', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    stubFetch(pending, succeeded(gradingResult()));
+    stubFetch(pending, succeeded(lockedReport()));
     renderPreview();
     const regionWhileWaiting = await screen.findByRole('status');
 
@@ -481,7 +609,7 @@ describe('GradingPreview — accessibility of the result (a result arriving afte
   });
 
   it('associates the explanation with the highlighted words, not merely places it beside them', async () => {
-    stubFetch(succeeded(gradingResult()));
+    stubFetch(succeeded(lockedReport()));
     renderPreview();
 
     const mark = await screen.findByTestId('worked-example-highlight');
@@ -495,7 +623,7 @@ describe('GradingPreview — accessibility of the result (a result arriving afte
   });
 
   it('does not rely on colour alone: the highlighted span carries a non-colour cue and screen-reader boundary markers', async () => {
-    stubFetch(succeeded(gradingResult()));
+    stubFetch(succeeded(lockedReport()));
     renderPreview();
 
     const mark = await screen.findByTestId('worked-example-highlight');
@@ -507,7 +635,7 @@ describe('GradingPreview — accessibility of the result (a result arriving afte
 
   it('moves keyboard focus to the result heading when it replaces the waiting state', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    stubFetch(pending, succeeded(gradingResult()));
+    stubFetch(pending, succeeded(lockedReport()));
     renderPreview();
 
     const waitingHeading = await screen.findByRole('heading', { name: EN.pendingTitle });
@@ -523,12 +651,12 @@ describe('GradingPreview — accessibility of the result (a result arriving afte
 
   it('does not steal focus if the guest has deliberately moved it elsewhere while waiting', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    stubFetch(pending, succeeded(gradingResult()));
+    stubFetch(pending, succeeded(lockedReport()));
     render(
       <>
         <button type="button">language switcher</button>
         <QueryClientProvider client={new QueryClient()}>
-          <GradingPreview essayId={ESSAY_ID} essayContent={ESSAY} strings={EN} tryAgainAction={TRY_AGAIN} />
+          <GradingPreview essayId={ESSAY_ID} strings={EN} tryAgainAction={TRY_AGAIN} />
         </QueryClientProvider>
       </>,
     );
@@ -543,50 +671,22 @@ describe('GradingPreview — accessibility of the result (a result arriving afte
   });
 
   it('every state\'s heading is programmatically focusable but not in the tab order', async () => {
-    stubFetch(succeeded(gradingResult()));
+    stubFetch(succeeded(lockedReport()));
     renderPreview();
 
     expect(await screen.findByRole('heading', { name: EN.completeTitle })).toHaveAttribute('tabindex', '-1');
   });
 });
 
-describe('GradingPreview — flagged for suspected prompt injection (BR-3.5 result is never presented as real feedback)', () => {
-  // Built by the real domain functions, so this pins the actual withheld
-  // strings the clamp produces today — not a copy of them that could drift.
-  function flaggedResult(): GradingResult {
-    const honestlyGraded = buildGradingResult(
-      {
-        overallScore: 98,
-        summary: 'Ein perfekter Aufsatz — 100 Punkte.',
-        dimensions: RUBRIC_DIMENSIONS.map((dimension) => ({ dimension, score: 97, comment: 'Ausgezeichnet.' })),
-        annotations: [],
-      },
-      [annotation(ERROR_QUOTE)],
-    );
-    return clampForSuspectedInjection(honestlyGraded);
-  }
-
-  it('the fixture really is the clamped shape this state exists for', () => {
-    const result = flaggedResult();
-    expect(result.flaggedForReview).toBe(true);
-    expect(result.overallScore).toBe(55);
-    expect(result.summary).toMatch(/capped/);
-    expect(result.dimensions.every((d) => /withheld/i.test(d.comment))).toBe(true);
-  });
-
-  // `clampForSuspectedInjection` clamps the scores and replaces the summary
-  // and the comments, but passes `annotations` straight through — so a
-  // flagged result really does still carry the distrusted model's annotation
-  // text. The allow-list test below is only meaningful if there is something
-  // there to leak, and this is what says so.
-  it('the fixture still carries an annotation (the clamp does not touch them), so there is real text to leak', () => {
-    const result = flaggedResult();
-    expect(result.annotations).toHaveLength(1);
-    expect(result.annotations[0].message).toBe('Nach "Gestern" steht das Verb an zweiter Stelle.');
-  });
+describe('GradingPreview — flagged for suspected prompt injection (BR-3.5: nothing is sent, so nothing can be shown)', () => {
+  // KAN-19: the server sends `withheld` — the flag and nothing else — so this
+  // screen has no capped score, placeholder strings or annotation text to keep
+  // off the page. What was sent for a flagged result is pinned where it is
+  // decided (`grading-status.test.ts`, the route test).
+  const flaggedReply = () => succeeded(withheldReport);
 
   it('shows a deliberate flagged message with a way to try again — not a result', async () => {
-    stubFetch(succeeded(flaggedResult()));
+    stubFetch(flaggedReply());
     renderPreview();
 
     expect(await screen.findByRole('heading', { name: EN.flaggedTitle })).toBeInTheDocument();
@@ -595,26 +695,34 @@ describe('GradingPreview — flagged for suspected prompt injection (BR-3.5 resu
     expect(screen.getByRole('region')).toHaveAttribute('data-phase', 'flagged');
   });
 
-  it('never renders the capped score, band, the withheld placeholder strings, or an example', async () => {
-    const result = flaggedResult();
-    stubFetch(succeeded(result));
-    const { container } = renderPreview();
+  it('shows no score, band or example', async () => {
+    stubFetch(flaggedReply());
+    renderPreview();
 
     await screen.findByRole('heading', { name: EN.flaggedTitle });
-    const text = container.textContent ?? '';
 
     expect(screen.queryByTestId('overall-score')).toBeNull();
     expect(screen.queryByTestId('overall-band')).toBeNull();
-    expect(text).not.toContain(result.summary);
-    for (const dimension of result.dimensions) expect(text).not.toContain(dimension.comment);
-    expect(text).not.toContain('withheld');
-    expect(text).not.toContain(String(result.overallScore));
-    expect(text).not.toContain(EN.bands.belowTarget);
     expect(screen.queryByTestId('worked-example-highlight')).toBeNull();
     expect(screen.queryByTestId('worked-example-none')).toBeNull();
+    expect(screen.queryByTestId('locked-report')).toBeNull();
   });
 
-  // The deny-list above names what someone thought of. This is the assertion
+  // What the client does with a misbehaving answer: an extra field on a
+  // `withheld` report is dropped by the parse, not rendered. (It has still
+  // reached the browser, which is why the server is what withholds — the
+  // route test proves it does.)
+  it('drops anything beyond the flag from a withheld answer, rather than rendering it', async () => {
+    stubFetch(succeeded({ ...withheldReport, overallScore: 55, overallBand: bandForScore(55), summary: 'LEAKED SUMMARY' }));
+    const { container } = renderPreview();
+
+    await screen.findByRole('heading', { name: EN.flaggedTitle });
+    expect(container.textContent).not.toContain('LEAKED SUMMARY');
+    expect(container.textContent).not.toContain('55');
+    expect(screen.queryByTestId('overall-score')).toBeNull();
+  });
+
+  // The tests above name what someone thought of. This is the assertion
   // the claim "no capped score, no placeholders, no example" actually rests
   // on: the panel's own text must be EXACTLY its title, its body and the
   // try-again action, so any leak fails — named or not. It replaced a
@@ -624,7 +732,7 @@ describe('GradingPreview — flagged for suspected prompt injection (BR-3.5 resu
   // Whitespace is collapsed on both sides for the same reason: element text
   // runs together, so the comparison cannot depend on separators.
   it('renders nothing but the flagged title, the flagged body and the try-again action — an allow-list, so any leak fails, named or not', async () => {
-    stubFetch(succeeded(flaggedResult()));
+    stubFetch(flaggedReply());
     const { container } = renderPreview();
 
     const region = await screen.findByRole('region', { name: EN.flaggedTitle });
@@ -654,7 +762,7 @@ describe('GradingPreview — flagged for suspected prompt injection (BR-3.5 resu
   });
 
   it('announces the flagged outcome, not a score', async () => {
-    stubFetch(succeeded(flaggedResult()));
+    stubFetch(flaggedReply());
     renderPreview();
 
     await screen.findByRole('heading', { name: EN.flaggedTitle });
@@ -663,7 +771,7 @@ describe('GradingPreview — flagged for suspected prompt injection (BR-3.5 resu
   });
 
   it('makes no promise of human review — none exists', async () => {
-    stubFetch(succeeded(flaggedResult()));
+    stubFetch(flaggedReply());
     renderPreview();
 
     await screen.findByRole('heading', { name: EN.flaggedTitle });
@@ -759,7 +867,7 @@ describe('GradingPreview — failed: honest, never a fake score', () => {
   });
 
   it('falls back to the generic message when the server names no reason it recognises', async () => {
-    stubFetch({ body: { status: 'failed', result: null, failureReason: 'someReasonFromTheFuture' } });
+    stubFetch({ body: { status: 'failed', report: null, failureReason: 'someReasonFromTheFuture' } });
     renderPreview();
 
     expect(await screen.findByText(EN.failedReasons.unknown)).toBeInTheDocument();
@@ -815,8 +923,41 @@ describe('GradingPreview — the status request itself fails (not the same as gr
     expect(await screen.findByRole('button', { name: EN.retryCta })).toBeInTheDocument();
   });
 
-  it('"succeeded" with no result is not shown as a grade', async () => {
-    stubFetch({ body: { status: 'succeeded', result: null, failureReason: null } });
+  it('"succeeded" with no report is not shown as a grade', async () => {
+    stubFetch({ body: { status: 'succeeded', report: null, failureReason: null } });
+    renderPreview();
+
+    expect(await screen.findByRole('heading', { name: EN.pollErrorTitle })).toBeInTheDocument();
+    expect(screen.queryByTestId('overall-score')).toBeNull();
+  });
+
+  // KAN-19: the field is `report` now. An answer in the old shape (a bare
+  // `result`, no `report`) must fail loudly here, not render a blank score.
+  it('an answer in the pre-KAN-19 shape, with `result` and no `report`, is a failed poll — not a blank score', async () => {
+    stubFetch({ body: { status: 'succeeded', result: gradingResult(), failureReason: null } });
+    renderPreview();
+
+    expect(await screen.findByRole('heading', { name: EN.pollErrorTitle })).toBeInTheDocument();
+    expect(screen.queryByTestId('overall-score')).toBeNull();
+  });
+
+  it('an `access` value this client does not know is a failed poll, not a fall-through into a render', async () => {
+    stubFetch(succeeded({ ...lockedReport(), access: 'premium' }));
+    renderPreview();
+
+    expect(await screen.findByRole('heading', { name: EN.pollErrorTitle })).toBeInTheDocument();
+    expect(screen.queryByTestId('overall-score')).toBeNull();
+    expect(screen.queryByTestId('locked-report')).toBeNull();
+  });
+
+  it.each([
+    ['a locked report with a dimension count missing', { ...lockedReport(), annotationCountByDimension: { grammarSyntax: 3 } }],
+    ['a locked report with no score', { ...lockedReport(), overallScore: undefined }],
+    ['a full report with no result', { access: 'full', workedExample: null }],
+    ['a worked example missing its highlighted span', { ...lockedReport(), workedExample: { ...exampleView(), highlighted: undefined } }],
+    ['a report that is not an object', 'locked'],
+  ])('%s is a malformed answer, not a partial render', async (_name, report) => {
+    stubFetch(succeeded(report));
     renderPreview();
 
     expect(await screen.findByRole('heading', { name: EN.pollErrorTitle })).toBeInTheDocument();
@@ -824,14 +965,14 @@ describe('GradingPreview — the status request itself fails (not the same as gr
   });
 
   it('an unrecognised status is not treated as pending or as a result', async () => {
-    stubFetch({ body: { status: 'exploded', result: null, failureReason: null } });
+    stubFetch({ body: { status: 'exploded', report: null, failureReason: null } });
     renderPreview();
 
     expect(await screen.findByRole('heading', { name: EN.pollErrorTitle })).toBeInTheDocument();
   });
 
   it('the retry button asks again and, when grading has finished, shows the result', async () => {
-    stubFetch({ status: 500, body: {} }, { status: 500, body: {} }, { status: 500, body: {} }, { status: 500, body: {} }, succeeded(gradingResult()));
+    stubFetch({ status: 500, body: {} }, { status: 500, body: {} }, { status: 500, body: {} }, { status: 500, body: {} }, succeeded(lockedReport()));
     renderPreview();
 
     fireEvent.click(await screen.findByRole('button', { name: EN.retryCta }));
@@ -951,7 +1092,7 @@ describe('GradingPreview — progress while pending (KAN-17 BR-5.3: communicate 
     vi.useFakeTimers({ shouldAdvanceTime: true });
     // Whole seconds: an HTTP `Date` header has no milliseconds.
     const serverNow = Math.floor(Date.now() / 1000) * 1000 - 3 * 60 * 60 * 1000;
-    const body = { status: 'pending', result: null, failureReason: null, createdAt: new Date(serverNow - 7000).toISOString() };
+    const body = { status: 'pending', report: null, failureReason: null, createdAt: new Date(serverNow - 7000).toISOString() };
     stubFetch({ body, headers: { date: new Date(serverNow).toUTCString() } });
     renderPreview();
 
@@ -969,7 +1110,7 @@ describe('GradingPreview — progress while pending (KAN-17 BR-5.3: communicate 
       vi.fn(async () => {
         call += 1;
         const headers = call === 1 ? undefined : { date: later };
-        return new Response(JSON.stringify({ status: 'pending', result: null, failureReason: null, createdAt }), { headers });
+        return new Response(JSON.stringify({ status: 'pending', report: null, failureReason: null, createdAt }), { headers });
       }),
     );
     renderPreview();
@@ -986,7 +1127,7 @@ describe('GradingPreview — progress while pending (KAN-17 BR-5.3: communicate 
 
   it('is gone once the job has finished — the result replaces the waiting state', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    stubFetch(pending, succeeded(gradingResult()));
+    stubFetch(pending, succeeded(lockedReport()));
     renderPreview();
     await screen.findByTestId('pending-progress');
 
@@ -1084,7 +1225,7 @@ describe('GradingPreview — past the target: the state says so, without a stati
       <>
         <button type="button">language switcher</button>
         <QueryClientProvider client={new QueryClient()}>
-          <GradingPreview essayId={ESSAY_ID} essayContent={ESSAY} strings={EN} tryAgainAction={TRY_AGAIN} />
+          <GradingPreview essayId={ESSAY_ID} strings={EN} tryAgainAction={TRY_AGAIN} />
         </QueryClientProvider>
       </>,
     );
@@ -1225,8 +1366,7 @@ describe('GradingPreview — past the target: the state says so, without a stati
 
   it('a flagged result that follows a slow wait still renders nothing from the result', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const flagged = gradingResult({ flaggedForReview: true, overallScore: 55, overallBand: bandForScore(55) });
-    stubFetchForJobAged(GRADING_SLOW_AFTER_MS + 5000, pending, succeeded(flagged));
+    stubFetchForJobAged(GRADING_SLOW_AFTER_MS + 5000, pending, succeeded(withheldReport));
     renderPreview();
     await screen.findByTestId('slow-notice');
 
@@ -1241,7 +1381,7 @@ describe('GradingPreview — past the target: the state says so, without a stati
 
 describe('GradingPreview — localisation', () => {
   it('renders the German copy, including a German band label, from the German catalogue', async () => {
-    stubFetch(succeeded(gradingResult()));
+    stubFetch(succeeded(lockedReport()));
     renderPreview(DE);
 
     expect(await screen.findByRole('heading', { name: DE.completeTitle })).toBeInTheDocument();

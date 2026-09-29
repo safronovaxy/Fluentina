@@ -8,9 +8,8 @@ import { Button } from '@/components/ui/button';
 import { GuestFlowShell } from '@/components/guest/chrome/GuestFlowShell';
 import { GradingPreview } from '@/components/guest/GradingPreview';
 import { GUEST_FLOW_STEPS } from '@/components/guest/flow-steps';
-import { guestSessionIdSchema, type GuestActor } from '@/lib/contracts/actor';
 import { getOwnedEssay } from '@/lib/domain/essay-read';
-import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
+import { resolveOwnerActor } from '@/lib/domain/owner-actor';
 
 export async function generateMetadata({
   params,
@@ -31,16 +30,19 @@ export async function generateMetadata({
 /**
  * Guest score preview (KAN-18, BR-4.1) — the screen a guest lands on right
  * after submitting an essay: overall band score and one worked example from
- * their own text, as soon as grading finishes. `currentStepId="preview"` is
+ * their own text, as soon as grading finishes (KAN-19, BR-4.2: for a guest,
+ * with the rest of the report locked — server-side). `currentStepId="preview"` is
  * the canonical step this has always been reserved for in
  * `GUEST_FLOW_STEPS`; no step was inserted or renumbered (see
  * StepIndicator's comment on why that matters).
  *
  * Its own route, not a state of `/practice/write`: the step indicator is
- * per-screen (server-rendered), the result survives a reload and a
- * back-button round trip because the essay id is in the URL, and the essay
- * text the annotations index into is read here on the server rather than
- * kept in browser state that a reload would lose.
+ * per-screen (server-rendered), and the result survives a reload and a
+ * back-button round trip because the essay id is in the URL. The essay text
+ * is NOT handed to the client: since KAN-19 the worked example's sentence is
+ * cut on the server and arrives with the status poll, and the browser holds
+ * no annotation offsets to index an essay with. The `getOwnedEssay` read
+ * below stays anyway — it is this page's 404/ownership gate.
  *
  * The id is a `?essay=` query parameter, not a `[essayId]` path segment, on
  * purpose: `src/middleware.test.ts` refuses any dynamic route under this
@@ -49,9 +51,10 @@ export async function generateMetadata({
  * it is a static route with its matcher entries added by hand, not loosening
  * a guard this story does not own.
  *
- * Ownership: the essay is read through `getOwnedEssay` with an actor built
- * from the guest cookie, and the grading poll the client makes is the same
- * ownership-scoped `GET /api/essays/[id]/grading`. A missing cookie, a
+ * Ownership: the essay is read through `getOwnedEssay` with an actor from
+ * `resolveOwnerActor` (the same resolution the poll's route uses), and the
+ * grading poll the client makes is the same ownership-scoped
+ * `GET /api/essays/[id]/grading`. A missing cookie, a
  * missing or malformed id, someone else's essay and a nonexistent one are all the same
  * 404 — the "not found and not yours are outwardly identical" rule the rest
  * of this flow applies. Reading `cookies()` makes this page dynamic, which
@@ -73,10 +76,10 @@ export default async function GuestPreviewPage({
   const essayId = typeof essayParam === 'string' ? essayParam : '';
   setRequestLocale(locale);
 
-  const cookieParse = guestSessionIdSchema.safeParse((await cookies()).get(GUEST_SESSION_COOKIE_NAME)?.value);
-  if (!cookieParse.success || !z.string().uuid().safeParse(essayId).success) notFound();
+  const cookieStore = await cookies();
+  const actor = await resolveOwnerActor((name) => cookieStore.get(name)?.value);
+  if (!actor || !z.string().uuid().safeParse(essayId).success) notFound();
 
-  const actor: GuestActor = { kind: 'guest', sessionId: cookieParse.data };
   const essay = await getOwnedEssay(actor, essayId);
   if (!essay) notFound();
 
@@ -90,7 +93,6 @@ export default async function GuestPreviewPage({
         <div className="mt-6">
           <GradingPreview
             essayId={essay.id}
-            essayContent={essay.content}
             tryAgainAction={
               <Button asChild>
                 <Link href="/practice/write">{t('tryAgainCta')}</Link>
@@ -124,6 +126,22 @@ export default async function GuestPreviewPage({
               explanationLabel: t('explanationLabel'),
               suggestionLabel: t('suggestionLabel'),
               noExample: t('noExample'),
+              lockedTitle: t('lockedTitle'),
+              lockedCount: t('lockedCount'),
+              lockedCountNone: t('lockedCountNone'),
+              lockedByDimensionLabel: t('lockedByDimensionLabel'),
+              dimensions: {
+                textStructureCohesion: t('dimensions.textStructureCohesion'),
+                vocabularyLexicalDensity: t('dimensions.vocabularyLexicalDensity'),
+                grammarSyntax: t('dimensions.grammarSyntax'),
+                topicRelevanceContentCoverage: t('dimensions.topicRelevanceContentCoverage'),
+              },
+              lockedIncludesLabel: t('lockedIncludesLabel'),
+              lockedItemSummary: t('lockedItemSummary'),
+              lockedItemDimensions: t('lockedItemDimensions'),
+              lockedItemAnnotations: t('lockedItemAnnotations'),
+              // Unreviewed wording, no CTA until KAN-20 (see `GradingPreview.tsx`).
+              lockedNote: t('lockedNote'),
               flaggedTitle: t('flaggedTitle'),
               flaggedBody: t('flaggedBody'),
               stalledTitle: t('stalledTitle'),

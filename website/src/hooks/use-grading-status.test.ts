@@ -9,7 +9,7 @@ import {
 
 const unfinished = (status: 'pending' | 'processing', jobAgeMs: number | null): GradingStatus => ({
   status,
-  result: null,
+  report: null,
   failureReason: null,
   jobAgeMs,
 });
@@ -44,7 +44,7 @@ describe('isSlow', () => {
 
   it('is never true for a finished job, however old', () => {
     for (const status of ['succeeded', 'failed'] as const) {
-      const job = { status, result: null, failureReason: null, jobAgeMs: GRADING_SLOW_AFTER_MS + 1 };
+      const job = { status, report: null, failureReason: null, jobAgeMs: GRADING_SLOW_AFTER_MS + 1 };
       expect(isSlow(job, GRADING_SLOW_AFTER_MS + 1)).toBe(false);
     }
   });

@@ -15,10 +15,19 @@
  * provider and the essay and is rendered as-is, never routed through the
  * catalogue.
  *
- * Scope boundary: the waiting state and the moment grading finishes. The
- * locked full report (dimension scores and comments, the summary, every
- * annotation) is KAN-6. This deliberately renders none of `summary`,
- * `dimensions` or any annotation past the one example.
+ * KAN-19 (BR-4.2): what this screen can show is decided by the SERVER, per
+ * caller, and arrives as `report` (`lib/contracts/grading-report.ts`). A guest
+ * is sent a `locked` report — score, band, one worked example, and how many
+ * marked passages exist and where — and is never sent the summary, dimension
+ * scores/comments or the other annotations, so nothing here is hiding them.
+ * That is why this component takes no essay text and does no picking: the
+ * worked example's sentence arrives already cut. The locked panel below states
+ * what the guest is not seeing; it is copy about the lock, not a lock.
+ *
+ * Scope boundary: the waiting state, the moment grading finishes, and the
+ * locked teaser. Rendering a `full` report (a registered owner's summary,
+ * dimension comments and every annotation) is not built here — a `full`
+ * answer shows the same score and example, minus the locked panel.
  *
  * Six states, one per `phase` below:
  *  - pending   — job not finished (or first poll not back yet). KAN-17
@@ -29,8 +38,9 @@
  *                its own: a new phase would remount the heading and move the
  *                guest's focus in the middle of a wait. It is the same
  *                phase, same heading, with more said under it.
- *  - complete  — score, band, worked example.
- *  - flagged   — the result carries `flaggedForReview`. See `resolvePhase`.
+ *  - complete  — score, band, worked example, and (locked) the locked panel.
+ *  - flagged   — the report is `withheld`: the result was flagged for review.
+ *                See `resolvePhase`.
  *  - failed    — the JOB failed; no score exists, and none is invented.
  *  - stalled   — the job is STILL unfinished after `GRADING_POLL_MAX_AGE_MS`
  *                and polling has stopped: pending is the one phase with no
@@ -60,13 +70,15 @@
  *    and `aria-describedby`/`aria-details` pointing at the explanation, so
  *    the explanation belongs to the span rather than sitting next to it.
  */
-import { useEffect, useId, useMemo, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { usePendingElapsed } from '@/hooks/use-pending-elapsed';
 import { useGradingStatus, isSlow, isStalled, GradingStatusError, type GradingStatus } from '@/hooks/use-grading-status';
-import { bandForScore, type GradingFailureReason, type GradingResult } from '@/lib/contracts/grading';
+import { RUBRIC_DIMENSIONS, type GradingFailureReason, type RubricDimension } from '@/lib/contracts/grading';
+import type { GradingReportView } from '@/lib/contracts/grading-report';
 import { PendingProgress, type PendingProgressStrings } from './PendingProgress';
-import { pickWorkedExample } from './worked-example';
+
+type VisibleReport = Exclude<GradingReportView, { access: 'withheld' }>;
 
 /**
  * `bandForScore` (lib/contracts/grading.ts) returns English labels, and a
@@ -106,6 +118,22 @@ export interface GradingPreviewStrings extends PendingProgressStrings {
   readonly explanationLabel: string;
   readonly suggestionLabel: string;
   readonly noExample: string;
+  readonly lockedTitle: string;
+  /** Carries `{shown}` and `{total}` placeholders, e.g. "{shown} of {total} marked passages shown". */
+  readonly lockedCount: string;
+  /** Shown instead of `lockedCount` when the essay has no marked passages at all. */
+  readonly lockedCountNone: string;
+  readonly lockedByDimensionLabel: string;
+  readonly dimensions: Readonly<Record<RubricDimension, string>>;
+  readonly lockedIncludesLabel: string;
+  readonly lockedItemSummary: string;
+  readonly lockedItemDimensions: string;
+  readonly lockedItemAnnotations: string;
+  // PROVISIONAL COPY. The wording of `lockedNote` (and the other `locked*`
+  // catalogue keys) is unreviewed: BR-4.2 specifies WHAT is locked, not what
+  // the panel says. It names an account but has no CTA, because no
+  // registration route exists until KAN-20.
+  readonly lockedNote: string;
   readonly flaggedTitle: string;
   readonly flaggedBody: string;
   readonly stalledTitle: string;
@@ -121,8 +149,6 @@ export interface GradingPreviewStrings extends PendingProgressStrings {
 
 export interface GradingPreviewProps {
   readonly essayId: string;
-  /** The stored essay text the annotation offsets index into — read server-side, ownership-scoped. */
-  readonly essayContent: string;
   readonly strings: GradingPreviewStrings;
   /** A pre-rendered, locale-aware link back to essay entry — shown where the guest has no result to look at. */
   readonly tryAgainAction: ReactNode;
@@ -131,19 +157,20 @@ export interface GradingPreviewProps {
 type Phase = 'pending' | 'complete' | 'flagged' | 'failed' | 'stalled' | 'pollError';
 
 /**
- * `flagged` is decided before `complete` on purpose. When
+ * `flagged` is a `withheld` report (KAN-19). When
  * `clampForSuspectedInjection` (lib/domain/grading/result.ts) trips it caps
  * the score at 55 and REPLACES the summary and all four dimension comments
  * with fixed operator-facing English placeholders ("Comment withheld — see
  * the flagged-for-review summary."). Those are not feedback about the
  * guest's essay, and the capped numbers are not an assessment of it — the
  * result's own summary calls them "not a reliable assessment". So nothing
- * from a flagged result is rendered at all: no score, no band, no comments,
- * and no annotation either, since the model that produced them was reading
- * an essay the guard distrusts. (The clamp does NOT touch `annotations` —
- * a flagged result still carries the distrusted model's annotation text, so
- * "nothing renders it" is this component's job, pinned by an allow-list test.)
- * An honest B2 essay can land here (KAN-40 false positives), which is why
+ * from a flagged result is shown: no score, no band, no comments, and no
+ * annotation either, since the model that produced them was reading an essay
+ * the guard distrusts. The clamp does NOT touch `annotations`, so until
+ * KAN-19 the distrusted model's annotation text was serialised to the browser
+ * and only this component kept it off screen; now the server sends a
+ * `withheld` report that carries the flag and nothing else, and there is no
+ * text here to suppress. An honest B2 essay can land here (KAN-40 false positives), which is why
  * the copy says the check can be wrong. It names the SHAPE that trips the
  * check ("an instruction about how to grade it") and never a location:
  * `detectPromptInjection` returns no span, and surfacing one would hand an
@@ -151,7 +178,7 @@ type Phase = 'pending' | 'complete' | 'flagged' | 'failed' | 'stalled' | 'pollEr
  * hour, so the copy must not send the guest hunting blindly either.
  */
 function resolvePhase(status: GradingStatus | undefined, pollFailed: boolean): Phase {
-  if (status?.status === 'succeeded' && status.result) return status.result.flaggedForReview ? 'flagged' : 'complete';
+  if (status?.status === 'succeeded' && status.report) return status.report.access === 'withheld' ? 'flagged' : 'complete';
   if (status?.status === 'failed') return 'failed';
   if (isStalled(status)) return 'stalled';
   // Reached after the query's own retries are spent (see the hook), at which
@@ -161,14 +188,78 @@ function resolvePhase(status: GradingStatus | undefined, pollFailed: boolean): P
   return 'pending';
 }
 
-function bandText(result: GradingResult, strings: GradingPreviewStrings): string {
-  const key = (BAND_STRING_KEYS as Record<string, BandStringKey | undefined>)[result.overallBand];
+function bandText(overallBand: string, strings: GradingPreviewStrings): string {
+  const key = (BAND_STRING_KEYS as Record<string, BandStringKey | undefined>)[overallBand];
   // A label this UI has no translation for: show it untranslated rather than
   // nothing — the score is still true.
-  return key ? strings.bands[key] : result.overallBand;
+  return key ? strings.bands[key] : overallBand;
 }
 
-export function GradingPreview({ essayId, essayContent, strings, tryAgainAction }: GradingPreviewProps) {
+/** The score and band both report shapes that can be shown carry — `full` nests them under `result`. */
+function scoreOf(report: VisibleReport): { overallScore: number; overallBand: string } {
+  return report.access === 'full' ? report.result : report;
+}
+
+/**
+ * What the guest is NOT being shown, and how much of it there is. Every
+ * number comes from the `locked` report; the lists of what the full report
+ * holds are catalogue copy, not data — they are the same for every essay, so
+ * the server sends no flag for them. The dimension counts include zeros:
+ * "nothing marked under vocabulary" is itself information, and the server
+ * sends all four keys always.
+ */
+function LockedPanel({
+  report,
+  shown,
+  strings,
+}: {
+  report: Extract<VisibleReport, { access: 'locked' }>;
+  shown: number;
+  strings: GradingPreviewStrings;
+}) {
+  const headingId = useId();
+  const count =
+    report.annotationCount === 0
+      ? strings.lockedCountNone
+      : strings.lockedCount.replace('{shown}', String(shown)).replace('{total}', String(report.annotationCount));
+
+  return (
+    <div className="mt-6 border-t pt-4" data-testid="locked-report" role="group" aria-labelledby={headingId}>
+      <h3 id={headingId} className="font-semibold">
+        {strings.lockedTitle}
+      </h3>
+      <p className="mt-1 text-sm" data-testid="locked-count">
+        {count}
+      </p>
+
+      {report.annotationCount > 0 && (
+        <>
+          <p className="mt-3 text-sm text-muted-foreground">{strings.lockedByDimensionLabel}</p>
+          <dl className="mt-1 space-y-1 text-sm" data-testid="locked-dimension-counts">
+            {RUBRIC_DIMENSIONS.map((dimension) => (
+              <div key={dimension} className="flex justify-between gap-4">
+                <dt>{strings.dimensions[dimension]}</dt>
+                <dd className="tabular-nums" data-testid={`locked-count-${dimension}`}>
+                  {report.annotationCountByDimension[dimension]}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </>
+      )}
+
+      <p className="mt-4 text-sm text-muted-foreground">{strings.lockedIncludesLabel}</p>
+      <ul className="mt-1 list-disc space-y-1 pl-5 text-sm" data-testid="locked-includes">
+        <li>{strings.lockedItemSummary}</li>
+        <li>{strings.lockedItemDimensions}</li>
+        <li>{strings.lockedItemAnnotations}</li>
+      </ul>
+      <p className="mt-3 text-sm font-medium">{strings.lockedNote}</p>
+    </div>
+  );
+}
+
+export function GradingPreview({ essayId, strings, tryAgainAction }: GradingPreviewProps) {
   const query = useGradingStatus(essayId);
   const status = query.data;
   const phase = resolvePhase(status, query.isError);
@@ -195,19 +286,17 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
     if (first || focusWouldBeLost) headingRef.current?.focus();
   }, [phase]);
 
-  const result = phase === 'complete' ? status?.result ?? null : null;
-  const example = useMemo(
-    () => (result ? pickWorkedExample(essayContent, result.annotations) : null),
-    [result, essayContent],
-  );
+  const report = phase === 'complete' && status?.report && status.report.access !== 'withheld' ? status.report : null;
+  const score = report ? scoreOf(report) : null;
+  const example = report?.workedExample ?? null;
 
   const notFound = query.error instanceof GradingStatusError && query.error.reason === 'gradingJobNotFound';
 
   const announcement = (() => {
     switch (phase) {
       case 'complete':
-        return result
-          ? `${strings.completeAnnouncement} ${result.overallScore} ${strings.scoreOutOf}, ${bandText(result, strings)}.`
+        return score
+          ? `${strings.completeAnnouncement} ${score.overallScore} ${strings.scoreOutOf}, ${bandText(score.overallBand, strings)}.`
           : '';
       case 'flagged':
         return strings.flaggedTitle;
@@ -258,19 +347,19 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
           </>
         )}
 
-        {phase === 'complete' && result && (
+        {phase === 'complete' && report && score && (
           <>
             {heading(strings.completeTitle)}
             <p className="mt-4 flex items-baseline gap-2">
               <span className="text-5xl font-bold tabular-nums" data-testid="overall-score">
-                {result.overallScore}
+                {score.overallScore}
               </span>
               <span className="text-muted-foreground">{strings.scoreOutOf}</span>
             </p>
             <p className="mt-2 text-sm">
               <span className="text-muted-foreground">{strings.bandLabel}: </span>
               <span className="font-medium" data-testid="overall-band">
-                {bandText(result, strings)}
+                {bandText(score.overallBand, strings)}
               </span>
             </p>
 
@@ -297,12 +386,12 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
                   <div id={explanationId} className="mt-3 space-y-1 text-sm" data-testid="worked-example-explanation">
                     <p>
                       <span className="font-medium">{strings.explanationLabel}: </span>
-                      {example.annotation.message}
+                      {example.message}
                     </p>
-                    {example.annotation.suggestion && (
+                    {example.suggestion && (
                       <p>
                         <span className="font-medium">{strings.suggestionLabel}: </span>
-                        {example.annotation.suggestion}
+                        {example.suggestion}
                       </p>
                     )}
                   </div>
@@ -313,6 +402,10 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
                 </p>
               )}
             </div>
+
+            {report.access === 'locked' && (
+              <LockedPanel report={report} shown={example ? 1 : 0} strings={strings} />
+            )}
           </>
         )}
 
