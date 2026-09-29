@@ -62,6 +62,7 @@
  */
 import { useEffect, useId, useMemo, useRef, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
+import { usePendingElapsed } from '@/hooks/use-pending-elapsed';
 import { useGradingStatus, isSlow, isStalled, GradingStatusError, type GradingStatus } from '@/hooks/use-grading-status';
 import { bandForScore, type GradingFailureReason, type GradingResult } from '@/lib/contracts/grading';
 import { PendingProgress, type PendingProgressStrings } from './PendingProgress';
@@ -171,7 +172,12 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
   const query = useGradingStatus(essayId);
   const status = query.data;
   const phase = resolvePhase(status, query.isError);
-  const slow = phase === 'pending' && isSlow(status);
+  // ONE monotonic age drives both the clock on screen and the slow state (and
+  // so the announcement): the raw age from a poll can step back between
+  // answers, and a `slow` derived from it would empty the announcer and refill
+  // it — a second read-out. Only ticks while a job is unfinished.
+  const elapsedMs = usePendingElapsed(essayId, phase === 'pending' ? status?.jobAgeMs ?? null : null, query.dataUpdatedAt);
+  const slow = phase === 'pending' && isSlow(status, elapsedMs);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -248,13 +254,7 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
           <>
             {heading(strings.pendingTitle)}
             <p className="mt-2 text-sm text-muted-foreground">{strings.pendingBody}</p>
-            <PendingProgress
-              status={status?.status}
-              jobAgeMs={status?.jobAgeMs ?? null}
-              answeredAt={query.dataUpdatedAt}
-              slow={slow}
-              strings={strings}
-            />
+            <PendingProgress status={status?.status} elapsedMs={elapsedMs} slow={slow} strings={strings} />
           </>
         )}
 

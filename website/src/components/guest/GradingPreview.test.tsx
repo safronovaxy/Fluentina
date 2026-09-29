@@ -66,7 +66,7 @@ const failed = (failureReason: GradingFailureReason | null): Reply => ({
  * Replies in order, repeating the last one forever — a poller keeps asking.
  *
  * An unfinished job's reply is given the `createdAt` the real endpoint always
- * sends (the poll is bounded on it), fixed when this is called — under fake
+ * sends (pinned by the route's own test; the poll is bounded on it), fixed when this is called — under fake
  * timers, "now" is the test's clock, so the job ages as the test advances
  * time. `jobAgeMs` is how old the job already is at that moment. A body that
  * sets `createdAt` itself (even to null) is left exactly as written.
@@ -86,6 +86,28 @@ function stubFetchForJobAged(jobAgeMs: number, ...replies: Reply[]) {
   return spy;
 }
 const stubFetch = (...replies: Reply[]) => stubFetchForJobAged(0, ...replies);
+
+/**
+ * Like `stubFetchForJobAged`, but each answer reports the age at `agesMs[n]`
+ * (the last one repeats) — so the reported age can DECREASE between polls,
+ * as it can in production: `jobAgeMs` is a `Date` header (whole seconds,
+ * instances whose clocks differ) minus a fixed `createdAt`, so it is not
+ * monotonic there. `stubFetchForJobAged` derives every answer from one
+ * `createdAt` and so cannot serve that; a test of "the announcer survives an
+ * age that steps back" needs this one. `createdAt` is taken at the moment of
+ * each request, so the age is exactly `agesMs[n]` when the answer arrives.
+ */
+function stubFetchForJobAgeSequence(agesMs: number[], reply: Reply) {
+  let call = 0;
+  const spy = vi.fn(async () => {
+    const age = agesMs[Math.min(call, agesMs.length - 1)];
+    call += 1;
+    const createdAt = new Date(Date.now() - age).toISOString();
+    return new Response(JSON.stringify({ ...(reply.body as object), createdAt }), { status: 200 });
+  });
+  vi.stubGlobal('fetch', spy);
+  return spy;
+}
 
 const TRY_AGAIN = <a href="/practice/write">try again slot</a>;
 
@@ -985,6 +1007,8 @@ describe('GradingPreview — past the target: the state says so, without a stati
     // The copy promises both numbers in words.
     expect(EN.slowNotice).toMatch(/\bminute\b/);
     expect(EN.slowKeepChecking).toMatch(/two minutes/);
+    expect(DE.slowNotice).toMatch(/\beine Minute\b/);
+    expect(DE.slowKeepChecking).toMatch(/zwei Minuten/);
     expect(GRADING_POLL_MAX_AGE_MS).toBe(2 * 60 * 1000);
   });
 
@@ -1090,26 +1114,82 @@ describe('GradingPreview — past the target: the state says so, without a stati
     expect(document.querySelectorAll('[aria-live], [role="alert"], [role="status"]')).toHaveLength(1);
   });
 
-  it('does not turn the announcer into a stream: after that one message, seconds ticking and polls arriving change it not at all', async () => {
+  // What makes the two assertions below bite: the observer ACCUMULATES. A
+  // MutationObserver callback fires on a microtask and drains the record
+  // queue, so a callback that discards its records leaves a final
+  // `takeRecords()` empty whatever the component did — the assertion could
+  // never fail. Records are collected in the callback, and the last of them
+  // taken at the end. (Checked both ways: it fails when the announcement
+  // varies with the job's stage, and passes on the component as written.)
+  // That there is exactly ONE live region is the sibling test's claim above;
+  // this one is about what happens to it over time. It binds the region
+  // after the first poll has landed, so `getByRole` would throw on a second.
+  it('the announcer is not a stream: after its one message, seconds ticking and polls arriving (stage flipping between them) do not touch it', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const fetchSpy = stubFetchForJobAged(GRADING_SLOW_AFTER_MS + 5000, pending, processing, pending, processing);
     renderPreview();
-    const announcer = await screen.findByRole('status');
     await screen.findByTestId('slow-notice');
+    const announcer = screen.getByRole('status');
     await waitFor(() => expect(announcer).toHaveTextContent(EN.slowAnnouncement));
     const clockBefore = screen.getByTestId('grading-elapsed').textContent;
+    const stages = new Set([screen.getByTestId('grading-stage').getAttribute('data-stage')]);
 
-    const observer = new MutationObserver(() => {});
+    const records: MutationRecord[] = [];
+    const observer = new MutationObserver((recs) => {
+      records.push(...recs);
+    });
     observer.observe(announcer, { childList: true, characterData: true, subtree: true, attributes: true });
     const callsBefore = fetchSpy.mock.calls.length;
-    await act(() => vi.advanceTimersByTimeAsync(15_000));
-    const records = observer.takeRecords();
+    for (let second = 0; second < 15; second += 1) {
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      stages.add(screen.getByTestId('grading-stage').getAttribute('data-stage'));
+    }
+    records.push(...observer.takeRecords());
     observer.disconnect();
 
-    // Not vacuous: the clock moved and polls (with a stage flip) really arrived.
+    // The window was not idle: the clock moved, polls arrived, and the stage flipped both ways.
     expect(screen.getByTestId('grading-elapsed').textContent).not.toBe(clockBefore);
     expect(fetchSpy.mock.calls.length).toBeGreaterThan(callsBefore + 3);
+    expect([...stages].sort()).toEqual(['pending', 'processing']);
     expect(records).toHaveLength(0);
+    expect(announcer).toHaveTextContent(EN.slowAnnouncement);
+  });
+
+  // Same observer, and the case the test above cannot reach: the AGE ITSELF
+  // steps back across the slow mark. Without a monotonic floor `slow` would
+  // go false, the announcer would empty, then refill — and `aria-atomic`
+  // would read the message out a second time.
+  it('is not announced again when a later answer reports a younger job, dropping back under the slow mark', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // 61s, then 50s (younger than the first PLUS the time that passed), then back and forth.
+    const fetchSpy = stubFetchForJobAgeSequence([61_000, 50_000, 62_000, 50_000, 50_000], processing);
+    renderPreview();
+    await screen.findByTestId('slow-notice');
+    const announcer = screen.getByRole('status');
+    await waitFor(() => expect(announcer).toHaveTextContent(EN.slowAnnouncement));
+
+    const records: MutationRecord[] = [];
+    const observer = new MutationObserver((recs) => {
+      records.push(...recs);
+    });
+    observer.observe(announcer, { childList: true, characterData: true, subtree: true, attributes: true });
+    const callsBefore = fetchSpy.mock.calls.length;
+    const shown: number[] = [];
+    for (let second = 0; second < 15; second += 1) {
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      const [m, s] = screen.getByTestId('grading-elapsed').textContent!.split(':').map(Number);
+      shown.push(m * 60 + s);
+    }
+    records.push(...observer.takeRecords());
+    observer.disconnect();
+
+    // The younger answers really arrived (50s, 62s, 50s, 50s follow the 61s that was already shown)...
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(callsBefore + 4);
+    // ...and neither the clock nor the notice went back, nor did the announcer change.
+    expect(shown).toEqual([...shown].sort((a, b) => a - b));
+    expect(screen.getByTestId('slow-notice')).toBeInTheDocument();
+    expect(records).toHaveLength(0);
+    expect(announcer).toHaveTextContent(EN.slowAnnouncement);
   });
 
   it('keeps the ticking clock and the stage out of any live region', async () => {

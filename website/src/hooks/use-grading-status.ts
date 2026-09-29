@@ -100,19 +100,18 @@ export function isStalled(status: GradingStatus | undefined): boolean {
 }
 
 /**
- * Unfinished, past `GRADING_SLOW_AFTER_MS`, and not yet given up on. Decided
- * from the age the last answer reported (server clock), the same source
- * `isStalled` uses, so the two can never overlap: a job is slow for the
- * minute between the two bounds and stalled after it.
+ * Unfinished, past `GRADING_SLOW_AFTER_MS`, and not yet given up on.
+ * `elapsedMs` is the MONOTONIC age from `usePendingElapsed`, not the raw
+ * `jobAgeMs` of the last answer: the raw value can step back between polls
+ * (see that hook), and a state derived from it would unlatch and be
+ * announced again. `isStalled` still uses the raw value on purpose — once it
+ * fires the poll stops, no further answer arrives and the value freezes, so
+ * it latches by construction — and it wins here explicitly, so a job is
+ * slow for the minute between the two bounds and stalled after it, never
+ * both.
  */
-export function isSlow(status: GradingStatus | undefined): boolean {
-  return (
-    !!status &&
-    !isTerminal(status.status) &&
-    !isStalled(status) &&
-    status.jobAgeMs !== null &&
-    status.jobAgeMs > GRADING_SLOW_AFTER_MS
-  );
+export function isSlow(status: GradingStatus | undefined, elapsedMs: number | null): boolean {
+  return !!status && !isTerminal(status.status) && !isStalled(status) && elapsedMs !== null && elapsedMs > GRADING_SLOW_AFTER_MS;
 }
 
 async function fetchGradingStatus(essayId: string): Promise<GradingStatus> {

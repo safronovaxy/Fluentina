@@ -11,13 +11,11 @@
  *    the provider call). Worded as what the STATE is, not as a promise about
  *    the provider: a claimed job whose instance died stays `processing`
  *    (KAN-38), so "being graded" is deliberately "has been picked up".
- *  - Elapsed time: the job's age on the server's clock at the last answer
- *    (`GradingStatus.jobAgeMs`, from `createdAt`), carried forward by the
- *    client clock's DIFFERENCE between then and now — so a wrong system
- *    clock cannot skew it. Shown as m:ss and kept monotonic: a new answer
- *    can land up to a second behind the extrapolation (the `Date` header
- *    has whole-second resolution) and a clock that steps back would read as
- *    a bug.
+ *  - Elapsed time: the job's age (from `createdAt`), shown as m:ss. It is
+ *    handed in as `elapsedMs` by `GradingPreview`, from `usePendingElapsed`
+ *    — server-clock age carried forward by the client clock's difference,
+ *    and kept monotonic. This component keeps no clock of its own: the same
+ *    number also decides the slow state, so the two cannot disagree.
  *  - After `GRADING_SLOW_AFTER_MS`: a plain statement that this is past the
  *    target, that nothing has failed as far as the status shows, and how
  *    long the page will keep checking (the poll bound — a real constant).
@@ -36,7 +34,6 @@
  * `GradingPreview`'s single persistent announcer, not here, so a state
  * change is still announced exactly once.
  */
-import { useEffect, useRef, useState } from 'react';
 import type { GradingJobStatus } from '@/lib/contracts/grading-job';
 
 export interface PendingProgressStrings {
@@ -51,10 +48,8 @@ export interface PendingProgressStrings {
 export interface PendingProgressProps {
   /** The job's status at the last answer — `undefined` before the first one, when nothing true can be said yet. */
   readonly status: GradingJobStatus | undefined;
-  /** The job's age (server clock) when that answer arrived — see `GradingStatus.jobAgeMs`. */
-  readonly jobAgeMs: number | null;
-  /** Client-clock time (ms since epoch) that answer arrived — `query.dataUpdatedAt`. Only ever differenced against now. */
-  readonly answeredAt: number;
+  /** The job's monotonic age so far — see `usePendingElapsed`. `null` before the first answer. */
+  readonly elapsedMs: number | null;
   readonly slow: boolean;
   readonly strings: PendingProgressStrings;
 }
@@ -66,21 +61,11 @@ function formatElapsed(ms: number): { readonly text: string; readonly iso: strin
   return { text: `${minutes}:${String(seconds).padStart(2, '0')}`, iso: `PT${minutes}M${seconds}S` };
 }
 
-export function PendingProgress({ status, jobAgeMs, answeredAt, slow, strings }: PendingProgressProps) {
-  const [now, setNow] = useState(() => Date.now());
-  const shown = useRef(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
+export function PendingProgress({ status, elapsedMs, slow, strings }: PendingProgressProps) {
   // Nothing is known about the job until the first answer arrives.
-  if (!status || jobAgeMs === null) return null;
+  if (!status || elapsedMs === null) return null;
 
-  const extrapolated = jobAgeMs + Math.max(0, now - answeredAt);
-  shown.current = Math.max(shown.current, extrapolated);
-  const elapsed = formatElapsed(shown.current);
+  const elapsed = formatElapsed(elapsedMs);
 
   return (
     <div className="mt-4 space-y-3 text-sm" data-testid="pending-progress">
