@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { IntlProvider } from '@/components/IntlProvider';
 import enMessages from '@/messages/en.json';
+import deMessages from '@/messages/de.json';
 import { EssayEntryForm, type EssayEntryFormStrings } from './EssayEntryForm';
 import { MAX_ESSAY_CONTENT_CHARS } from '@/lib/contracts/essay-submission';
 import { MIN_ESSAY_WORDS, RECOMMENDED_MIN_WORDS, RECOMMENDED_MAX_WORDS, MAX_ESSAY_WORDS } from '@/lib/contracts/word-count';
@@ -11,6 +12,25 @@ import {
   mixedWhitespaceContent as mixedWhitespaceWords,
   contentOfExactLength,
 } from '@/test/essay-content-fixtures';
+
+/**
+ * KAN-18: a successful submission now navigates to the preview screen, via
+ * next-intl's locale-aware `useRouter`, which is backed by
+ * `next/navigation` — absent outside a real Next.js request, so it is
+ * stubbed here the same way `LocaleSwitcher.test.tsx` does. `push` is the
+ * only thing this file asserts on.
+ */
+const push = vi.fn();
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push, replace: vi.fn() }),
+  usePathname: () => '/practice/write',
+  redirect: vi.fn(),
+  permanentRedirect: vi.fn(),
+}));
+
+beforeEach(() => {
+  push.mockClear();
+});
 
 const STRINGS: EssayEntryFormStrings = {
   textareaLabel: 'Your essay',
@@ -28,7 +48,7 @@ const STRINGS: EssayEntryFormStrings = {
   rateLimitedError: "You've reached the submission limit for now — please wait a bit before submitting another essay.",
 };
 
-function renderForm() {
+function renderForm(locale: 'en' | 'de' = 'en') {
   // A fresh QueryClient per render — react-query caches mutations/queries
   // on the client instance, and a shared one would leak state (e.g. a
   // mutation still "pending" from a previous test) across these tests.
@@ -42,7 +62,7 @@ function renderForm() {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <IntlProvider locale="en" messages={enMessages}>
+      <IntlProvider locale={locale} messages={locale === 'de' ? deMessages : enMessages}>
         <EssayEntryForm strings={STRINGS} />
       </IntlProvider>
     </QueryClientProvider>,
@@ -201,6 +221,43 @@ describe('EssayEntryForm — successful submission', () => {
         body: JSON.stringify({ content }),
       }),
     );
+  });
+
+  // KAN-18 (BR-4.1): submitting is what starts the guest's path to their
+  // score — the form must hand them to the preview screen for THIS essay.
+  it('navigates to the preview screen for the created essay once the submission succeeds', async () => {
+    const essayId = 'a6afa382-8223-4b5d-b4ea-d5a7f0694211';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: essayId }), { status: 201 })));
+    renderForm();
+
+    fillEssay(words(60));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledTimes(1));
+    expect(push).toHaveBeenCalledWith(`/practice/preview?essay=${essayId}`);
+  });
+
+  it('keeps a German guest under /de when it navigates to the preview', async () => {
+    const essayId = 'a6afa382-8223-4b5d-b4ea-d5a7f0694211';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: essayId }), { status: 201 })));
+    renderForm('de');
+
+    fillEssay(words(60));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledTimes(1));
+    expect(push).toHaveBeenCalledWith(`/de/practice/preview?essay=${essayId}`);
+  });
+
+  it('does not navigate when the submission is rejected', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
+    renderForm();
+
+    fillEssay(words(60));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.submitCta }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    expect(push).not.toHaveBeenCalled();
   });
 
   it('the submit button shows the submitting label and is disabled while the request is in flight', async () => {

@@ -38,6 +38,7 @@
  */
 import { useState, type FormEvent } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { useRouter } from '@/i18n/navigation';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { WordCountLabel } from '@/components/guest/chrome/WordCountLabel';
@@ -140,7 +141,18 @@ async function postEssay(content: string): Promise<SubmitEssayResponse> {
 export function EssayEntryForm({ strings }: EssayEntryFormProps) {
   const [content, setContent] = useState('');
   const [touched, setTouched] = useState(false);
-  const mutation = useMutation({ mutationFn: postEssay });
+  // KAN-18: a successful submission hands the guest on to the preview
+  // screen, where grading is polled and the score shown. `useRouter` is the
+  // locale-aware one (`@/i18n/navigation`, whose own comment reserves it for
+  // exactly this), so a German guest stays under `/de`. It is a routing
+  // primitive, not a catalogue import — this file still cannot reach
+  // `next-intl` itself. The success block below stays on screen for the
+  // moment the navigation takes.
+  const router = useRouter();
+  const mutation = useMutation({
+    mutationFn: postEssay,
+    onSuccess: ({ id }) => router.push({ pathname: '/practice/preview', query: { essay: id } }),
+  });
 
   // Single source of truth for whether this is submittable at all — the
   // exact schema `POST /api/essays` re-checks server-side, character cap
