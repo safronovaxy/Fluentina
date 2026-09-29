@@ -33,10 +33,22 @@ Raising these again wastes a review round. If you believe one is now wrong,
 say so once, explicitly labelled as an escalation to Irina, and continue
 reviewing everything else.
 
-- Grading: Mistral AI primary (EU-hosted), Claude fallback, behind a
-  `GradingProvider` abstraction.
-- Auth: Auth.js/NextAuth, email+password plus Google OAuth, on the app's own
-  Postgres.
+- Grading: Claude (`claude-opus-5-5`) is the Phase 1 primary; Mistral stays
+  implemented and selectable via `GRADING_PROVIDER=mistral` as the deferred
+  second step. Both sit behind the `GradingProvider` abstraction. This inverts
+  the original ordering — Irina's decision of 2026-09-28, shipped as KAN-44,
+  ADR-4 amended. EU data residency is deliberately deferred for the prototype
+  and is a condition on launch, not on this ordering.
+- Auth: Auth.js/NextAuth with Google OAuth and **database sessions**, over the
+  app's own Postgres via the Drizzle adapter. Email+password is implemented as
+  our own route handler — hashing, the user insert and the session issued
+  through the adapter's public `createSession` — and **not** through Auth.js's
+  Credentials provider. That provider only works with the JWT session strategy,
+  and in a mixed-provider setup Auth.js does not warn: it mints a JWE, the
+  session reader looks it up as a `sessions` row, finds nothing, and silently
+  signs the user out. Irina's decision of 2026-09-29, ADR-3 amended. Keeping
+  database sessions is what keeps registered sessions revocable, matching what
+  ADR-17 already gives the guest session.
 - Infra reuse: GCP project `writewise-468912`, region `europe-west10`, Cloud
   SQL `writewise-db` with a new `fluentina` schema, Cloud Run, Cloud Tasks for
   async grading, Cloud Scheduler for cleanup. The GCP project ID and Cloud SQL
