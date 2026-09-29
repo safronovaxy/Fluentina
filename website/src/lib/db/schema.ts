@@ -381,7 +381,7 @@ export const sessions = fluentinaSchema.table(
  * `kind` and `document_version` are plain text, like every other
  * status-shaped column in this schema: the app layer (lib/contracts/
  * consent.ts) is the single source of truth for the valid set, not a
- * Postgres enum a migration must chase. `document_version` is what the form
+ * Postgres enum a migration must chase. `document_version` is what the client
  * actually rendered, threaded through the request, not a constant stamped on
  * at insert time.
  *

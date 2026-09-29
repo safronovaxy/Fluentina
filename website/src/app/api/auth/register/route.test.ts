@@ -37,6 +37,12 @@ async function guestWithEssay(): Promise<{ guest: GuestActor; essayId: string }>
 
 const guestCookie = (guest: GuestActor) => ({ [GUEST_SESSION_COOKIE_NAME]: guest.sessionId });
 
+/** A cookie reader over the session cookie THIS response set, as the browser would send it back. */
+const cookieReader = (response: Response) => (name: string) => {
+  const line = setCookieLine(response, name);
+  return line === undefined ? undefined : setCookieValue(line);
+};
+
 beforeAll(async () => {
   await resetDatabase();
 });
@@ -162,13 +168,31 @@ describe('POST /api/auth/register — the guest becomes the user (KAN-20)', () =
 
   it('a guest cookie naming a session that already converted still registers (two tabs) and takes nothing from the first user', async () => {
     const { guest, essayId } = await guestWithEssay();
-    const first = await POST(jsonPost(PATH, registrationBody(), { cookies: guestCookie(guest) }));
-    const second = await POST(jsonPost(PATH, registrationBody(), { cookies: guestCookie(guest) }));
+    const firstBody = registrationBody();
+    const secondBody = registrationBody();
+    const first = await POST(jsonPost(PATH, firstBody, { cookies: guestCookie(guest) }));
+    const second = await POST(jsonPost(PATH, secondBody, { cookies: guestCookie(guest) }));
+    const allUsers = await db.select().from(users);
 
     expect([first.status, second.status]).toEqual([201, 201]);
+    // `registrationBody()` mints a fresh email per call, so BOTH registrations
+    // created a user: "the essay has some owner" would hold even if the second
+    // had stolen it. Pin it to the FIRST registration's user, by the first
+    // request's own email, and to the first response's session.
     const [essay] = await db.select().from(essays).where(eq(essays.id, essayId));
-    const firstEmailOwner = (await db.select().from(users)).find((u) => u.id === essay.userId);
-    expect(firstEmailOwner).toBeDefined();
+    const [firstUser, secondUser] = [firstBody.email, secondBody.email].map(
+      (email) => allUsers.find((u) => u.email === email.toLowerCase()),
+    );
+    expect(firstUser).toBeDefined();
+    expect(secondUser).toBeDefined();
+    expect(firstUser!.id).not.toBe(secondUser!.id);
+    expect(essay.userId).toBe(firstUser!.id);
+
+    const firstActor = await resolveRegisteredSession(cookieReader(first));
+    const secondActor = await resolveRegisteredSession(cookieReader(second));
+    expect(firstActor).toEqual({ kind: 'user', userId: firstUser!.id });
+    expect(await getEssayById(firstActor!, essayId)).not.toBeNull();
+    expect(await getEssayById(secondActor!, essayId)).toBeNull();
   });
 });
 
@@ -185,6 +209,43 @@ describe('POST /api/auth/register — Set-Cookie only after commit', () => {
     expect(body.reason).toBe('internalError');
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(await getEssayById(guest, essayId)).not.toBeNull();
+  });
+
+  // Test Lead, KAN-20 review: `registerUser`'s expired-session sweep is the one
+  // statement that runs AFTER the transaction has committed. If a failure in it
+  // ever propagated, the route would answer 500 with no Set-Cookie after the
+  // user, four consent rows, the conversion and the session row were all
+  // durable — the person holds an account they have no session for, and the
+  // guest cookie names a converted row: the exact outcome the single
+  // transaction exists to prevent, reached by the one line outside it.
+  it('a failing expired-session sweep AFTER commit does not fail the registration: 201, the session cookie set, one fixed log event', async () => {
+    const { guest, essayId } = await guestWithEssay();
+    const body = registrationBody({ email: 'private.person@example.test', password: 'a very private password' });
+    // Every `db.delete` in the flow is a sweep (the transaction's own statements
+    // go through `tx`, and this request replaces no session).
+    const deleteSpy = vi.spyOn(db, 'delete').mockImplementation(() => {
+      throw new Error('detail mentioning private.person@example.test');
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await POST(jsonPost(PATH, body, { cookies: guestCookie(guest) }));
+
+    expect(deleteSpy).toHaveBeenCalled();
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ ok: true });
+    const sessionLine = setCookieLine(response, REGISTERED_SESSION_COOKIE_NAME);
+    expect(sessionLine).toBeDefined();
+    expect(attributeValue(setCookieLine(response, GUEST_SESSION_COOKIE_NAME)!, 'Max-Age')).toBe('0');
+    // The committed work is intact and the cookie is one that works.
+    deleteSpy.mockRestore();
+    const actor = await resolveRegisteredSession(cookieReader(response));
+    expect(actor).not.toBeNull();
+    expect(await getEssayById(actor!, essayId)).not.toBeNull();
+    // The failure is logged as a fixed event and nothing more: no email, no
+    // password, none of the error's text, and it is not an error-level log.
+    expect(warnSpy.mock.calls).toEqual([[JSON.stringify({ severity: 'WARNING', event: 'session_sweep_failed' })]]);
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   it('the failure log line is a fixed event name — no email, no password, no error text', async () => {
@@ -206,7 +267,7 @@ describe('POST /api/auth/register — consent (KAN-21, KAN-22)', () => {
     return db.select().from(consentRecords);
   }
 
-  it('writes four consent rows — terms, privacy, the 16+ declaration and marketing — each with the version the form presented', async () => {
+  it('writes four consent rows — terms, privacy, the 16+ declaration and marketing — each with the version the client presented', async () => {
     await POST(jsonPost(PATH, registrationBody()));
 
     const rows = await consentRows();
@@ -257,12 +318,24 @@ describe('POST /api/auth/register — consent (KAN-21, KAN-22)', () => {
     expect(await db.select().from(users)).toEqual([]);
   });
 
-  it('refuses a stale form: a version that is not the one in force is not recorded as agreement', async () => {
+  it('refuses a stale version with its own reason, staleConsentVersion, and records nothing as agreement', async () => {
     const body = registrationBody();
     body.consent.privacyPolicy.version = '1999-01-01' as never;
 
-    expect((await POST(jsonPost(PATH, body))).status).toBe(400);
+    const response = await POST(jsonPost(PATH, body));
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as Rejection).reason).toBe('staleConsentVersion');
     expect(await consentRows()).toEqual([]);
+    expect(await db.select().from(users)).toEqual([]);
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('a stale version alongside a too-short password is invalidSubmission, not staleConsentVersion', async () => {
+    const body = registrationBody({ password: 'too short' });
+    body.consent.privacyPolicy.version = '1999-01-01' as never;
+
+    expect(((await (await POST(jsonPost(PATH, body))).json()) as Rejection).reason).toBe('invalidSubmission');
   });
 
   it('refuses a request that never presented the marketing choice at all', async () => {
@@ -414,10 +487,10 @@ describe('POST /api/auth/register — guards', () => {
   });
 });
 
-describe('POST /api/auth/register — rate limits (10/IP/hour, plus 3 per presented guest-cookie value)', () => {
-  it('refuses the fourth registration on one guest cookie with 429 rateLimited, from any address', async () => {
+describe('POST /api/auth/register — rate limits (10/IP/hour, plus 5 per presented guest-cookie value)', () => {
+  it('refuses the attempt after the per-cookie cap on one guest cookie with 429 rateLimited, from any address', async () => {
     const guest: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
-    // Three real attempts, each from a different address; invalid bodies keep
+    // The cap's worth of real attempts, each from a different address; invalid bodies keep
     // the fixture cheap (no scrypt) — they are counted before the body is read.
     for (let i = 0; i < REGISTRATION_SESSION_LIMIT; i++) {
       const response = await POST(jsonPost(PATH, {}, { cookies: guestCookie(guest), headers: xff(`192.0.2.${i}`) }));
@@ -430,6 +503,31 @@ describe('POST /api/auth/register — rate limits (10/IP/hour, plus 3 per presen
     expect(((await response.json()) as Rejection).reason).toBe('rateLimited');
     expect(await db.select().from(users)).toEqual([]);
   });
+
+  // Four attempts, fixed, not derived from the constant: the point is that THIS
+  // sequence survives, so it must fail if the cap drops back to 3. (Skipped only
+  // when the cap is overridden by environment, like the default-value test
+  // in rate-limit-auth.test.ts.)
+  it.skipIf(process.env.RATE_LIMIT_REGISTRATION_SESSION_LIMIT !== undefined)(
+    'leaves room to recover: a 409, then two typos, then a correct submission all get through on one guest cookie',
+    async () => {
+      // The per-cookie limiter runs before the body is read and the guest cookie
+      // is cleared only on success, so every failed attempt spends a slot. At a
+      // cap of 3 the fourth attempt here was a 429 for the rest of the hour.
+      await registerTestAccount({ email: 'taken@example.test' });
+      const { guest, essayId } = await guestWithEssay();
+      const attempt = (body: unknown) => POST(jsonPost(PATH, body, { cookies: guestCookie(guest) }));
+
+      const taken = await attempt(registrationBody({ email: 'taken@example.test' }));
+      const typo1 = await attempt(registrationBody({ password: 'too short' }));
+      const typo2 = await attempt(registrationBody({ password: 'too short' }));
+      const final = await attempt(registrationBody());
+
+      expect([taken.status, typo1.status, typo2.status, final.status]).toEqual([409, 400, 400, 201]);
+      const actor = await resolveRegisteredSession(cookieReader(final));
+      expect(await getEssayById(actor!, essayId)).not.toBeNull();
+    },
+  );
 
   it('refuses the request after the IP cap with 429 rateLimited', async () => {
     for (let i = 0; i < REGISTRATION_IP_LIMIT; i++) await checkRegistrationRateLimit(null, '198.51.100.4');

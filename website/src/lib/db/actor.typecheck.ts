@@ -8,11 +8,15 @@
  * only thing stopping a raw cookie value being handed to the `sessions`
  * repository as if it were the hash — which would write the live credential
  * into `sessions.id`, the exact thing hashing it exists to prevent.
+ *
+ * Lives in `lib/db`, next to `ownership.typecheck.ts`, not in `lib/contracts`:
+ * what it asserts is about the repository's signatures, and it imports the
+ * repositories — nothing in `lib/contracts` imports `lib/db`.
  */
-import type { RegisteredSessionToken, RegisteredSessionTokenHash, UserActor } from './actor';
-import { deleteSession, findLiveSessionUserId } from '@/lib/db/sessions';
+import type { RegisteredSessionToken, RegisteredSessionTokenHash, UserActor } from '@/lib/contracts/actor';
+import { deleteSession, findLiveSessionUserId } from './sessions';
+import { findUserForLogin } from './users';
 import { hashRegisteredSessionToken } from '@/lib/domain/registered-session-token';
-import { findUserForLogin } from '@/lib/db/users';
 import { checkLoginRateLimit } from '@/lib/domain/rate-limit';
 
 declare const rawString: string;

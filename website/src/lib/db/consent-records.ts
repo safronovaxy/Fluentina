@@ -55,6 +55,18 @@ export async function recordConsent(actor: UserActor, decision: ConsentDecision)
 /**
  * The current state per kind: the most recent row for each. Scoped on
  * `user_id` — one user cannot read another's consent trail.
+ *
+ * ORDER ON A TIE IS UNSPECIFIED. "Most recent" is `recorded_at`, which
+ * defaults to `now()` — the START of the writing transaction, not the moment of
+ * the insert. Two decisions for one kind written in separate transactions
+ * differ by at least a round trip, so today's callers never tie. Two written in
+ * ONE transaction (a settings screen saving several decisions at once) get an
+ * identical `recorded_at`, and which the read calls "latest" is then whatever
+ * order Postgres happens to return. There is no honest tie-break to add here:
+ * `id` is a random uuid, so ordering on it would be a coin toss made to look
+ * deterministic. A writer that can record two decisions for the same kind in one
+ * transaction must first give the table a monotonic column (a sequence) or write
+ * `clock_timestamp()`, and order on that.
  */
 export async function currentConsentState(actor: UserActor): Promise<ConsentState[]> {
   const rows = await db

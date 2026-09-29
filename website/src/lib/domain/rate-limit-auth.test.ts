@@ -43,22 +43,22 @@ afterAll(async () => {
   await closePool();
 });
 
-describe('registration — 10 per IP per hour, plus 3 per presented guest-cookie value per hour', () => {
-  it('the per-cookie cap is exactly three — the ruled number, not one re-derived from the module', () => {
-    expect(REGISTRATION_SESSION_LIMIT).toBe(3);
+describe('registration — 10 per IP per hour, plus 5 per presented guest-cookie value per hour', () => {
+  it.skipIf(process.env.RATE_LIMIT_REGISTRATION_SESSION_LIMIT !== undefined)('the per-cookie cap defaults to exactly five — BR-1.8\'s per-session allowance, not a number re-derived from the module', () => {
+    expect(REGISTRATION_SESSION_LIMIT).toBe(5);
   });
 
   it.skipIf(process.env.RATE_LIMIT_REGISTRATION_IP_LIMIT !== undefined)('the per-IP cap defaults to exactly ten', () => {
     expect(REGISTRATION_IP_LIMIT).toBe(10);
   });
 
-  it('allows three attempts on one guest cookie and refuses the fourth, even from four different addresses', async () => {
+  it('allows the per-cookie cap of attempts on one guest cookie and refuses the next, even from a different address each time', async () => {
     const guest = generateGuestSessionId();
     const results: boolean[] = [];
     for (let i = 0; i < REGISTRATION_SESSION_LIMIT + 1; i++) {
       results.push(await checkRegistrationRateLimit(guest, `192.0.2.${i}`, NOW));
     }
-    expect(results).toEqual([true, true, true, false]);
+    expect(results).toEqual([...Array<boolean>(REGISTRATION_SESSION_LIMIT).fill(true), false]);
   });
 
   it('allows the IP cap and refuses the next, with no guest cookie at all', async () => {

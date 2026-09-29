@@ -1,7 +1,7 @@
 /**
  * KAN-20 — the request shapes for registration and login, and the two rules
  * (email normalisation, password policy) the browser and the server must
- * agree on. In `lib/contracts` for the same reason `word-count.ts` is: a form
+ * agree on. In `lib/contracts` for the same reason `word-count.ts` is: a client
  * that tells someone "that password is fine" and a server that then rejects
  * it are the failure a single shared module exists to prevent.
  *
@@ -57,7 +57,7 @@ const loginPasswordSchema = z.string().superRefine((password, ctx) => {
 });
 
 /**
- * One consent decision as the form presents it back: the version it rendered
+ * One consent decision as the client presents it back: the version it rendered
  * and whether the box was ticked. The three required kinds must be `true` —
  * an unticked required box is a request that must not create an account — and
  * the version must be the one currently in force (`consent.ts`).
@@ -90,3 +90,29 @@ export const loginRequestSchema = z.object({
   password: loginPasswordSchema,
 });
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
+
+/**
+ * True when a failed `registerRequestSchema` parse failed ONLY because a
+ * consent `version` is not the one in force: every issue is an
+ * `invalid_literal` at `consent.<kind>.version` whose received value is a
+ * string. The route answers that with `staleConsentVersion` (reload the page)
+ * instead of `invalidSubmission` (fix a field).
+ *
+ * All three conditions matter. A version that is ABSENT is a malformed
+ * request, not a stale page, so `received` must be a string; and a request
+ * that is stale AND has another problem (a short password, an unticked box)
+ * stays `invalidSubmission`, because reloading would not fix the other
+ * problem and a client acting on the more specific reason would lose it.
+ */
+export function isStaleConsentVersionFailure(error: z.ZodError): boolean {
+  return (
+    error.issues.length > 0 &&
+    error.issues.every(
+      (issue) =>
+        issue.code === z.ZodIssueCode.invalid_literal &&
+        typeof issue.received === 'string' &&
+        issue.path[0] === 'consent' &&
+        issue.path[2] === 'version',
+    )
+  );
+}

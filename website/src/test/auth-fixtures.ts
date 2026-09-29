@@ -15,7 +15,7 @@ export function uniqueEmail(): string {
   return `user-${randomUUID()}@example.test`;
 }
 
-/** The wire shape a form posts: what `registerRequestSchema` accepts, un-normalised. */
+/** The wire shape a client will post: what `registerRequestSchema` accepts, un-normalised. */
 export function registrationBody(overrides: {
   email?: string;
   password?: string;

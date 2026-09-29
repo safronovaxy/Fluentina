@@ -8,7 +8,7 @@ import 'server-only';
  * is the moment consent is captured, so it could not be built without deciding
  * what it writes. It writes four `consent_records` rows — terms of service,
  * privacy policy, the 16+ declaration and marketing email — each with the
- * version the form rendered, in the same transaction as the user. Marketing's
+ * version the client rendered, in the same transaction as the user. Marketing's
  * row is written even when unticked, with `granted = false`.
  *
  * The password is hashed BEFORE the transaction opens (about 90 ms of scrypt

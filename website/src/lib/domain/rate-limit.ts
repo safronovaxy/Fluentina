@@ -254,7 +254,7 @@ export const GUEST_SESSION_RESOLVE_IP_WINDOW_MS = ONE_HOUR_MS;
  * KAN-20 — registration and login caps. Same mechanism as everything above
  * (`incrementRateLimitCounter` is already generic); only the buckets are new.
  *
- * Registration: 10 per IP per hour, plus 3 per presented guest-cookie value
+ * Registration: 10 per IP per hour, plus 5 per presented guest-cookie value
  * per hour when one is present. Login: 30 per IP per hour AND 10 per email per
  * hour, both checked on every attempt.
  *
@@ -266,15 +266,26 @@ export const GUEST_SESSION_RESOLVE_IP_WINDOW_MS = ONE_HOUR_MS;
  * own comment records an IPv4 address being recovered from its 48-bit
  * truncated hash in 35 ms, and an email is no higher-entropy than that.
  *
- * The two per-IP numbers are read from the environment, like the essay and
- * session-resolve backstops above, for the same reason: no traffic baseline
- * exists yet. Ten registrations an hour is tight for a classroom registering
- * together behind one school egress address (the very traffic shape the essay
- * cap's comment argues from), so retuning it is a configuration change. The
- * two per-identity numbers (3 per guest cookie, 10 per email) are what the
- * ruling fixed and are not overridable.
+ * The per-IP numbers and the per-guest-cookie number are read from the
+ * environment, like the essay and session-resolve backstops above, for the
+ * same reason: no traffic baseline exists yet. Ten registrations an hour is
+ * tight for a classroom registering together behind one school egress address
+ * (the very traffic shape the essay cap's comment argues from), so retuning it
+ * is a configuration change. Only the per-email login cap (10) is fixed and not
+ * overridable.
+ *
+ * Why the per-cookie cap is 5 and not 3 (KAN-20 review): the limiter runs
+ * BEFORE the body is read, so a schema rejection costs a slot, and the guest
+ * cookie is cleared only on success. A guest who hits a transient 500, then a
+ * 409 (the address exists), then fixes a typo has spent three slots without
+ * ever registering — at 3, the fourth try would be a 429 for the rest of the
+ * hour with no way to a fresh bucket short of clearing site data. 5 matches
+ * `ESSAY_SUBMISSION_SESSION_LIMIT` (BR-1.8's per-session allowance), the same
+ * bucket shape. The per-IP cap stays 10: it is the only mitigation for the
+ * email-enumeration oracle that registration's auto-sign-in creates (see the
+ * register route), so it is not loosened to make room for retries.
  */
-export const REGISTRATION_SESSION_LIMIT = 3;
+export const REGISTRATION_SESSION_LIMIT = positiveIntEnv('RATE_LIMIT_REGISTRATION_SESSION_LIMIT', 5);
 export const REGISTRATION_SESSION_WINDOW_MS = ONE_HOUR_MS;
 export const REGISTRATION_IP_LIMIT = positiveIntEnv('RATE_LIMIT_REGISTRATION_IP_LIMIT', 10);
 export const REGISTRATION_IP_WINDOW_MS = ONE_HOUR_MS;

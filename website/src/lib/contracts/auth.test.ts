@@ -4,6 +4,7 @@ import {
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   emailSchema,
+  isStaleConsentVersionFailure,
   loginRequestSchema,
   passwordLength,
   passwordSchema,
@@ -126,7 +127,7 @@ describe('registerRequestSchema — KAN-21: separate consent choices, required o
   });
 
   it.each(['termsOfService', 'privacyPolicy', 'ageDeclaration16Plus', 'marketingEmail'] as const)(
-    'refuses a %s version that is not the one in force, so a stale form is not recorded as agreement to current text',
+    'refuses a %s version that is not the one in force, so a stale page is not recorded as agreement to current text',
     (kind) => {
       const request = validRequest();
       request.consent[kind].version = '1999-01-01' as never;
@@ -158,5 +159,64 @@ describe('loginRequestSchema', () => {
 
   it('normalises the email, so login and registration agree on what a given address is', () => {
     expect(loginRequestSchema.parse({ email: ' A@Example.com ', password: 'x' }).email).toBe('a@example.com');
+  });
+});
+
+describe('isStaleConsentVersionFailure — a page reload, not a field edit', () => {
+  const failureOf = (request: unknown) => {
+    const parsed = registerRequestSchema.safeParse(request);
+    if (parsed.success) throw new Error('fixture was expected to fail the schema');
+    return parsed.error;
+  };
+
+  it.each(['termsOfService', 'privacyPolicy', 'ageDeclaration16Plus', 'marketingEmail'] as const)(
+    'is true when the only failure is a stale %s version',
+    (kind) => {
+      const request = validRequest();
+      request.consent[kind].version = '1999-01-01' as never;
+      expect(isStaleConsentVersionFailure(failureOf(request))).toBe(true);
+    },
+  );
+
+  it('is true when several versions are stale and nothing else is wrong', () => {
+    const request = validRequest();
+    request.consent.termsOfService.version = '1999-01-01' as never;
+    request.consent.privacyPolicy.version = '1999-01-02' as never;
+    expect(isStaleConsentVersionFailure(failureOf(request))).toBe(true);
+  });
+
+  it('is false for a too-short password, which is a field edit', () => {
+    expect(isStaleConsentVersionFailure(failureOf({ ...validRequest(), password: 'short' }))).toBe(false);
+  });
+
+  it('is false when a stale version comes WITH another failure — reloading would not fix the other one', () => {
+    const request = { ...validRequest(), password: 'short' };
+    request.consent.termsOfService.version = '1999-01-01' as never;
+    expect(isStaleConsentVersionFailure(failureOf(request))).toBe(false);
+  });
+
+  it('is false for an unticked required box, even alongside the current version', () => {
+    const request = validRequest();
+    request.consent.privacyPolicy.granted = false;
+    expect(isStaleConsentVersionFailure(failureOf(request))).toBe(false);
+  });
+
+  it('is false for a `granted` that is a string: an invalid literal, but not on a version, so not a stale page', () => {
+    const request = validRequest();
+    request.consent.termsOfService.granted = 'yes' as never;
+    expect(isStaleConsentVersionFailure(failureOf(request))).toBe(false);
+  });
+
+  it('is false for a version that is ABSENT — a malformed request, not a stale page', () => {
+    const request = validRequest();
+    const terms: Record<string, unknown> = { ...request.consent.termsOfService };
+    delete terms.version;
+    expect(isStaleConsentVersionFailure(failureOf({ ...request, consent: { ...request.consent, termsOfService: terms } }))).toBe(false);
+  });
+
+  it('is false for a version that is not a string', () => {
+    const request = validRequest();
+    request.consent.termsOfService.version = 20260101 as never;
+    expect(isStaleConsentVersionFailure(failureOf(request))).toBe(false);
   });
 });
