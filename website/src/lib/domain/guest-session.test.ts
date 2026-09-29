@@ -1,7 +1,9 @@
 /** @vitest-environment node */
+import { inspect } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { resolveGuestSession } from './guest-session';
 import { generateGuestSessionId } from './session-id';
+import * as sessionIdModule from './session-id';
 import * as guestSessionsDb from '@/lib/db/guest-sessions';
 import { getGuestSessionById, createGuestSession, convertGuestSessionToUser } from '@/lib/db/guest-sessions';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
@@ -243,5 +245,77 @@ describe('resolveGuestSession — a genuine, unexpected failure creating the row
     // Not silently recovered from by minting a different id under the
     // covers, either — nothing was ever created for this id at all.
     expect(await getGuestSessionById({ kind: 'guest', sessionId: freshId }, freshId)).toBeNull();
+  });
+});
+
+describe('resolveGuestSession — a fresh id that itself collides with an unavailable session (KAN-41)', () => {
+  // The guest session id is a bearer credential (ADR-17). The only place
+  // `SessionIdUnavailableError` can escape `resolveGuestSession` is
+  // `mintFreshGuestSession`, when the id it just generated ALSO hits a
+  // committed-but-unavailable row — a 128-bit collision, so it is forced here
+  // by pinning the generator to the id of a second, converted session. Every
+  // step after that is real: Postgres's real 23505, the KAN-36 sanitiser, the
+  // ownership-scoped reread, the real throw site.
+  async function convertedSessionId(): Promise<string> {
+    const { actor } = await resolveGuestSession(undefined);
+    await convertGuestSessionToUser(actor, await createTestUser());
+    return actor.sessionId;
+  }
+
+  function chainOf(err: unknown): Error[] {
+    const chain: Error[] = [];
+    for (let cur = err; cur instanceof Error; cur = cur.cause) chain.push(cur);
+    return chain;
+  }
+
+  it('fails with an explicit error that carries neither session id in message, stack, cause chain, JSON or inspect output', async () => {
+    const presentedId = await convertedSessionId();
+    const collidingFreshId = await convertedSessionId();
+    expect(collidingFreshId).not.toBe(presentedId);
+
+    const generator = vi.spyOn(sessionIdModule, 'generateGuestSessionId').mockReturnValue(
+      collidingFreshId as ReturnType<typeof generateGuestSessionId>,
+    );
+    let caught: unknown;
+    try {
+      await resolveGuestSession(presentedId);
+    } catch (err) {
+      caught = err;
+    } finally {
+      generator.mockRestore();
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    const chain = chainOf(caught);
+    // Not vacuous: the chain really does reach the SessionIdUnavailableError
+    // built at the throw site, and its message keeps the recovery signal.
+    expect(chain.map((e) => e.name)).toContain('SessionIdUnavailableError');
+    expect(chain[0].message).toBe('could not create a guest session under a freshly generated id');
+
+    for (const id of [presentedId, collidingFreshId]) {
+      for (const link of chain) {
+        expect(link.message).not.toContain(id);
+        expect(link.stack ?? '').not.toContain(id);
+        expect(JSON.stringify(link)).not.toContain(id);
+      }
+      expect(JSON.stringify(caught)).not.toContain(id);
+      // What a framework's default handler, `console.error(err)` or an APM
+      // hook actually prints — includes the stack and the whole cause chain.
+      expect(inspect(caught, { depth: null })).not.toContain(id);
+    }
+  });
+
+  it('does not wrap a failure that is not the unavailable-id case', async () => {
+    // Only SessionIdUnavailableError is made explicit; anything else on this
+    // path (a statement timeout, say) is still the original error, untouched.
+    const timeoutError = Object.assign(new Error('canceling statement due to statement timeout'), {
+      code: '57014',
+    });
+    const createSpy = vi.spyOn(guestSessionsDb, 'createGuestSession').mockRejectedValueOnce(timeoutError);
+    try {
+      await expect(resolveGuestSession(undefined)).rejects.toBe(timeoutError);
+    } finally {
+      createSpy.mockRestore();
+    }
   });
 });
