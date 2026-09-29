@@ -70,8 +70,9 @@ describe('createGradingProvider — ADR-4 provider selection, amended by KAN-44'
     expect(createGradingProvider().name).toBe('claude');
   });
 
-  // Falling back to Claude is the ~20x more expensive provider; a typo must
-  // not do that silently. Same shape as rate-limit.ts's rejected-override
+  // Falling back to Claude is the ~2-4x more expensive provider per attempt
+  // (see provider-factory.ts for the arithmetic); a typo must not do that
+  // silently. Same shape as rate-limit.ts's rejected-override
   // warning: an event name, the operator-typed raw value, what was selected.
   it('an unrecognised GRADING_PROVIDER logs one structured warning with the raw value and the provider selected', () => {
     vi.stubEnv('MOCK_GRADING_PROVIDER', undefined);
