@@ -65,7 +65,8 @@ interface LocaleFixture {
   readonly locale: 'en' | 'de';
   readonly writePath: string;
   readonly submitName: string;
-  readonly successTitle: string;
+  /** Where a successful submission lands (KAN-18) — the essay id follows. */
+  readonly previewPath: string;
   readonly tooShortError: string;
   readonly tooLongError: string;
   readonly lengthWarning: string;
@@ -93,7 +94,7 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     locale: 'en',
     writePath: '/practice/write',
     submitName: 'Submit essay',
-    successTitle: 'Essay received',
+    previewPath: '/practice/preview',
     tooShortError: 'Your essay is too short to grade — write at least 50 words.',
     tooLongError: 'Your essay is too long — keep it to 300 words or fewer.',
     lengthWarning: "That's longer than the recommended range, but you can still submit it.",
@@ -104,7 +105,7 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     locale: 'de',
     writePath: '/de/practice/write',
     submitName: 'Aufsatz einreichen',
-    successTitle: 'Aufsatz erhalten',
+    previewPath: '/de/practice/preview',
     tooShortError: 'Dein Aufsatz ist zu kurz zum Bewerten — schreibe mindestens 50 Wörter.',
     tooLongError: 'Dein Aufsatz ist zu lang — halte ihn auf 300 Wörter oder weniger.',
     lengthWarning: 'Das ist länger als der empfohlene Bereich, du kannst ihn aber trotzdem einreichen.',
@@ -184,7 +185,8 @@ for (const fx of LOCALE_FIXTURES) {
 
       await page.getByRole('button', { name: fx.submitName }).click();
 
-      await expect(page.getByRole('status')).toHaveText(new RegExp(fx.successTitle));
+      // KAN-18: success now means landing on the preview screen for the essay.
+      await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.previewPath}\\?essay=[0-9a-f-]{36}$`));
     });
 
     test('a 1000-word essay — the story\'s own "blocked" verification case — is blocked client-side: the submit click never leaves the page, and the too-long message is shown', async ({
@@ -199,7 +201,7 @@ for (const fx of LOCALE_FIXTURES) {
       // Never reached the success state — the click was blocked, not merely
       // slow; there is no pending/network state to wait out.
       await expect(page.getByRole('status')).toHaveCount(0);
-      await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
+      await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.writePath}$`));
     });
 
     // Round-1 review (should-fix #4): the too-short error was never
@@ -219,7 +221,7 @@ for (const fx of LOCALE_FIXTURES) {
 
       await expect(blockingMessage(page)).toHaveText(fx.tooShortError);
       await expect(page.getByRole('status')).toHaveCount(0);
-      await expect(page).toHaveURL(new RegExp(`${fx.writePath}$`));
+      await expect(page).toHaveURL(new RegExp(`^https?://[^/]+${fx.writePath}$`));
     });
 
     // Round-1 review (should-fix #4, same finding): the counter's own text

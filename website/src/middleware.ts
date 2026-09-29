@@ -99,5 +99,14 @@ export const config = {
     '/en/practice/write/:path*',
     '/de/practice/write',
     '/de/practice/write/:path*',
+    // KAN-18: the score preview. A static route on purpose (the essay id is
+    // a `?essay=` query parameter, not a `[essayId]` segment) — this list's
+    // guard test refuses dynamic guest routes, and see the page's own comment.
+    '/practice/preview',
+    '/practice/preview/:path*',
+    '/en/practice/preview',
+    '/en/practice/preview/:path*',
+    '/de/practice/preview',
+    '/de/practice/preview/:path*',
   ],
 };
