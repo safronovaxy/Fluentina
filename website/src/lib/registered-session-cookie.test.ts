@@ -38,8 +38,12 @@ describe('the registered-session cookie', () => {
   });
 
   it('clears with IDENTICAL attributes and maxAge 0 — a __Host- cookie is not cleared by a delete that omits Secure or Path=/', () => {
-    expect(REGISTERED_SESSION_COOKIE_CLEAR_OPTIONS).toEqual({ ...REGISTERED_SESSION_COOKIE_OPTIONS, maxAge: 0 });
-    expect(REGISTERED_SESSION_COOKIE_CLEAR_OPTIONS.secure).toBe(true);
-    expect(REGISTERED_SESSION_COOKIE_CLEAR_OPTIONS.path).toBe('/');
+    // A literal, not `{ ...REGISTERED_SESSION_COOKIE_OPTIONS, maxAge: 0 }`: that
+    // is the source's own definition restated, and could not fail.
+    expect(REGISTERED_SESSION_COOKIE_CLEAR_OPTIONS).toEqual({ httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 0 });
+    // ...and it stays in step with the options it clears, whatever they become.
+    const { maxAge: _set, ...setAttributes } = REGISTERED_SESSION_COOKIE_OPTIONS;
+    const { maxAge: _cleared, ...clearAttributes } = REGISTERED_SESSION_COOKIE_CLEAR_OPTIONS;
+    expect(clearAttributes).toEqual(setAttributes);
   });
 });

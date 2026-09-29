@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { db } from './client';
 import { sessions, users } from './schema';
@@ -225,6 +225,32 @@ describe('sweepExpiredSessions — hung off creation, and never the thing correc
     await createSession(actor, fresh.hash);
 
     expect(await allSessionIds()).toEqual([fresh.hash]);
+  });
+
+  // The design keeps the sweep off the hot read path: creation is rare, reads
+  // are constant, and correctness never depends on the sweep. "Runs on
+  // creation" is pinned above; this pins the other half. Asserted two ways so a
+  // sweep added by any route fails it: the row it would delete is still there,
+  // and `db.delete` was never reached.
+  it('does NOT run on reads: a lookup leaves an already-expired row in the table and issues no delete', async () => {
+    const actor = await newUserActor();
+    const stale = freshHash();
+    const live = freshHash();
+    await insertSessionWithin(db, actor, stale.hash);
+    await insertSessionWithin(db, actor, live.hash);
+    await setAge(stale.hash, 'expires_at', '-1 day');
+    const deleteSpy = vi.spyOn(db, 'delete');
+
+    try {
+      expect((await findLiveSessionUserId(live.hash))?.userId).toBe(actor.userId);
+      expect(await findLiveSessionUserId(stale.hash)).toBeNull();
+      await touchSession(actor, live.hash);
+
+      expect(deleteSpy).not.toHaveBeenCalled();
+      expect((await allSessionIds()).sort()).toEqual([stale.hash, live.hash].sort());
+    } finally {
+      deleteSpy.mockRestore();
+    }
   });
 
   it('an expired row is refused by the lookup whether or not any sweep has run', async () => {

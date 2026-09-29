@@ -83,6 +83,18 @@
  * is therefore an email-enumeration oracle. The per-IP registration cap in
  * `lib/domain/rate-limit.ts` is the mitigation.
  */
+/*
+ * KAN-20 review: `staleConsentVersion` added for `POST /api/auth/register`,
+ * returned when the ONLY schema failures are on `consent.*.version` — the
+ * client rendered a consent text that is no longer the one in force. It is a
+ * separate reason from `invalidSubmission` because the two need opposite
+ * responses: a stale version is fixed by reloading the page (the terms
+ * changed), a short password by editing a field. A client cannot tell them
+ * apart itself by comparing against its own bundled
+ * `CURRENT_CONSENT_VERSIONS`, since a stale bundle is precisely the case in
+ * which that comparison is wrong. Decided here rather than in the forms story
+ * so a UI story does not edit this file and a route handler.
+ */
 import { ESSAY_LENGTH_REJECTION_REASONS, type EssayLengthRejectionReason } from './essay-submission';
 
 /**
@@ -111,6 +123,7 @@ export const GUARD_REJECTION_REASONS = [
   'internalError',
   'invalidCredentials',
   'emailAlreadyRegistered',
+  'staleConsentVersion',
 ] as const;
 export type GuardRejectionReason = (typeof GUARD_REJECTION_REASONS)[number];
 

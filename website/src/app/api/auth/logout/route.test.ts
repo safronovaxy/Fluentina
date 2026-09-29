@@ -2,9 +2,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { POST } from './route';
 import { db } from '@/lib/db/client';
+import { createSession } from '@/lib/db/sessions';
 import { sessions } from '@/lib/db/schema';
 import { resolveRegisteredSession } from '@/lib/domain/registered-session';
-import { hashRegisteredSessionToken } from '@/lib/domain/registered-session-token';
+import { generateRegisteredSessionToken, hashRegisteredSessionToken } from '@/lib/domain/registered-session-token';
 import { REGISTERED_SESSION_COOKIE_NAME } from '@/lib/registered-session-cookie';
 import { resetDatabase, closePool } from '@/test/db-fixtures';
 import { registerTestAccount } from '@/test/auth-fixtures';
@@ -68,14 +69,18 @@ describe('POST /api/auth/logout', () => {
   it('ends only the session presented: the same user\'s session elsewhere, and other users\', stay signed in', async () => {
     const account = await registerTestAccount();
     const other = await registerTestAccount();
-    const secondDevice = await registerTestAccount({ email: account.email.replace('user-', 'user2-') });
+    // A real second session for the SAME account, minted the way a second
+    // sign-in would: a fresh token, a fresh row, one `user_id`.
+    const secondDevice = generateRegisteredSessionToken();
+    await createSession({ kind: 'user', userId: account.userId }, hashRegisteredSessionToken(secondDevice));
 
     await POST(bodilessPost(PATH, withSession(account.token)));
 
     expect(await resolve(other.token)).not.toBeNull();
-    expect(await resolve(secondDevice.token)).not.toBeNull();
+    expect(await resolve(secondDevice)).not.toBeNull();
+    expect(await resolve(account.token)).toBeNull();
     expect((await db.select().from(sessions)).map((row) => row.id).sort()).toEqual(
-      [hashRegisteredSessionToken(other.token), hashRegisteredSessionToken(secondDevice.token)].sort(),
+      [hashRegisteredSessionToken(other.token), hashRegisteredSessionToken(secondDevice)].sort(),
     );
   });
 

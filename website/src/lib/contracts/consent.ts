@@ -35,11 +35,12 @@
  * `requiresReconsent` and a one-line `summary`, and `CURRENT_CONSENT_VERSIONS`
  * names the one in force.
  *
- * A registration request carries the version the form actually rendered; the
- * request schema (`auth.ts`) accepts only the current one, so a stale form left
+ * A registration request carries the version the client actually rendered; the
+ * request schema (`auth.ts`) accepts only the current one, so a stale page left
  * open across a policy change is refused rather than recording an agreement to
- * text that is no longer in force. The form renders from
- * `CURRENT_CONSENT_VERSIONS` and sends back what it rendered.
+ * text that is no longer in force. A client is expected to render from
+ * `CURRENT_CONSENT_VERSIONS` and send back what it rendered. (No such form
+ * exists yet — this is the contract one must satisfy.)
  *
  * ALL FOUR ARE PROVISIONAL, AND MUST BE REPLACED BEFORE LAUNCH. Irina's privacy
  * policy is a draft in review and unpublished, so its publication date does not

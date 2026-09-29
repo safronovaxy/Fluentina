@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { registerRequestSchema } from '@/lib/contracts/auth';
+import { isStaleConsentVersionFailure, registerRequestSchema } from '@/lib/contracts/auth';
 import { guestSessionIdSchema, registeredSessionTokenSchema } from '@/lib/contracts/actor';
 import { registerAccount } from '@/lib/domain/registration';
 import { checkRegistrationRateLimit } from '@/lib/domain/rate-limit';
@@ -73,6 +73,11 @@ export async function POST(request: NextRequest) {
 
   const parsed = registerRequestSchema.safeParse(body.json);
   if (!parsed.success) {
+    // A consent version that is no longer the one in force needs a page
+    // reload, not a field edit — a reason of its own (rejection-reason.ts).
+    if (isStaleConsentVersionFailure(parsed.error)) {
+      return rejectionResponse('staleConsentVersion', 400, 'the terms have changed — reload the page and accept them again');
+    }
     return rejectionResponse('invalidSubmission', 400, 'invalid registration request');
   }
 

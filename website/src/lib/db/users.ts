@@ -123,8 +123,8 @@ export interface LoginCandidate {
 }
 
 /**
- * The login lookup, and the second actor-first exception (with
- * `findLiveSessionUserId`): it runs before there is any actor. It returns ONLY
+ * The login lookup, and one of the actor-first exceptions listed in
+ * sessions.ts's header: it runs before there is any actor. It returns ONLY
  * the id and the password hash, on purpose — this is the one place the hash is
  * ever selected, and a login path must not be able to turn into a user-data
  * read by growing extra columns.
@@ -142,6 +142,19 @@ export async function findUserForLogin(email: NormalisedEmail): Promise<LoginCan
  * stored value is still `expected`. Used for rehash-on-login, where the update
  * must not clobber a hash a concurrent change wrote between the read and this
  * write. Returns whether it wrote.
+ *
+ * THIS IS THE ONLY FUNCTION THAT UPDATES `users.password_hash`, AND IT DOES NOT
+ * REVOKE SESSIONS. That is correct for rehash-on-login, and only there: the
+ * password did not change, only the cost parameters of its hash, so every
+ * session minted under it is still legitimately held by the same person. A
+ * GENUINE password change (a reset, a "change password" screen) is a different
+ * operation and must, in the same transaction, delete every session for the
+ * user — calling this and stopping leaves each session minted under the old
+ * password authenticating for up to 30 days, including one held by whoever
+ * made the reset necessary. No `deleteAllSessionsForUser` exists yet: the only
+ * session deletes are the actor-scoped single-row `deleteSessionWithin` and the
+ * expiry sweep. The story that changes passwords writes that primitive and its
+ * own hash write with it, rather than reusing this one.
  */
 export async function replacePasswordHash(actor: UserActor, expected: string, next: string): Promise<boolean> {
   const result = await db

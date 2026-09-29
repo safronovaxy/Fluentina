@@ -18,12 +18,31 @@ import 'server-only';
  * be one indexed equality. Password hashing is a different problem — low-
  * entropy input — and does use scrypt (lib/domain/password.ts).
  *
- * ACTOR-FIRST, WITH ONE EXCEPTION. Every function here takes a `UserActor`
- * and scopes on `user_id`, except `findLiveSessionUserId`: it is the function
- * that PRODUCES a `UserActor` from a cookie, so it cannot take one. It is not
- * fudged with a `SystemActor` — lib/contracts/actor.ts is explicit that no
- * such escape hatch exists — and it is named so that the exception is
- * greppable. The exception is one function wide.
+ * ACTOR-FIRST, WITH A NAMED EXCEPTION LIST. Every function that reads or
+ * changes a particular user's rows takes a `UserActor` and scopes on
+ * `user_id`. The functions across lib/db that do not are these four, and the
+ * list is closed — a fifth needs to be added here, with its reason:
+ *
+ *  1. `findLiveSessionUserId` (this file): it is the function that PRODUCES a
+ *     `UserActor` from a cookie, so it cannot take one.
+ *  2. `findUserForLogin` (users.ts): it necessarily runs before any actor
+ *     exists, and returns only the id and the password hash.
+ *  3. `sweepExpiredSessions` / `sweepExpiredSessionsBestEffort` (this file):
+ *     housekeeping that deletes every user's expired rows. Its only predicate
+ *     is `expires_at < now()`; it reads nothing, returns a count, and there is
+ *     no user it is acting for.
+ *  4. `insertConsentRecordsWithin` (consent-records.ts): takes a bare `userId`
+ *     string, because it runs inside the registration transaction that is
+ *     creating that very user — no `UserActor` for them exists yet.
+ *
+ * None is fudged with a `SystemActor` — lib/contracts/actor.ts is explicit
+ * that no such escape hatch exists — and none is named `*Unscoped`, which
+ * lib/contracts/actor.ts reserves for a deliberate ownership BYPASS on rows
+ * that have an owner (lib/db/essays.ts). These are not that: each either has
+ * no owner to scope on (the sweep, the login lookup, the actor-minting read)
+ * or writes rows for a user it has just created. That difference is why they
+ * are listed here rather than renamed, and it is why this list, not a grep,
+ * is the place to look.
  */
 import { and, eq, gt, lt, sql } from 'drizzle-orm';
 import { db, type Executor } from './client';

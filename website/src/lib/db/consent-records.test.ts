@@ -1,6 +1,6 @@
 /** @vitest-environment node */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from './client';
 import { consentRecords, users } from './schema';
 import { currentConsentState, recordConsent } from './consent-records';
@@ -62,12 +62,26 @@ describe('consent_records is append-only — KAN-22', () => {
   });
 });
 
+// The two ordering-dependent tests below record their decisions in SEPARATE
+// sequential transactions, so `recorded_at` (`now()` = transaction start)
+// strictly increases between them. `currentConsentState` does not define an
+// order for equal timestamps — see its own comment — so a test that wrote two
+// decisions in one transaction would be asserting something unspecified.
 describe('currentConsentState — the latest row per kind', () => {
   it('reports the most recent decision for each kind, and a withdrawal wins over the earlier grant', async () => {
     const actor = await newUserActor();
     await recordConsent(actor, { kind: 'termsOfService', documentVersion: '2026-01-01', granted: true });
     await recordConsent(actor, { kind: 'marketingEmail', documentVersion: '2026-01-01', granted: true });
     await recordConsent(actor, { kind: 'marketingEmail', documentVersion: '2026-01-01', granted: false });
+
+    // The precondition the ordering rests on, asserted rather than assumed: a
+    // tie here would make the result below unspecified, not merely wrong.
+    // Counted in SQL, at Postgres' microsecond resolution: a JS `Date` truncates
+    // to milliseconds, and two sequential inserts can land in the same one.
+    const distinct = await db.execute(
+      sql`SELECT count(DISTINCT recorded_at)::int AS n FROM fluentina.consent_records WHERE user_id = ${actor.userId} AND kind = 'marketingEmail'`,
+    );
+    expect(distinct.rows[0].n).toBe(2);
 
     const state = await currentConsentState(actor);
 

@@ -322,6 +322,9 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
     // which are not part of this story.
     invalidCredentials: strings.errorGeneric,
     emailAlreadyRegistered: strings.errorGeneric,
+    // KAN-20 review: `staleConsentVersion` is `POST /api/auth/register`'s too,
+    // and unreachable from this form for the same reason as the two above.
+    staleConsentVersion: strings.errorGeneric,
   };
   const submissionError = mutation.error instanceof EssaySubmissionError ? mutation.error : undefined;
   const submissionErrorMessage = submissionError?.reason
