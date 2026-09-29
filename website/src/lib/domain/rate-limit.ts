@@ -117,6 +117,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 import { incrementRateLimitCounter } from '@/lib/db/rate-limit';
 import type { GuestSessionId } from '@/lib/contracts/actor';
+import type { NormalisedEmail } from '@/lib/contracts/auth';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
@@ -250,6 +251,40 @@ export const GUEST_SESSION_RESOLVE_IP_LIMIT = positiveIntEnv('RATE_LIMIT_GUEST_S
 export const GUEST_SESSION_RESOLVE_IP_WINDOW_MS = ONE_HOUR_MS;
 
 /**
+ * KAN-20 — registration and login caps. Same mechanism as everything above
+ * (`incrementRateLimitCounter` is already generic); only the buckets are new.
+ *
+ * Registration: 10 per IP per hour, plus 3 per presented guest-cookie value
+ * per hour when one is present. Login: 30 per IP per hour AND 10 per email per
+ * hour, both checked on every attempt.
+ *
+ * Login needs both axes because each alone is defeated by the attack the other
+ * stops. A per-IP cap alone lets a botnet stuff ONE account from a thousand
+ * addresses, each staying under the cap; a per-email cap alone lets one host
+ * spray one attempt each at ten thousand accounts. The per-email bucket key is
+ * the FULL SHA-256 hex of the normalised email — not `hashAndTruncate`, whose
+ * own comment records an IPv4 address being recovered from its 48-bit
+ * truncated hash in 35 ms, and an email is no higher-entropy than that.
+ *
+ * The two per-IP numbers are read from the environment, like the essay and
+ * session-resolve backstops above, for the same reason: no traffic baseline
+ * exists yet. Ten registrations an hour is tight for a classroom registering
+ * together behind one school egress address (the very traffic shape the essay
+ * cap's comment argues from), so retuning it is a configuration change. The
+ * two per-identity numbers (3 per guest cookie, 10 per email) are what the
+ * ruling fixed and are not overridable.
+ */
+export const REGISTRATION_SESSION_LIMIT = 3;
+export const REGISTRATION_SESSION_WINDOW_MS = ONE_HOUR_MS;
+export const REGISTRATION_IP_LIMIT = positiveIntEnv('RATE_LIMIT_REGISTRATION_IP_LIMIT', 10);
+export const REGISTRATION_IP_WINDOW_MS = ONE_HOUR_MS;
+
+export const LOGIN_EMAIL_LIMIT = 10;
+export const LOGIN_EMAIL_WINDOW_MS = ONE_HOUR_MS;
+export const LOGIN_IP_LIMIT = positiveIntEnv('RATE_LIMIT_LOGIN_IP_LIMIT', 30);
+export const LOGIN_IP_WINDOW_MS = ONE_HOUR_MS;
+
+/**
  * The window a moment in time falls into, for a fixed-window counter of
  * length `windowMs` — every instant between two multiples of `windowMs`
  * (measured from the Unix epoch) shares one `windowStart`, hence one row in
@@ -308,7 +343,7 @@ function windowStartFor(now: Date, windowMs: number): Date {
  * had no business making a claim broader than the one thing `logRefusal`
  * and `hashAndTruncate` actually control.
  */
-function logRefusal(action: string, scope: 'session' | 'ip', limit: number, count: number, identity: string): void {
+function logRefusal(action: string, scope: RefusalScope, limit: number, count: number, identity: string): void {
   console.log(
     JSON.stringify({
       severity: 'WARNING',
@@ -317,7 +352,14 @@ function logRefusal(action: string, scope: 'session' | 'ip', limit: number, coun
       scope,
       limit,
       count,
-      identityHash: hashAndTruncate(identity),
+      // KAN-20: an email-scoped refusal logs NO identity hash, and this is the
+      // same principle the round-2 note above states, applied in the other
+      // direction. A truncated hash is only one-way for a high-entropy input;
+      // an email is guessable from a candidate list, so a 48-bit hash of it
+      // (or of its SHA-256) is a dictionary lookup, and the rule is that an
+      // account email never reaches a log line. `count` and `limit` still say
+      // that the cap fired.
+      identityHash: scope === 'email' ? null : hashAndTruncate(identity),
     }),
   );
 }
@@ -364,12 +406,14 @@ function hashAndTruncate(value: string): string {
  * refusal now logs a correlation key the same as an IP-scoped one does,
  * rather than the identity being optional and omitted for one of the two).
  */
+type RefusalScope = 'session' | 'ip' | 'email';
+
 async function underLimit(
   bucketKey: string,
   limit: number,
   windowMs: number,
   now: Date,
-  log: { action: string; scope: 'session' | 'ip'; identity: string },
+  log: { action: string; scope: RefusalScope; identity: string },
 ): Promise<boolean> {
   const windowStart = windowStartFor(now, windowMs);
   const count = await incrementRateLimitCounter(bucketKey, windowStart);
@@ -456,4 +500,63 @@ export async function checkGuestSessionResolveRateLimit(
     now,
   );
   return sessionOk && ipOk;
+}
+
+/**
+ * `POST /api/auth/register`'s guard. 10 per IP per hour, plus 3 per presented
+ * guest-cookie value per hour when the request carries a well-formed one.
+ *
+ * Both counters ALWAYS increment, win or lose — same as
+ * `checkEssaySubmissionRateLimit`, and for the same reason: a refused request
+ * still counts against the address, so retrying a refusal makes the block
+ * longer, not shorter. `sessionId` is the raw, schema-validated guest cookie
+ * value, or null when there is none — no cookie means no per-cookie bucket,
+ * and the per-IP cap alone applies. (A caller rotating garbage cookie values
+ * gets nothing from that: a malformed value is treated as absent.)
+ */
+export async function checkRegistrationRateLimit(
+  sessionId: GuestSessionId | null,
+  ip: string | null,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const sessionOk =
+    sessionId === null ||
+    (await underLimit(
+      `registration:session:${sessionId}`,
+      REGISTRATION_SESSION_LIMIT,
+      REGISTRATION_SESSION_WINDOW_MS,
+      now,
+      { action: 'registration', scope: 'session', identity: sessionId },
+    ));
+  const ipOk = await underIpLimit('registration', ip, REGISTRATION_IP_LIMIT, REGISTRATION_IP_WINDOW_MS, now);
+  return sessionOk && ipOk;
+}
+
+/**
+ * `POST /api/auth/login`'s guard: TWO buckets, 30 per IP per hour and 10 per
+ * email per hour, BOTH always checked, neither short-circuiting.
+ *
+ * The two `await`s below are sequential and unconditional on purpose. Written
+ * as `ipOk && emailOk`, or with an early return after the first refusal, a
+ * request refused by one bucket would not increment the other — and an
+ * attacker refused on the IP bucket would then get the email bucket for free,
+ * which is the asymmetry `checkEssaySubmissionRateLimit` documents. Both
+ * increment, on every attempt, whatever the credentials turn out to be.
+ *
+ * The bucket key is the full SHA-256 hex of the email (see the constants'
+ * comment), so the raw email is never written to `rate_limit_counters` either.
+ */
+export async function checkLoginRateLimit(
+  email: NormalisedEmail,
+  ip: string | null,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const emailKey = createHash('sha256').update(email).digest('hex');
+  const emailOk = await underLimit(`login:email:${emailKey}`, LOGIN_EMAIL_LIMIT, LOGIN_EMAIL_WINDOW_MS, now, {
+    action: 'login',
+    scope: 'email',
+    identity: emailKey,
+  });
+  const ipOk = await underIpLimit('login', ip, LOGIN_IP_LIMIT, LOGIN_IP_WINDOW_MS, now);
+  return emailOk && ipOk;
 }

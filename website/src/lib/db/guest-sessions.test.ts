@@ -6,7 +6,12 @@ import { eq } from 'drizzle-orm';
 import { db } from './client';
 import { guestSessions } from './schema';
 import { createEssay, getEssayById } from './essays';
-import { createGuestSession, getGuestSessionById, convertGuestSessionToUser } from './guest-sessions';
+import {
+  createGuestSession,
+  getGuestSessionById,
+  convertGuestSessionToUser,
+  convertGuestSessionToUserWithin,
+} from './guest-sessions';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import type { GuestActor, GuestSessionId, UserActor } from '@/lib/contracts/actor';
@@ -116,16 +121,22 @@ describe('convertGuestSessionToUser', () => {
     expect(convertedEssayTwo?.userId).toBe(user.userId);
   });
 
-  it('rejects converting a session id that was never created', async () => {
+  it('reports "nothingToConvert" for a session id that was never created, rather than throwing', async () => {
     const actor = newGuestActor(); // never persisted via createGuestSession
     // No row matches the WHERE clause, so the update touches nothing and the
     // FK is never checked — a made-up id is fine here, unlike the tests
     // above where the update actually has to write this value.
     const madeUpUserId = randomUUID();
 
-    await expect(convertGuestSessionToUser(actor, madeUpUserId)).rejects.toThrow(
-      /no unconverted session found/,
-    );
+    await expect(convertGuestSessionToUser(actor, madeUpUserId)).resolves.toBe('nothingToConvert');
+  });
+
+  it('reports "converted" when there was something to convert', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const user = await newUserActor();
+
+    await expect(convertGuestSessionToUser(actor, user.userId)).resolves.toBe('converted');
   });
 
   it('does not touch a second, unrelated guest session or its essay', async () => {
@@ -240,4 +251,45 @@ describe('convertGuestSessionToUser', () => {
       await admin.end();
     }
   }, 20000);
+});
+
+describe('convertGuestSessionToUserWithin — the body, on the caller\'s transaction (KAN-20)', () => {
+  it('takes part in the caller\'s transaction: rolling the outer transaction back un-converts the session and its essays', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, 'Ein Aufsatz, der mit der äußeren Transaktion zurückgerollt wird.');
+    const user = await newUserActor();
+
+    await expect(
+      db.transaction(async (tx) => {
+        expect(await convertGuestSessionToUserWithin(tx, actor, user.userId)).toBe('converted');
+        throw new Error('outer transaction fails after the conversion ran');
+      }),
+    ).rejects.toThrow(/outer transaction fails/);
+
+    // Had the function opened its own `db.transaction`, it would have run on a
+    // different pooled connection and committed independently: the session
+    // would be converted here. It is not.
+    expect((await getGuestSessionById(actor, actor.sessionId))?.userId).toBeNull();
+    expect((await getEssayById(actor, essay.id))?.id).toBe(essay.id);
+  });
+
+  it('commits with the caller\'s transaction when it commits', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, 'Ein Aufsatz, der mit der äußeren Transaktion festgeschrieben wird.');
+    const user = await newUserActor();
+
+    await db.transaction((tx) => convertGuestSessionToUserWithin(tx, actor, user.userId));
+
+    expect((await getEssayById(user, essay.id))?.id).toBe(essay.id);
+    expect(await getEssayById(actor, essay.id)).toBeNull();
+  });
+
+  it('a genuine driver error still throws — a user id that does not exist violates the foreign key', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+
+    await expect(db.transaction((tx) => convertGuestSessionToUserWithin(tx, actor, randomUUID()))).rejects.toThrow();
+  });
 });

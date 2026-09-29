@@ -68,6 +68,21 @@
  * letting the framework build an un-`reason`-carrying response from an
  * uncaught throw.
  */
+/*
+ * KAN-20: `invalidCredentials` and `emailAlreadyRegistered` added for
+ * `POST /api/auth/login` and `POST /api/auth/register`.
+ *
+ * `invalidCredentials` is ONE reason for "no such account" and "wrong
+ * password" on purpose, with one status (401) and one message — a caller
+ * that could tell them apart could enumerate accounts through login. Do not
+ * split it.
+ *
+ * `emailAlreadyRegistered` is the opposite trade and it is a known one:
+ * registration signs the person straight in (Irina, 2026-09-29), so it cannot
+ * return a neutral response for an address that already has an account, and
+ * is therefore an email-enumeration oracle. The per-IP registration cap in
+ * `lib/domain/rate-limit.ts` is the mitigation.
+ */
 import { ESSAY_LENGTH_REJECTION_REASONS, type EssayLengthRejectionReason } from './essay-submission';
 
 /**
@@ -94,6 +109,8 @@ export const GUARD_REJECTION_REASONS = [
   'invalidSubmission',
   'gradingJobNotFound',
   'internalError',
+  'invalidCredentials',
+  'emailAlreadyRegistered',
 ] as const;
 export type GuardRejectionReason = (typeof GUARD_REJECTION_REASONS)[number];
 

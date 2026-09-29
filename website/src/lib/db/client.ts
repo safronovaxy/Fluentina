@@ -11,7 +11,8 @@ import 'server-only';
  * driver) — see CONTRIBUTING.md / Architecture Decisions.
  */
 import { Pool } from 'pg';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { drizzle, type NodePgQueryResultHKT } from 'drizzle-orm/node-postgres';
+import type { PgDatabase } from 'drizzle-orm/pg-core';
 import * as schema from './schema';
 import { installQueryErrorSanitiser } from './query-error-sanitiser';
 
@@ -44,3 +45,18 @@ export const db = drizzle(pool, { schema });
 export async function closePool(): Promise<void> {
   await pool.end();
 }
+
+/**
+ * Anything a query can run on: the pool-backed `db`, or the transaction handle
+ * `db.transaction` passes to its callback. `PgTransaction` extends
+ * `PgDatabase`, so one parameter type accepts both.
+ *
+ * KAN-20: exists so a repository function that must take part in a caller's
+ * transaction (`convertGuestSessionToUserWithin`, `insertSessionWithin`) can
+ * say so in its signature. Calling `db.transaction` again from inside another
+ * transaction does NOT nest — Drizzle checks out a second pooled connection
+ * and runs a separate, independent transaction — so a function that opens its
+ * own cannot be composed into a larger atomic unit. The `*Within` variants
+ * take one of these instead and never open a transaction themselves.
+ */
+export type Executor = PgDatabase<NodePgQueryResultHKT, typeof schema>;

@@ -16,6 +16,7 @@ import { REJECTION_REASONS, isRejectionReason } from './rejection-reason';
  * KAN-16 added `gradingJobNotFound` (the status-poll ownership guard) and
  * `internalError` (the essay-submission database-failure guard) — ten
  * reasons now, not eight; see rejection-reason.ts's own comment for both.
+ * KAN-20 added `invalidCredentials` and `emailAlreadyRegistered` — twelve.
  */
 const EXPECTED_REJECTION_REASONS = [
   'crossOrigin',
@@ -28,10 +29,12 @@ const EXPECTED_REJECTION_REASONS = [
   'tooLong',
   'gradingJobNotFound',
   'internalError',
+  'invalidCredentials',
+  'emailAlreadyRegistered',
 ] as const;
 
 describe('rejection-reason — the KAN-31 union every first-party rejection draws its reason from', () => {
-  it('is exactly this fixed set of ten reasons — nothing missing, nothing extra, nothing renamed', () => {
+  it('is exactly this fixed set of twelve reasons — nothing missing, nothing extra, nothing renamed', () => {
     expect([...REJECTION_REASONS].sort()).toEqual([...EXPECTED_REJECTION_REASONS].sort());
   });
 
