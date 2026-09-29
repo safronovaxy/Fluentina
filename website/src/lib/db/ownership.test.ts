@@ -150,17 +150,20 @@ describe('user ownership after conversion', () => {
 });
 
 describe('conversion cannot be replayed', () => {
-  it('converting an already-converted session throws instead of silently re-attaching', async () => {
+  it('converting an already-converted session reports nothingToConvert and re-attaches nothing', async () => {
     const actor = newGuestActor();
     await createGuestSession(actor);
-    await createEssay(actor, 'An essay under a session that will be converted exactly once.');
+    const essay = await createEssay(actor, 'An essay under a session that will be converted exactly once.');
     const firstUser = await newUserActor();
     const secondUser = await newUserActor();
 
-    await convertGuestSessionToUser(actor, firstUser.userId);
+    await expect(convertGuestSessionToUser(actor, firstUser.userId)).resolves.toBe('converted');
 
-    await expect(convertGuestSessionToUser(actor, secondUser.userId)).rejects.toThrow(
-      /no unconverted session found/,
-    );
+    // KAN-20: this used to throw. "Registered twice in two tabs" is an expected
+    // event, not a failure — but it must still be a no-op, never a re-attach.
+    await expect(convertGuestSessionToUser(actor, secondUser.userId)).resolves.toBe('nothingToConvert');
+
+    expect((await getEssayById(firstUser, essay.id))?.id).toBe(essay.id);
+    expect(await getEssayById(secondUser, essay.id)).toBeNull();
   });
 });
