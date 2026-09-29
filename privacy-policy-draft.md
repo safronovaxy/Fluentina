@@ -2,11 +2,13 @@
 
 **Status: approved on content by Irina, 2026-09-29. Not published, not wired into the site.** Written to replace the existing policy, which describes a different product. Publication is tracked as **KAN-54**.
 
-**Two separate things still stand between this and going live.**
+**Three separate things still stand between this and going live.**
 
 **1. The `[FILL]` markers.** Publishing a policy that reads "[FILL — registered legal entity name]" would be worse than leaving the stale one up. These are blanks only Irina can fill: the legal entity and address, the supervisory authority, and the version and publication date. Items marked **[CHECK]** are things I could not verify from the code.
 
-**2. No lawyer has read it.** I wrote it to be accurate about what the code actually does, which is the part I can verify. Whether that is *sufficient* under GDPR — and whether the Art. 6 legal bases I assigned are the right ones — is a judgement I am not qualified to make. Irina has accepted this knowingly for the POC stage; it is recorded as entry 3 on the **Known Gaps** page so that "approved" is not later mistaken for "reviewed". The transfer of essay text to a US provider is the part most worth paying someone to look at, and it compounds with Known Gaps entry 1.
+**2. One retention claim is not yet true.** The table below states that guest essays are *"deleted 30 days after submission, automatically"*. Nothing performs that deletion — KAN-11 was deferred to a later phase on 2026-09-29, and there is no scheduled-cleanup path anywhere in the codebase. Irina's decision is to **keep the wording**, because it describes the intended design, and to track the gap rather than soften the text. That is coherent while this document is unpublished. It is not coherent once it is live: at that point the policy would be making a factual claim about automated deletion that no code performs, which is worse than the current policy's omissions, because those are stale rather than false. So this is a **hard publication blocker** on KAN-54 — the sweep ships first, or the wording is revisited before publishing. Recorded as Known Gaps entry 4.
+
+**3. No lawyer has read it.** I wrote it to be accurate about what the code actually does, which is the part I can verify. Whether that is *sufficient* under GDPR — and whether the Art. 6 legal bases I assigned are the right ones — is a judgement I am not qualified to make. Irina has accepted this knowingly for the POC stage; it is recorded as entry 3 on the **Known Gaps** page so that "approved" is not later mistaken for "reviewed". The transfer of essay text to a US provider is the part most worth paying someone to look at, and it compounds with Known Gaps entry 1.
 
 ---
 
