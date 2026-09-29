@@ -24,10 +24,19 @@ import 'server-only';
  *    factory outside its `try`, after the job is claimed, so a throw here
  *    would strand the job in `processing`. The cost of a typo is grading on
  *    the intended default, which is visible in `grading_jobs.provider` —
- *    and, since that default is the ~20x more expensive provider, it also
- *    logs one structured warning (`warnUnrecognisedGradingProvider`). Same
- *    shape as `rate-limit.ts`'s `warnRejectedEnvOverride`: a configuration
- *    problem for an operator to notice, with the operator-typed raw value.
+ *    and, since that default is the more expensive provider, it also logs
+ *    one structured warning (`warnUnrecognisedGradingProvider`). Roughly
+ *    2-4x per attempt, not an order of magnitude: from `cost.ts`, Claude is
+ *    $4/$20 per MTok prompt/completion against Mistral's $2/$6 — 2x on
+ *    prompt, 3.3x on completion. At the output ceilings (Claude
+ *    `MAX_OUTPUT_TOKENS` 4,000, Mistral `MAX_COMPLETION_TOKENS` 3,000) the
+ *    completion side is 4,000 x $20/M = $0.080 against 3,000 x $6/M =
+ *    $0.018, 4.4x; prompt cost (same prompt either way, so 2x) pulls a
+ *    worst-case attempt down towards 2x — about 4.0x with a 2,000-token
+ *    prompt. Still the more expensive provider, so a silent typo is worth
+ *    warning about. Same shape as `rate-limit.ts`'s
+ *    `warnRejectedEnvOverride`: a configuration problem for an operator to
+ *    notice, with the operator-typed raw value.
  *    Unlike that one it fires per call, not once per process — this factory
  *    runs per job and route modules load lazily per instance, so there is no
  *    module-level seam to hang "once" on — and a misconfigured deployment
