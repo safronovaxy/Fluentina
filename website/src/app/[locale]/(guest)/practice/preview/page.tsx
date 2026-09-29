@@ -140,6 +140,7 @@ export default async function GuestPreviewPage({
               lockedItemSummary: t('lockedItemSummary'),
               lockedItemDimensions: t('lockedItemDimensions'),
               lockedItemAnnotations: t('lockedItemAnnotations'),
+              // Unreviewed wording, no CTA until KAN-20 (see `GradingPreview.tsx`).
               lockedNote: t('lockedNote'),
               flaggedTitle: t('flaggedTitle'),
               flaggedBody: t('flaggedBody'),

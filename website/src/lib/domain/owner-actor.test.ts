@@ -48,12 +48,25 @@ describe('resolveOwnerActor — one HTTP-to-actor rule for every adapter (KAN-19
     expect(await resolveOwnerActor(cookies({ [GUEST_SESSION_COOKIE_NAME]: value }))).toBeNull();
   });
 
-  it('reads the guest cookie only under its own name', async () => {
-    const readCookie = vi.fn((name: string) => (name === GUEST_SESSION_COOKIE_NAME ? generateGuestSessionId() : undefined));
+  // Two cases, because a fallback such as `readCookie(NAME) ?? readCookie('sid')`
+  // is only ever CALLED when the first read comes back empty — with the cookie
+  // present it short-circuits and is invisible.
+  it.each([
+    ['present', generateGuestSessionId()],
+    ['absent', undefined],
+  ])('reads the guest cookie only under its own name (cookie %s)', async (_case, value) => {
+    const readCookie = vi.fn((name: string) => (name === GUEST_SESSION_COOKIE_NAME ? value : undefined));
 
     await resolveOwnerActor(readCookie);
 
-    expect(readCookie).toHaveBeenCalledWith(GUEST_SESSION_COOKIE_NAME);
+    // Every name asked for, not just "the right one was among them".
+    expect(readCookie.mock.calls.flat()).toEqual([GUEST_SESSION_COOKIE_NAME]);
+  });
+
+  it('does not build a guest actor from some other cookie that happens to hold a valid id', async () => {
+    const readCookie = vi.fn((name: string) => (name === 'sid' ? generateGuestSessionId() : undefined));
+
+    expect(await resolveOwnerActor(readCookie)).toBeNull();
   });
 
   // The reason the order exists. After conversion `ownedBy` for a GuestActor

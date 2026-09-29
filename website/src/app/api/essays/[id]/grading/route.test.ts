@@ -217,7 +217,13 @@ describe('GET /api/essays/[id]/grading — ADR-2 status polling', () => {
     expect(wire).not.toContain(essay.id);
   });
 
-  it('says on the response that it is private and not to be stored — the same URL answers differently depending on who asks', async () => {
+  // Cache-Control is pinned on EVERY exit, and above all on the responses that
+  // differ by entitlement: a header asserted only on a pending body would leave
+  // the one response carrying a score (or, for its owner, the full report)
+  // without a cache directive and still pass.
+  const NO_STORE = 'private, no-store';
+
+  it('says on a PENDING response that it is private and not to be stored', async () => {
     const actor = newGuestActor();
     await createGuestSession(actor);
     const essay = await createEssay(actor, REPORT_ESSAY);
@@ -226,7 +232,73 @@ describe('GET /api/essays/[id]/grading — ADR-2 status polling', () => {
     const response = await callGet(essay.id, actor.sessionId);
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect((await response.json()).status).toBe('pending');
+    expect(response.headers.get('cache-control')).toBe(NO_STORE);
+  });
+
+  it('says it on the guest\'s SUCCEEDED (locked) response — the one that carries their score', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, REPORT_ESSAY);
+    const job = (await createGradingJob(actor, essay.id))!;
+    await markGradingJobSucceededUnscoped(SYSTEM_ACTOR, job.id, {
+      provider: 'fake',
+      rawInput: 'prompt',
+      rawOutput: 'raw',
+      result: richResult(),
+      promptInjectionSuspected: false,
+    });
+
+    const response = await callGet(essay.id, actor.sessionId);
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).report.access).toBe('locked');
+    expect(response.headers.get('cache-control')).toBe(NO_STORE);
+  });
+
+  it('says it on a FAILED response too', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, REPORT_ESSAY);
+    const job = (await createGradingJob(actor, essay.id))!;
+    await markGradingJobFailedUnscoped(SYSTEM_ACTOR, job.id, 'providerError', 'mistral');
+
+    const response = await callGet(essay.id, actor.sessionId);
+
+    expect((await response.json()).status).toBe('failed');
+    expect(response.headers.get('cache-control')).toBe(NO_STORE);
+  });
+
+  it('says it on the 400s — a cross-origin request and a missing/invalid cookie', async () => {
+    const crossOrigin = await GET(
+      new NextRequest(new URL('http://localhost:3000/api/essays/x/grading'), {
+        headers: { origin: 'https://evil.example', host: 'localhost:3000' },
+      }),
+      { params: Promise.resolve({ id: 'x' }) },
+    );
+    const noCookie = await callGet(randomUUID());
+
+    expect(crossOrigin.status).toBe(400);
+    expect(crossOrigin.headers.get('cache-control')).toBe(NO_STORE);
+    expect(noCookie.status).toBe(400);
+    expect(noCookie.headers.get('cache-control')).toBe(NO_STORE);
+  });
+
+  it('says it on the 404 — for an essay that does not exist AND for one that is someone else\'s, which are the same per-actor answer', async () => {
+    const owner = newGuestActor();
+    const stranger = newGuestActor();
+    await createGuestSession(owner);
+    await createGuestSession(stranger);
+    const essay = await createEssay(owner, REPORT_ESSAY);
+    await createGradingJob(owner, essay.id);
+
+    const missing = await callGet(randomUUID(), stranger.sessionId);
+    const notYours = await callGet(essay.id, stranger.sessionId);
+
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get('cache-control')).toBe(NO_STORE);
+    expect(notYours.status).toBe(404);
+    expect(notYours.headers.get('cache-control')).toBe(NO_STORE);
   });
 
   it('returns a stable failureReason, not a generic error, once the job failed', async () => {
@@ -369,6 +441,16 @@ describe('GET /api/essays/[id]/grading — a registered owner, resolved ahead of
     expect(body.report.access).toBe('full');
     expect(body.report.result.summary).toBe(REPORT_SUMMARY);
     expect(body.report.result.annotations).toHaveLength(5);
+  });
+
+  it('says it on the registered owner\'s FULL response — the complete report is never cacheable by an intermediary', async () => {
+    const { actor, essay, user } = await convertedEssay();
+    registeredSession.current = user;
+
+    const response = await callGet(essay.id, actor.sessionId);
+
+    expect((await response.json()).report.access).toBe('full');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
   });
 
   it('...whereas the same stale cookie alone — no registered session — opens nothing: the old session id stopped authorising', async () => {

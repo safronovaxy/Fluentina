@@ -6,8 +6,13 @@
  * and re-sets this cookie only when it had to replace a missing/invalid
  * value). Neither of those two files is `lib/domain`, `lib/db` or
  * `lib/contracts` — this is plain adapter-level code, deliberately outside
- * all three, per ADR-14: cookies are a framework concern, and nothing under
- * `lib/domain` may know one exists (see that layer's own KAN-10 comments).
+ * all three, per ADR-14: cookie MECHANISMS are a framework concern. Nothing
+ * under `lib/domain` may read or write a cookie or import `next/headers` /
+ * `next/server` (nor depend on `Set-Cookie`, `__Host-` preconditions, expiry
+ * or `SameSite`). The cookie NAME is different: `lib/domain/owner-actor.ts`
+ * imports it and receives a reader callback from its adapter, and that is the
+ * intended shape — one definition of the name, so a wrong string cannot
+ * silently 404 an essay's real owner from one of two call sites.
  *
  * KAN-10 design decision, per the story's own non-negotiable: the session
  * id is a bearer credential.

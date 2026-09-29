@@ -456,7 +456,7 @@ describe('GradingPreview — the locked report (KAN-19 BR-4.2: a guest sees a te
     for (const dimension of RUBRIC_DIMENSIONS) expect(within(counts).getByText(EN.dimensions[dimension])).toBeInTheDocument();
   });
 
-  it('names what the full report holds — as copy, the same for every essay — and that it needs an account', async () => {
+  it('names what the full report holds — as copy, the same for every essay — and that it needs an account (provisional copy)', async () => {
     stubFetch(succeeded(lockedReport()));
     renderPreview();
 
@@ -464,6 +464,9 @@ describe('GradingPreview — the locked report (KAN-19 BR-4.2: a guest sees a te
     expect(includes).toHaveTextContent(EN.lockedItemSummary);
     expect(includes).toHaveTextContent(EN.lockedItemDimensions);
     expect(includes).toHaveTextContent(EN.lockedItemAnnotations);
+    // Presence of the copy, not a claim that the wording is settled: the
+    // `lockedNote` text is unreviewed, BR-4.2 did not specify it, and there is
+    // no CTA because no registration route exists until KAN-20.
     expect(screen.getByTestId('locked-report')).toHaveTextContent(EN.lockedNote);
     expect(screen.getByRole('group', { name: EN.lockedTitle })).toBe(screen.getByTestId('locked-report'));
   });
@@ -536,7 +539,7 @@ describe('GradingPreview — the locked report (KAN-19 BR-4.2: a guest sees a te
       'lockedItemSummary',
       'lockedItemDimensions',
       'lockedItemAnnotations',
-      'lockedNote',
+      'lockedNote', // provisional wording — unreviewed, not specified by BR-4.2
     ] as const;
     for (const key of keys) {
       expect(EN[key], `en ${key}`).toBeTruthy();

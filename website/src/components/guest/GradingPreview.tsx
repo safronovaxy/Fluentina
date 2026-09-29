@@ -129,6 +129,10 @@ export interface GradingPreviewStrings extends PendingProgressStrings {
   readonly lockedItemSummary: string;
   readonly lockedItemDimensions: string;
   readonly lockedItemAnnotations: string;
+  // PROVISIONAL COPY. The wording of `lockedNote` (and the other `locked*`
+  // catalogue keys) is unreviewed: BR-4.2 specifies WHAT is locked, not what
+  // the panel says. It names an account but has no CTA, because no
+  // registration route exists until KAN-20.
   readonly lockedNote: string;
   readonly flaggedTitle: string;
   readonly flaggedBody: string;
