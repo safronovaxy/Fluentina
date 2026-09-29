@@ -110,7 +110,8 @@ for (const fx of LOCALE_FIXTURES) {
       await expect(mark).toBeVisible();
       // The underline is the non-colour cue, and a class name in jsdom
       // proves nothing about what a guest sees: ask the engine. Runs in all
-      // four (Chromium, Firefox, WebKit, mobile Safari).
+      // four projects (chromium-desktop, chromium-mobile, webkit-desktop,
+      // webkit-mobile).
       const decoration = await mark.evaluate((el) => {
         const style = getComputedStyle(el);
         return { line: style.textDecorationLine, style: style.textDecorationStyle };
@@ -129,8 +130,14 @@ for (const fx of LOCALE_FIXTURES) {
       expect(sentence.length).toBeGreaterThan(0);
       await expect(page.getByTestId('worked-example-explanation')).toContainText(fx.explanationLabel);
 
-      // No pending screen left behind.
-      await expect(page.getByRole('region')).toHaveAttribute('data-phase', 'complete');
+      // No pending screen left behind. Scoped by name, not a bare
+      // `getByRole('region')`: every page also carries the two toast
+      // regions Providers mounts (Radix's "Notifications (F8)" viewport and
+      // Sonner's "Notifications alt+T" section), so an unnamed region locator
+      // resolves to three elements and Playwright's strict mode throws. The
+      // panel is labelled by its heading (aria-labelledby), which after a
+      // result is the result heading — so this also proves that labelling.
+      await expect(page.getByRole('region', { name: fx.resultHeading })).toHaveAttribute('data-phase', 'complete');
 
       // The step indicator is on the Preview step — not still on Write.
       await expect(page.getByRole('listitem', { name: fx.previewStepName })).toHaveAttribute('aria-current', 'step');
