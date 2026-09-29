@@ -1,7 +1,17 @@
 /** @vitest-environment node */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { NextRequest } from 'next/server';
+import type { UserActor as RegisteredUser } from '@/lib/contracts/actor';
+
+// The registered-session lookup is KAN-20's seam and finds nothing today;
+// this lets one test stand a registered session in front of the route, to
+// prove the resolution ORDER end to end (see `owner-actor.ts`).
+const registeredSession = vi.hoisted(() => ({ current: null as RegisteredUser | null }));
+vi.mock('@/lib/domain/registered-session', () => ({
+  resolveRegisteredSession: async () => registeredSession.current,
+}));
+
 import { GET } from './route';
 import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
 import { createGuestSession, convertGuestSessionToUser } from '@/lib/db/guest-sessions';
@@ -11,7 +21,18 @@ import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import { validLengthContent } from '@/test/essay-content-fixtures';
 import type { GuestActor, SystemActor, UserActor } from '@/lib/contracts/actor';
-import type { GradingResult } from '@/lib/contracts/grading';
+import { RUBRIC_DIMENSIONS, type GradingResult } from '@/lib/contracts/grading';
+import {
+  REPORT_COUNTS_BY_DIMENSION,
+  REPORT_ESSAY,
+  REPORT_SUMMARY,
+  SHOWN_MESSAGE,
+  SHOWN_SUGGESTION,
+  WITHHELD_SPAN_TEXT,
+  reportDimensionComment,
+  richResult,
+  withheldFromGuest,
+} from '@/test/grading-report-fixtures';
 
 const SYSTEM_ACTOR: SystemActor = { kind: 'system', job: 'test' };
 
@@ -57,6 +78,10 @@ function sampleResult(): GradingResult {
 
 beforeAll(async () => {
   await resetDatabase();
+});
+
+beforeEach(() => {
+  registeredSession.current = null;
 });
 
 afterEach(async () => {
@@ -118,7 +143,7 @@ describe('GET /api/essays/[id]/grading — ADR-2 status polling', () => {
 
     expect(response.status).toBe(200);
     expect(body.status).toBe('pending');
-    expect(body.result).toBeNull();
+    expect(body.report).toBeNull();
   });
 
   // KAN-17: the preview screen bounds its poll, times the wait and decides
@@ -138,7 +163,7 @@ describe('GET /api/essays/[id]/grading — ADR-2 status polling', () => {
     expect(body.createdAt).toBe(job.createdAt.toISOString());
   });
 
-  it('BR-3.1/BR-3.2/BR-3.3: returns the full GradingResult — rubric dimensions, overall score, and span-anchored annotations — once succeeded', async () => {
+  it('KAN-19 BR-4.2: a guest\'s succeeded job is a LOCKED report — score, band, counts and one example — not the GradingResult', async () => {
     const actor = newGuestActor();
     await createGuestSession(actor);
     const essay = await createEssay(actor, validLengthContent('Graded already.'));
@@ -156,14 +181,52 @@ describe('GET /api/essays/[id]/grading — ADR-2 status polling', () => {
 
     expect(response.status).toBe(200);
     expect(body.status).toBe('succeeded');
-    expect(body.result.overallScore).toBe(82);
-    expect(body.result.dimensions).toHaveLength(4);
-    expect(body.result.annotations[0]).toMatchObject({ start: 0, end: 4 });
+    expect(body.report.access).toBe('locked');
+    expect(body.report.overallScore).toBe(82);
+    expect(body.report.overallBand).toBe('B2 (pass)');
+    expect(body.report.annotationCount).toBe(1);
+    expect(body.result).toBeUndefined();
+    expect(body.report.result).toBeUndefined();
     // Never leaks the raw prompt or raw provider response — ADR-5's own
     // requirement that this is Postgres-internal, not part of the public
     // response.
     expect(body.rawInput).toBeUndefined();
     expect(body.rawOutput).toBeUndefined();
+  });
+
+  it('carries the fields the browser reads and NO identifiers or provider name — id, essayId, provider and completedAt are off the wire', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, REPORT_ESSAY);
+    const job = (await createGradingJob(actor, essay.id))!;
+    await markGradingJobSucceededUnscoped(SYSTEM_ACTOR, job.id, {
+      provider: 'claude',
+      rawInput: 'prompt',
+      rawOutput: 'raw',
+      result: richResult(),
+      promptInjectionSuspected: false,
+    });
+
+    const body = await (await callGet(essay.id, actor.sessionId)).json();
+
+    expect(Object.keys(body).sort()).toEqual(['createdAt', 'failureReason', 'report', 'status']);
+    const wire = JSON.stringify(body);
+    // `provider` announced claude-vs-mistral to anyone probing BR-3.5's guard.
+    expect(wire).not.toMatch(/claude|mistral|"provider"|"completedAt"|"essayId"/);
+    expect(wire).not.toContain(job.id);
+    expect(wire).not.toContain(essay.id);
+  });
+
+  it('says on the response that it is private and not to be stored — the same URL answers differently depending on who asks', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, REPORT_ESSAY);
+    await createGradingJob(actor, essay.id);
+
+    const response = await callGet(essay.id, actor.sessionId);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
   });
 
   it('returns a stable failureReason, not a generic error, once the job failed', async () => {
@@ -178,16 +241,14 @@ describe('GET /api/essays/[id]/grading — ADR-2 status polling', () => {
 
     expect(body.status).toBe('failed');
     expect(body.failureReason).toBe('providerError');
-    expect(body.result).toBeNull();
+    expect(body.report).toBeNull();
   });
 
   it('KAN-10 non-negotiable: after conversion, the OLD session id can no longer poll this job at all', async () => {
-    // Only the OLD session id's side is exercised through this HTTP route —
-    // there is no "registered-user session cookie" shape built yet
-    // (registration is a future story), so the NEW user id's ability to
-    // read the same job is proved instead at the data layer
-    // (`lib/db/grading-jobs.test.ts`'s own conversion test), not re-proved
-    // here through a cookie shape that doesn't exist.
+    // Only the OLD session id's side is exercised here; the NEW user's read
+    // of the same job is proved next door (the KAN-19 registered-owner tests,
+    // which stand a registered session in front of this route) and at the
+    // data layer (`lib/db/grading-jobs.test.ts`).
     const actor = newGuestActor();
     await createGuestSession(actor);
     const essay = await createEssay(actor, validLengthContent('Will be converted.'));
@@ -197,5 +258,164 @@ describe('GET /api/essays/[id]/grading — ADR-2 status polling', () => {
 
     const asOldSession = await callGet(essay.id, actor.sessionId);
     expect(asOldSession.status).toBe(404);
+  });
+});
+
+// THE REGRESSION NET (KAN-19). The domain tests pin what `getGradingStatus`
+// returns; this pins what actually goes down the wire, as text, so a leak
+// added later — a new field on the result, a spread in the wrong place —
+// fails here even if it travels through the right function. An allow-list:
+// nothing but the strings a guest may see.
+describe('GET /api/essays/[id]/grading — a guest\'s serialised response never contains what is locked (KAN-19 BR-4.2)', () => {
+  async function succeededFor(actor: GuestActor, result: GradingResult, promptInjectionSuspected = false) {
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, REPORT_ESSAY);
+    const job = (await createGradingJob(actor, essay.id))!;
+    await markGradingJobSucceededUnscoped(SYSTEM_ACTOR, job.id, {
+      provider: 'fake',
+      rawInput: 'prompt',
+      rawOutput: 'raw',
+      result,
+      promptInjectionSuspected,
+    });
+    return essay;
+  }
+
+  it('contains none of the withheld strings — the summary, each dimension comment, every annotation message but the shown example\'s', async () => {
+    const actor = newGuestActor();
+    const essay = await succeededFor(actor, richResult());
+
+    const response = await callGet(essay.id, actor.sessionId);
+    const wire = JSON.stringify(await response.json());
+
+    expect(response.status).toBe(200);
+    expect(withheldFromGuest().length).toBeGreaterThan(8);
+    for (const withheld of withheldFromGuest()) expect(wire, `leaked: ${withheld}`).not.toContain(withheld);
+    expect(wire).not.toContain(REPORT_SUMMARY);
+    for (const dimension of RUBRIC_DIMENSIONS) expect(wire).not.toContain(reportDimensionComment(dimension));
+    for (const text of WITHHELD_SPAN_TEXT) expect(wire, `leaked span text: ${text}`).not.toContain(text);
+    // Every withheld marker in the fixture starts with "HIDDEN-": a truncated
+    // or reworded fragment of one is caught here even though it is not the
+    // whole string above.
+    expect(wire).not.toContain('HIDDEN-');
+    expect(wire).not.toMatch(/"start"|"end"|"annotations"|"dimensions"|"summary"|"comment"/);
+  });
+
+  it('and does contain what the guest IS shown — so the checks above are not passing on an empty body', async () => {
+    const actor = newGuestActor();
+    const essay = await succeededFor(actor, richResult());
+
+    const body = await (await callGet(essay.id, actor.sessionId)).json();
+
+    expect(body.report).toEqual({
+      access: 'locked',
+      overallScore: 82,
+      overallBand: 'B2 (pass)',
+      annotationCount: 5,
+      annotationCountByDimension: REPORT_COUNTS_BY_DIMENSION,
+      workedExample: {
+        dimension: 'grammarSyntax',
+        severity: 'major',
+        message: SHOWN_MESSAGE,
+        suggestion: SHOWN_SUGGESTION,
+        before: 'Gestern ',
+        highlighted: 'bin ich zu Hause geblieben',
+        after: ', weil es regnete.',
+      },
+    });
+  });
+
+  it('a flagged result is `withheld` on the wire: the flag and nothing else', async () => {
+    const actor = newGuestActor();
+    const essay = await succeededFor(
+      actor,
+      richResult({ flaggedForReview: true, overallScore: 55, overallBand: 'B1 (below target)', summary: 'HIDDEN-CLAMPED-SUMMARY' }),
+    );
+
+    const body = await (await callGet(essay.id, actor.sessionId)).json();
+
+    expect(body.report).toStrictEqual({ access: 'withheld', reason: 'flaggedForReview' });
+    const wire = JSON.stringify(body.report);
+    for (const marker of [SHOWN_MESSAGE, SHOWN_SUGGESTION, 'HIDDEN-']) expect(wire).not.toContain(marker);
+  });
+});
+
+describe('GET /api/essays/[id]/grading — a registered owner, resolved ahead of a stale guest cookie (KAN-19)', () => {
+  async function convertedEssay() {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, REPORT_ESSAY);
+    const job = (await createGradingJob(actor, essay.id))!;
+    await markGradingJobSucceededUnscoped(SYSTEM_ACTOR, job.id, {
+      provider: 'fake',
+      rawInput: 'prompt',
+      rawOutput: 'raw',
+      result: richResult(),
+      promptInjectionSuspected: false,
+    });
+    const user = await newUserActor();
+    await convertGuestSessionToUser(actor, user.userId);
+    return { actor, essay, user };
+  }
+
+  it('the converted owner is sent the FULL report even though the browser still holds their old guest cookie', async () => {
+    const { actor, essay, user } = await convertedEssay();
+    registeredSession.current = user;
+
+    const response = await callGet(essay.id, actor.sessionId); // the stale cookie rides along
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.report.access).toBe('full');
+    expect(body.report.result.summary).toBe(REPORT_SUMMARY);
+    expect(body.report.result.annotations).toHaveLength(5);
+  });
+
+  it('...whereas the same stale cookie alone — no registered session — opens nothing: the old session id stopped authorising', async () => {
+    const { actor, essay } = await convertedEssay();
+
+    const response = await callGet(essay.id, actor.sessionId);
+
+    expect(response.status).toBe(404);
+  });
+
+  it('a registered owner is not a wildcard: they still cannot read a stranger\'s essay', async () => {
+    const { essay } = await convertedEssay();
+    registeredSession.current = await newUserActor();
+
+    const response = await callGet(essay.id);
+
+    expect(response.status).toBe(404);
+  });
+
+  it('a registered owner with no guest cookie at all is still resolved — the guest cookie is only a fallback', async () => {
+    const { essay, user } = await convertedEssay();
+    registeredSession.current = user;
+
+    const response = await callGet(essay.id); // no cookie
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).report.access).toBe('full');
+  });
+
+  it('a flagged result is withheld from the registered owner as well — the flag wins over access level', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, REPORT_ESSAY);
+    const job = (await createGradingJob(actor, essay.id))!;
+    await markGradingJobSucceededUnscoped(SYSTEM_ACTOR, job.id, {
+      provider: 'fake',
+      rawInput: 'prompt',
+      rawOutput: 'raw',
+      result: richResult({ flaggedForReview: true }),
+      promptInjectionSuspected: true,
+    });
+    const user = await newUserActor();
+    await convertGuestSessionToUser(actor, user.userId);
+    registeredSession.current = user;
+
+    const body = await (await callGet(essay.id)).json();
+
+    expect(body.report).toStrictEqual({ access: 'withheld', reason: 'flaggedForReview' });
   });
 });

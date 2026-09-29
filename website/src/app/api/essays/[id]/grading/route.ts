@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getGradingStatus } from '@/lib/domain/grading/grading-status';
-import { guestSessionIdSchema } from '@/lib/contracts/actor';
-import type { GuestActor } from '@/lib/contracts/actor';
-import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
+import { resolveOwnerActor } from '@/lib/domain/owner-actor';
 import { isCrossOriginRequest } from '@/lib/same-origin';
 import { rejectionResponse } from '@/lib/rejection-response';
 
@@ -19,13 +17,24 @@ import { rejectionResponse } from '@/lib/rejection-response';
  * Deliberately does NOT call `resolveGuestSession` — unlike `POST
  * /api/essays`, a read has no reason to create a `guest_sessions` row (or
  * reissue a cookie) for a caller whose cookie names one that doesn't exist
- * yet; a `GuestActor` is built directly from the schema-validated cookie
- * value, the same "raw, validated identity, no row lookup required" shape
+ * yet. Who is asking is `resolveOwnerActor`'s to say (KAN-19): a registered
+ * session first, the schema-validated guest cookie only as a fallback — the
+ * same "raw, validated identity, no row lookup required" shape
  * `lib/domain/rate-limit.ts`'s own checks already use. `ownedBy()`
- * (`lib/db/ownership.ts`) only ever compares this value against
+ * (`lib/db/ownership.ts`) compares a guest's value only against
  * `essays.session_id` and checks `essays.user_id IS NULL` — it never touches
  * `guest_sessions` at all, so no session row needs to exist for this
  * ownership check to be correct.
+ *
+ * What is SENT is decided by `getGradingStatus`, per actor (KAN-19, BR-4.2):
+ * a guest gets a locked teaser, never the full result, and a flagged result is
+ * withheld from everyone. The route only serialises what it is handed, and
+ * this is deliberately not where the rule lives — see that function's comment.
+ *
+ * `Cache-Control: private, no-store` is set explicitly: the same URL now
+ * answers with different entitlement levels depending on who asks, with a
+ * load balancer in front of Cloud Run, so whether an intermediary may cache
+ * it is not left to whatever Next emits for a cookie-reading dynamic route.
  *
  * Same cross-origin guard as `/api/essays` and `/api/guest-session` — see
  * either route's own comment for the full reasoning. A GET has no state-
@@ -37,13 +46,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return rejectionResponse('crossOrigin', 400, 'cross-origin request rejected');
   }
 
-  const rawCookie = request.cookies.get(GUEST_SESSION_COOKIE_NAME)?.value;
-  const cookieParse = guestSessionIdSchema.safeParse(rawCookie);
-  if (!cookieParse.success) {
+  const actor = await resolveOwnerActor((name) => request.cookies.get(name)?.value);
+  if (!actor) {
     return rejectionResponse('invalidSessionCookie', 400, 'missing or invalid guest session cookie');
   }
 
-  const actor: GuestActor = { kind: 'guest', sessionId: cookieParse.data };
   const { id } = await params;
 
   const job = await getGradingStatus(actor, id);
@@ -59,5 +66,5 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     return rejectionResponse('gradingJobNotFound', 404, 'no grading job found for this essay');
   }
 
-  return NextResponse.json(job);
+  return NextResponse.json(job, { headers: { 'Cache-Control': 'private, no-store' } });
 }

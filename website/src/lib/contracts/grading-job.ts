@@ -1,32 +1,37 @@
 /**
- * KAN-16 — the persisted shape of a grading job, and the public (guest-
- * facing) view of it that `GET /api/essays/[id]/grading` returns.
+ * KAN-16 — the public (guest-facing) view of a grading job, which is what
+ * `GET /api/essays/[id]/grading` returns.
  *
- * Deliberately two shapes:
+ * `GradingJob` here is the WIRE shape and only that — safe to serialise
+ * straight into an HTTP response, because everything a caller may know about
+ * a finished grade sits in `report` (`./grading-report`), already reduced to
+ * what THAT caller is entitled to. It carries none of the raw prompt or raw
+ * provider response body (ADR-5's fine-tuning persistence lives only in
+ * `lib/db/grading-jobs.ts`'s own internal record), and — since KAN-19 — none
+ * of the job's identifiers or which provider handled it: the browser never
+ * used them, and the provider name only tells someone probing BR-3.5's
+ * injection guard which model to write a payload for.
  *
- * - `GradingJob` here is the PUBLIC view — safe to serialise straight into
- *   an HTTP response. It carries the structured `GradingResult` once
- *   succeeded, but never the raw prompt or raw provider response body.
- * - The raw input/output ADR-5 requires persisting (for a future
- *   fine-tuning dataset) lives only in `lib/db/grading-jobs.ts`'s own
- *   internal row type, which nothing outside `lib/db`/`lib/domain` ever
- *   sees — see that module's own comment.
+ * `report` replaced `result` (KAN-19) deliberately, not cosmetically: a
+ * client that was not updated fails at the poll hook's "succeeded with no
+ * report is not a grade we can show" check instead of rendering a blank
+ * score from a shape it no longer understands.
+ *
+ * Nothing in `lib/db` produces this shape. The only producer is
+ * `getGradingStatus` in `lib/domain/grading/`, which cannot be called
+ * without an `OwnerActor`.
  */
-import type { GradingFailureReason, GradingResult } from './grading';
+import type { GradingFailureReason } from './grading';
+import type { GradingReportView } from './grading-report';
 
 export const GRADING_JOB_STATUSES = ['pending', 'processing', 'succeeded', 'failed'] as const;
 export type GradingJobStatus = (typeof GRADING_JOB_STATUSES)[number];
 
 export interface GradingJob {
-  readonly id: string;
-  readonly essayId: string;
   readonly status: GradingJobStatus;
-  /** Which `GradingProvider` handled this job — null until the job actually starts calling one. */
-  readonly provider: string | null;
   readonly createdAt: Date;
-  readonly completedAt: Date | null;
-  /** Present only once `status === 'succeeded'`. */
-  readonly result: GradingResult | null;
   /** Present only once `status === 'failed'`. */
   readonly failureReason: GradingFailureReason | null;
+  /** Present only once `status === 'succeeded'`. */
+  readonly report: GradingReportView | null;
 }

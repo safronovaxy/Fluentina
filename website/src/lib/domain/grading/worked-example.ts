@@ -1,6 +1,15 @@
+import 'server-only';
+
 /**
  * KAN-18 (BR-4.1) — picks the one annotation to show as the guest's "fully
  * worked example" and cuts the sentence around it out of their own essay.
+ *
+ * Moved here from `components/guest/` by KAN-19: the choice is now made on
+ * the server, because the browser must not be sent the annotations it would
+ * choose from (see `lib/contracts/grading-report.ts`). Behaviour and
+ * signature are unchanged; `grading-status.ts` calls it with the result's
+ * FULL annotation list — never a one-element array — so the severity ranking
+ * and the fall-through to the next usable annotation still do their work.
  *
  * Pure, and deliberately does no offset arithmetic of its own about WHERE an
  * error is: `start`/`end` arrive already resolved verbatim against the real
@@ -9,9 +18,6 @@
  * is a bounds check — the essay text this runs against is a separate read
  * from the grading result's, and a span that does not fit it is skipped
  * rather than rendered as a highlight over the wrong words.
- *
- * Kept free of React and of `next-intl` so it can sit next to the component
- * that needs it and be tested without a DOM.
  */
 import type { GradingAnnotation, GradingAnnotationSeverity } from '@/lib/contracts/grading';
 

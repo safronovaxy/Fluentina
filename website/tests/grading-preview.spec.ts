@@ -156,6 +156,30 @@ for (const fx of LOCALE_FIXTURES) {
       await expect(page.getByRole('listitem', { name: fx.previewStepName })).toHaveAttribute('aria-current', 'step');
     });
 
+    // KAN-19 (BR-4.2). NOT RUN when written, like the rest of this file: CI's
+    // e2e job is its first real execution. The unit and route tests prove what
+    // the server sends; this proves it end to end, in a real browser, from
+    // the poll the page itself makes — the lock is what arrives, not what the
+    // page chooses to draw. Assertions are about SHAPE (which keys exist), not
+    // the fake provider's values.
+    test('the guest\'s own poll answer is a locked report — nothing withheld is sent, and the page says so', async ({ page, browserName }) => {
+      skipIfWebkitCannotStoreTheSessionCookie(browserName);
+      const answers: Array<{ status?: string; report?: { access?: string } } | null> = [];
+      page.on('response', async (response) => {
+        if (/^\/api\/essays\/[^/]+\/grading$/.test(new URL(response.url()).pathname)) {
+          answers.push(await response.json().catch(() => null));
+        }
+      });
+      await submitEssay(page, fx);
+      await expect(page.getByTestId('overall-score')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByTestId('locked-report')).toBeVisible();
+
+      await expect.poll(() => answers.some((a) => a?.status === 'succeeded')).toBe(true);
+      const succeeded = answers.find((a) => a?.status === 'succeeded');
+      expect(succeeded?.report?.access).toBe('locked');
+      expect(JSON.stringify(succeeded)).not.toMatch(/"summary"|"dimensions"|"annotations"|"start"|"end"|"comment"|"result"/);
+    });
+
     test('the explanation is programmatically tied to the highlighted words, and completion is announced', async ({ page, browserName }) => {
       skipIfWebkitCannotStoreTheSessionCookie(browserName);
       await submitEssay(page, fx);
@@ -218,7 +242,7 @@ for (const fx of LOCALE_FIXTURES) {
           headers: { date: new Date().toUTCString() },
           body: JSON.stringify({
             status: 'processing',
-            result: null,
+            report: null,
             failureReason: null,
             createdAt: new Date(Date.now() - ageMs).toISOString(),
           }),

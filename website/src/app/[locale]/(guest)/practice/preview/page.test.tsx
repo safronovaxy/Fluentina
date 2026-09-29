@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as essayRead from '@/lib/domain/essay-read';
 import { randomUUID } from 'node:crypto';
 import { isValidElement, type ReactNode } from 'react';
@@ -10,7 +10,7 @@ import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import { GradingPreview } from '@/components/guest/GradingPreview';
 import { GuestFlowShell } from '@/components/guest/chrome/GuestFlowShell';
 import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
-import type { GuestActor } from '@/lib/contracts/actor';
+import type { GuestActor, UserActor } from '@/lib/contracts/actor';
 
 /**
  * The preview page is where essay TEXT is read for a guest, so it is where
@@ -32,6 +32,12 @@ vi.mock('next/navigation', () => ({
   usePathname: () => '/',
   redirect: vi.fn(),
   permanentRedirect: vi.fn(),
+}));
+// KAN-20's registered-session lookup finds nothing today; see the test below
+// that stands one in front of the page.
+const registeredSession = vi.hoisted(() => ({ current: null as UserActor | null }));
+vi.mock('@/lib/domain/registered-session', () => ({
+  resolveRegisteredSession: async () => registeredSession.current,
 }));
 vi.mock('next-intl/server', () => ({
   setRequestLocale: () => {},
@@ -65,6 +71,9 @@ function findElement(node: ReactNode, type: unknown): { props: Record<string, un
 beforeAll(async () => {
   await resetDatabase();
 });
+beforeEach(() => {
+  registeredSession.current = null;
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   cookieValue = undefined;
@@ -75,16 +84,22 @@ afterAll(async () => {
 });
 
 describe('guest preview page — ownership of the essay it renders (KAN-18)', () => {
-  it("passes the owner's stored essay text, verbatim, to the preview", async () => {
+  // KAN-19: the worked example's sentence is cut on the server and arrives
+  // with the status poll, so the browser is handed no essay text — and no
+  // offsets to index one with. The read below is the page's ownership gate.
+  it("hands the preview the essay's id and no essay text — the page still reads the essay, as its ownership gate", async () => {
     const actor = newGuestActor();
     await createGuestSession(actor);
-    const essay = await createEssay(actor, ' Mein Aufsatz.\r\nZweite Zeile. ');
+    const essay = await createEssay(actor, ' Mein Geheimer Aufsatz.\r\nZweite Zeile. ');
     cookieValue = actor.sessionId;
+    const read = vi.spyOn(essayRead, 'getOwnedEssay');
 
     const preview = findElement(await render(essay.id), GradingPreview);
 
     expect(preview?.props.essayId).toBe(essay.id);
-    expect(preview?.props.essayContent).toBe(' Mein Aufsatz.\r\nZweite Zeile. ');
+    expect(preview?.props).not.toHaveProperty('essayContent');
+    expect(JSON.stringify(preview?.props.strings)).not.toContain('Geheimer');
+    expect(read).toHaveBeenCalledTimes(1);
   });
 
   it('highlights the "preview" step in the guest flow indicator — not "write", which it would silently be if this were copy-pasted from the entry page', async () => {
@@ -160,6 +175,35 @@ describe('guest preview page — ownership of the essay it renders (KAN-18)', ()
     const essay = await createEssay(actor, 'Geschrieben als Gast.');
     await convertGuestSessionToUser(actor, await createTestUser());
     cookieValue = actor.sessionId;
+
+    await expect(render(essay.id)).rejects.toThrow('NEXT_NOT_FOUND');
+  });
+});
+
+// KAN-19: the page resolves its actor through the same `resolveOwnerActor`
+// as the poll's route, registered session first. Before that, a converted
+// user's stale guest cookie built a GuestActor here and 404'd the owner on
+// their own essay the moment registration shipped.
+describe('guest preview page — a registered owner (KAN-19)', () => {
+  it('opens the owner\'s essay on a registered session even though the old guest cookie is still in the browser', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, 'Geschrieben als Gast.');
+    const userId = await createTestUser();
+    await convertGuestSessionToUser(actor, userId);
+    registeredSession.current = { kind: 'user', userId };
+    cookieValue = actor.sessionId; // stale
+
+    const preview = findElement(await render(essay.id), GradingPreview);
+
+    expect(preview?.props.essayId).toBe(essay.id);
+  });
+
+  it('a registered user still 404s on an essay that is not theirs', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, 'Nicht deiner.');
+    registeredSession.current = { kind: 'user', userId: await createTestUser() };
 
     await expect(render(essay.id)).rejects.toThrow('NEXT_NOT_FOUND');
   });

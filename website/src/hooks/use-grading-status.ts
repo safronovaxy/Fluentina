@@ -11,6 +11,12 @@
  * `lib/contracts/grading-job.ts` for the full shape. `createdAt` arrives as
  * a JSON string and is read for one thing: bounding the poll (below).
  *
+ * The finished grade arrives as `report` (KAN-19), already reduced by the
+ * server to what this caller may see — `lib/contracts/grading-report.ts`. It
+ * is PARSED, not cast: an `access` value this client does not know is a
+ * malformed answer (`GradingStatusError(null)`), never a fall-through into a
+ * blank render.
+ *
  * The poll is bounded, and bounded on the JOB'S age (`createdAt`), not on a
  * timer started when this hook mounted, so a reload does not restart the
  * clock. A job stuck `pending`/`processing` is a documented, accepted
@@ -25,7 +31,8 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { GRADING_JOB_STATUSES, type GradingJobStatus } from '@/lib/contracts/grading-job';
-import { isGradingFailureReason, type GradingFailureReason, type GradingResult } from '@/lib/contracts/grading';
+import { isGradingFailureReason, type GradingFailureReason } from '@/lib/contracts/grading';
+import { gradingReportViewSchema, type GradingReportView } from '@/lib/contracts/grading-report';
 import { isRejectionReason, type RejectionReason } from '@/lib/contracts/rejection-reason';
 
 /** ADR-2 says 2-3 seconds; the middle of that range. */
@@ -55,8 +62,8 @@ export const GRADING_SLOW_AFTER_MS = 60 * 1000;
 
 export interface GradingStatus {
   readonly status: GradingJobStatus;
-  /** Present only once `status === 'succeeded'`. */
-  readonly result: GradingResult | null;
+  /** Present only once `status === 'succeeded'` — what this caller may see of the grade (locked, full, or withheld). */
+  readonly report: GradingReportView | null;
   /** Present only once `status === 'failed'` — and null even then if the server could not name a reason we recognise. */
   readonly failureReason: GradingFailureReason | null;
   /**
@@ -132,10 +139,15 @@ async function fetchGradingStatus(essayId: string): Promise<GradingStatus> {
   if (typeof status !== 'string' || !(GRADING_JOB_STATUSES as readonly string[]).includes(status)) {
     throw new GradingStatusError(null);
   }
-  const result = (body?.result ?? null) as GradingResult | null;
-  // "Succeeded" with no result is not a grade we can show — surface it as a
-  // failed poll rather than render an empty score.
-  if (status === 'succeeded' && result === null) throw new GradingStatusError(null);
+  let report: GradingReportView | null = null;
+  if (status === 'succeeded') {
+    // "Succeeded" with no report — or one this client cannot read, an
+    // unrecognised `access` included — is not a grade we can show: surface it
+    // as a failed poll rather than render an empty score.
+    const parsed = gradingReportViewSchema.safeParse(body?.report);
+    if (!parsed.success) throw new GradingStatusError(null);
+    report = parsed.data;
+  }
 
   let jobAgeMs: number | null = null;
   if (!isTerminal(status as GradingJobStatus)) {
@@ -151,7 +163,7 @@ async function fetchGradingStatus(essayId: string): Promise<GradingStatus> {
   const failureReason = body?.failureReason;
   return {
     status: status as GradingJobStatus,
-    result,
+    report,
     failureReason: isGradingFailureReason(failureReason) ? failureReason : null,
     jobAgeMs,
   };
