@@ -212,11 +212,12 @@ in parallel, every PR. Address all findings in ONE consolidated revision, not
 a round trip per reviewer. Disagreeing with a finding is fine — say why rather
 than silently complying or silently ignoring it.
 
-**Escalate to Irina only when a 4th review round is triggered** by either the
-Solution Architect or the Test Lead. Three rounds of back-and-forth is the
-budget (Ways of Working §4); if agreement has not been reached by then, stop
-looping and take it to Irina with the disagreement stated, rather than
-continuing indefinitely. Rounds 1-3 are handled autonomously.
+**Escalate to Irina only when a 5th review round is triggered** by either the
+Solution Architect or the Test Lead. Four rounds of back-and-forth is the
+budget (Ways of Working §4, raised from three by Irina on 2026-09-29); if
+agreement has not been reached by then, stop looping and take it to Irina with
+the disagreement stated, rather than continuing indefinitely. Rounds 1-4 are
+handled autonomously.
 
 **Merge without asking once the review has actually passed.** All four Ways of
 Working §5 criteria must hold: Solution Architect approved, Test Lead approved,
@@ -258,7 +259,7 @@ this need a judgement that is not mine to make":
 - A genuine product, scope, architecture or security trade-off that the stories
   and ADRs do not already settle — including one surfaced by a reviewer. Where
   an agreed decision already covers it, follow the decision.
-- A 4th review round, per above.
+- A 5th review round, per above.
 - A blocker only Irina can clear: a secret, a cloud resource, IAM, DNS, a
   third-party account, a legal or DPA question.
 - Anything irreversible or destructive: force-pushing, rewriting published
