@@ -99,6 +99,13 @@ export default async function GuestPreviewPage({
             strings={{
               pendingTitle: t('pendingTitle'),
               pendingBody: t('pendingBody'),
+              stageLabel: t('stageLabel'),
+              stageQueued: t('stageQueued'),
+              stageProcessing: t('stageProcessing'),
+              elapsedLabel: t('elapsedLabel'),
+              slowNotice: t('slowNotice'),
+              slowKeepChecking: t('slowKeepChecking'),
+              slowAnnouncement: t('slowAnnouncement'),
               completeTitle: t('completeTitle'),
               completeAnnouncement: t('completeAnnouncement'),
               scoreOutOf: t('scoreOutOf'),

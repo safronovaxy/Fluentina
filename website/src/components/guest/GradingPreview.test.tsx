@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import enMessages from '@/messages/en.json';
 import deMessages from '@/messages/de.json';
 import { GradingPreview, BAND_STRING_KEYS, type GradingPreviewStrings } from './GradingPreview';
-import { GRADING_POLL_INTERVAL_MS, GRADING_POLL_MAX_AGE_MS } from '@/hooks/use-grading-status';
+import { GRADING_POLL_INTERVAL_MS, GRADING_POLL_MAX_AGE_MS, GRADING_SLOW_AFTER_MS } from '@/hooks/use-grading-status';
 import {
   bandForScore,
   GRADING_FAILURE_REASONS,
@@ -849,6 +849,313 @@ describe('GradingPreview — the status request itself fails (not the same as gr
 
     await screen.findByRole('heading', { name: EN.pollErrorTitle });
     expect(screen.getByRole('status')).toHaveTextContent(EN.pollErrorTitle);
+  });
+});
+
+describe('GradingPreview — progress while pending (KAN-17 BR-5.3: communicate progress, not just a static spinner)', () => {
+  const progress = () => screen.getByTestId('pending-progress');
+
+  it('says nothing about the job before the first answer arrives — there is nothing true to say yet', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    renderPreview();
+
+    expect(await screen.findByRole('heading', { name: EN.pendingTitle })).toBeInTheDocument();
+    expect(screen.queryByTestId('pending-progress')).toBeNull();
+  });
+
+  it('shows the stage the job is really in: queued while `pending`, picked up once `processing`', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetch(pending, processing);
+    renderPreview();
+
+    const stage = await screen.findByTestId('grading-stage');
+    expect(stage).toHaveTextContent(EN.stageQueued);
+    expect(stage).toHaveAttribute('data-stage', 'pending');
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS + 500));
+    await waitFor(() => expect(screen.getByTestId('grading-stage')).toHaveTextContent(EN.stageProcessing));
+    expect(screen.getByTestId('grading-stage')).toHaveAttribute('data-stage', 'processing');
+  });
+
+  it('is not a one-way tracker: a job the server reverts to `pending` for a retry is shown as queued again', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetch(processing, pending);
+    renderPreview();
+    await waitFor(() => expect(screen.getByTestId('grading-stage')).toHaveTextContent(EN.stageProcessing));
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS + 500));
+
+    await waitFor(() => expect(screen.getByTestId('grading-stage')).toHaveTextContent(EN.stageQueued));
+  });
+
+  it('invents no percentage and no progress bar — nothing tells us how far along a grading call is', async () => {
+    stubFetch(processing);
+    renderPreview();
+
+    await screen.findByTestId('grading-stage');
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(progress().textContent).not.toMatch(/%|\d\s*of\s*\d/);
+  });
+
+  it('shows how long the job has really been waiting, from its own createdAt', async () => {
+    stubFetchForJobAged(20_000, pending);
+    renderPreview();
+
+    expect(await screen.findByTestId('grading-elapsed')).toHaveTextContent('0:20');
+    expect(screen.getByText(EN.elapsedLabel)).toBeInTheDocument();
+  });
+
+  it('formats minutes and zero-pads seconds', async () => {
+    stubFetchForJobAged(65_000, pending);
+    renderPreview();
+
+    expect(await screen.findByTestId('grading-elapsed')).toHaveTextContent('1:05');
+    expect(screen.getByTestId('grading-elapsed').querySelector('time')).toHaveAttribute('datetime', 'PT1M5S');
+  });
+
+  it('keeps counting between polls, so the page visibly moves while the job is unfinished', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetchForJobAged(10_000, pending);
+    renderPreview();
+    expect(await screen.findByTestId('grading-elapsed')).toHaveTextContent('0:10');
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    await waitFor(() => expect(screen.getByTestId('grading-elapsed')).toHaveTextContent('0:11'));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    await waitFor(() => expect(screen.getByTestId('grading-elapsed')).toHaveTextContent('0:12'));
+  });
+
+  it('reads the age off the server\'s clock, so a guest whose own clock is hours fast is not shown hours', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Whole seconds: an HTTP `Date` header has no milliseconds.
+    const serverNow = Math.floor(Date.now() / 1000) * 1000 - 3 * 60 * 60 * 1000;
+    const body = { status: 'pending', result: null, failureReason: null, createdAt: new Date(serverNow - 7000).toISOString() };
+    stubFetch({ body, headers: { date: new Date(serverNow).toUTCString() } });
+    renderPreview();
+
+    expect(await screen.findByTestId('grading-elapsed')).toHaveTextContent('0:07');
+  });
+
+  it('never steps backwards: an answer that reports a slightly younger job than the count already shown does not rewind it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The second answer says the job is 1s younger than the first plus the time that has passed.
+    const createdAt = new Date(Date.now() - 30_000).toISOString();
+    const later = new Date(Date.now() + GRADING_POLL_INTERVAL_MS - 1500).toUTCString();
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        call += 1;
+        const headers = call === 1 ? undefined : { date: later };
+        return new Response(JSON.stringify({ status: 'pending', result: null, failureReason: null, createdAt }), { headers });
+      }),
+    );
+    renderPreview();
+    await screen.findByTestId('grading-elapsed');
+
+    const seen: number[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      const [m, s] = screen.getByTestId('grading-elapsed').textContent!.split(':').map(Number);
+      seen.push(m * 60 + s);
+    }
+    expect(seen).toEqual([...seen].sort((a, b) => a - b));
+  });
+
+  it('is gone once the job has finished — the result replaces the waiting state', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetch(pending, succeeded(gradingResult()));
+    renderPreview();
+    await screen.findByTestId('pending-progress');
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS + 500));
+    await screen.findByTestId('overall-score');
+
+    expect(screen.queryByTestId('pending-progress')).toBeNull();
+  });
+});
+
+describe('GradingPreview — past the target: the state says so, without a static spinner (KAN-17 AC 3)', () => {
+  const slowNotice = () => screen.queryByTestId('slow-notice');
+
+  it('pins the slow mark to the AC\'s one minute, inside the two-minute bound that ends the wait', () => {
+    // The AC's number, not a measured one — see GRADING_SLOW_AFTER_MS.
+    expect(GRADING_SLOW_AFTER_MS).toBe(60_000);
+    expect(GRADING_SLOW_AFTER_MS).toBeLessThan(GRADING_POLL_MAX_AGE_MS);
+    // The copy promises both numbers in words.
+    expect(EN.slowNotice).toMatch(/\bminute\b/);
+    expect(EN.slowKeepChecking).toMatch(/two minutes/);
+    expect(GRADING_POLL_MAX_AGE_MS).toBe(2 * 60 * 1000);
+  });
+
+  it('shows no slow notice while the job is inside the target', async () => {
+    stubFetchForJobAged(GRADING_SLOW_AFTER_MS - 5000, processing);
+    renderPreview();
+
+    await screen.findByTestId('pending-progress');
+    expect(slowNotice()).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('');
+  });
+
+  it('shows it for a job already past the target when the page opens, and says what is true about it', async () => {
+    stubFetchForJobAged(GRADING_SLOW_AFTER_MS + 5000, processing);
+    renderPreview();
+
+    const notice = await screen.findByTestId('slow-notice');
+    expect(notice).toHaveTextContent(EN.slowNotice);
+    expect(notice).toHaveTextContent(EN.slowKeepChecking);
+    // Still the waiting screen — the job has not failed and is not given up on.
+    expect(screen.getByRole('region')).toHaveAttribute('data-phase', 'pending');
+    expect(screen.getByRole('region')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByTestId('grading-stage')).toHaveTextContent(EN.stageProcessing);
+    expect(screen.getByTestId('grading-elapsed')).toHaveTextContent('1:05');
+    expect(screen.queryByTestId('overall-score')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'try again slot' })).toBeNull();
+  });
+
+  it('appears by itself as a waiting job crosses the target', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetchForJobAged(GRADING_SLOW_AFTER_MS - 30_000, pending);
+    renderPreview();
+    await screen.findByTestId('pending-progress');
+    expect(slowNotice()).toBeNull();
+
+    await act(() => vi.advanceTimersByTimeAsync(30_000 + GRADING_POLL_INTERVAL_MS * 2));
+
+    await waitFor(() => expect(slowNotice()).not.toBeNull());
+  });
+
+  it('is still shown just inside the two-minute bound, and gives way to the stalled state past it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetchForJobAged(GRADING_POLL_MAX_AGE_MS - 1000, pending);
+    renderPreview();
+    await screen.findByTestId('slow-notice');
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS + 500));
+    await screen.findByRole('heading', { name: EN.stalledTitle });
+
+    expect(slowNotice()).toBeNull();
+    expect(screen.queryByTestId('pending-progress')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent(EN.stalledTitle);
+  });
+
+  it('does not remount the heading or move focus: it is the same phase with more said under it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetchForJobAged(GRADING_SLOW_AFTER_MS - 10_000, pending);
+    renderPreview();
+    const heading = await screen.findByRole('heading', { name: EN.pendingTitle });
+    expect(heading).toHaveFocus();
+
+    await act(() => vi.advanceTimersByTimeAsync(10_000 + GRADING_POLL_INTERVAL_MS * 2));
+    await screen.findByTestId('slow-notice');
+
+    expect(screen.getByRole('heading', { name: EN.pendingTitle })).toBe(heading);
+    expect(heading).toHaveFocus();
+  });
+
+  it('does not pull focus back from wherever the guest has moved it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetchForJobAged(GRADING_SLOW_AFTER_MS - 10_000, pending);
+    render(
+      <>
+        <button type="button">language switcher</button>
+        <QueryClientProvider client={new QueryClient()}>
+          <GradingPreview essayId={ESSAY_ID} essayContent={ESSAY} strings={EN} tryAgainAction={TRY_AGAIN} />
+        </QueryClientProvider>
+      </>,
+    );
+    await screen.findByRole('heading', { name: EN.pendingTitle });
+    const elsewhere = screen.getByRole('button', { name: 'language switcher' });
+    elsewhere.focus();
+
+    await act(() => vi.advanceTimersByTimeAsync(10_000 + GRADING_POLL_INTERVAL_MS * 2));
+    await screen.findByTestId('slow-notice');
+
+    expect(elsewhere).toHaveFocus();
+  });
+
+  it('is announced once, through the one status region that was there all along', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetchForJobAged(GRADING_SLOW_AFTER_MS - 10_000, pending);
+    renderPreview();
+    const announcer = await screen.findByRole('status');
+    expect(announcer).toHaveTextContent('');
+
+    await act(() => vi.advanceTimersByTimeAsync(10_000 + GRADING_POLL_INTERVAL_MS * 2));
+    await screen.findByTestId('slow-notice');
+
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.getByRole('status')).toBe(announcer);
+    expect(announcer).toHaveTextContent(EN.slowAnnouncement);
+    expect(document.querySelectorAll('[aria-live], [role="alert"], [role="status"]')).toHaveLength(1);
+  });
+
+  it('does not turn the announcer into a stream: after that one message, seconds ticking and polls arriving change it not at all', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchSpy = stubFetchForJobAged(GRADING_SLOW_AFTER_MS + 5000, pending, processing, pending, processing);
+    renderPreview();
+    const announcer = await screen.findByRole('status');
+    await screen.findByTestId('slow-notice');
+    await waitFor(() => expect(announcer).toHaveTextContent(EN.slowAnnouncement));
+    const clockBefore = screen.getByTestId('grading-elapsed').textContent;
+
+    const observer = new MutationObserver(() => {});
+    observer.observe(announcer, { childList: true, characterData: true, subtree: true, attributes: true });
+    const callsBefore = fetchSpy.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    const records = observer.takeRecords();
+    observer.disconnect();
+
+    // Not vacuous: the clock moved and polls (with a stage flip) really arrived.
+    expect(screen.getByTestId('grading-elapsed').textContent).not.toBe(clockBefore);
+    expect(fetchSpy.mock.calls.length).toBeGreaterThan(callsBefore + 3);
+    expect(records).toHaveLength(0);
+  });
+
+  it('keeps the ticking clock and the stage out of any live region', async () => {
+    stubFetchForJobAged(GRADING_SLOW_AFTER_MS + 5000, processing);
+    renderPreview();
+    const block = await screen.findByTestId('pending-progress');
+
+    expect(block.querySelector('[aria-live], [role="status"], [role="alert"], [role="log"], [role="timer"]')).toBeNull();
+    expect(screen.getByRole('status')).not.toContainElement(block);
+  });
+
+  it('renders in German from the German catalogue', async () => {
+    stubFetchForJobAged(GRADING_SLOW_AFTER_MS + 5000, processing);
+    renderPreview(DE);
+
+    expect(await screen.findByTestId('slow-notice')).toHaveTextContent(DE.slowNotice);
+    expect(screen.getByTestId('grading-stage')).toHaveTextContent(DE.stageProcessing);
+    expect(screen.getByText(DE.elapsedLabel)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(DE.slowAnnouncement);
+  });
+
+  it('has its own, non-empty, translated copy in both languages', () => {
+    const keys = ['stageLabel', 'stageQueued', 'stageProcessing', 'elapsedLabel', 'slowNotice', 'slowKeepChecking', 'slowAnnouncement'] as const;
+    for (const key of keys) {
+      expect(EN[key].length, `en ${key}`).toBeGreaterThan(0);
+      expect(DE[key].length, `de ${key}`).toBeGreaterThan(0);
+      // "Status" is the same word in German.
+      if (key !== 'stageLabel') expect(DE[key], `${key} is translated, not copied`).not.toBe(EN[key]);
+    }
+    expect(EN.stageQueued).not.toBe(EN.stageProcessing);
+    expect(DE.stageQueued).not.toBe(DE.stageProcessing);
+  });
+
+  it('a flagged result that follows a slow wait still renders nothing from the result', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const flagged = gradingResult({ flaggedForReview: true, overallScore: 55, overallBand: bandForScore(55) });
+    stubFetchForJobAged(GRADING_SLOW_AFTER_MS + 5000, pending, succeeded(flagged));
+    renderPreview();
+    await screen.findByTestId('slow-notice');
+
+    await act(() => vi.advanceTimersByTimeAsync(GRADING_POLL_INTERVAL_MS + 500));
+    await screen.findByRole('heading', { name: EN.flaggedTitle });
+
+    expect(screen.queryByTestId('overall-score')).toBeNull();
+    expect(screen.queryByTestId('slow-notice')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent(EN.flaggedTitle);
   });
 });
 
