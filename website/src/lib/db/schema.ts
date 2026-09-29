@@ -43,12 +43,30 @@ import { boolean, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, 
 
 export const fluentinaSchema = pgSchema('fluentina');
 
-// Deliberately minimal: this story only needs a stable FK target for
-// cascading account erasure (essays.user_id, guest_sessions.user_id). Auth,
-// email, and everything else about a registered account belongs to whatever
-// story builds registration — not re-scoped in here.
+// KAN-10 created this as a bare FK target for cascading account erasure.
+// KAN-20 (registration) fills it in: an email, a self-describing password
+// hash, and when (not just whether) the email was verified.
 export const users = fluentinaSchema.table('users', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  // Stored normalised (trimmed, lower-cased — `emailSchema` in
+  // lib/contracts/auth.ts), so this plain unique constraint is the
+  // case-insensitive uniqueness rule. Drizzle names it `users_email_unique`;
+  // lib/db/users.ts detects a duplicate registration by that constraint name,
+  // so renaming it is a behaviour change, not a tidy-up.
+  //
+  // NOT NULL: every user is a registered user. Adding this to a `users`
+  // table that already holds rows fails — none exist outside test fixtures
+  // (nothing could create one before this story).
+  email: text('email').notNull().unique(),
+  // `scrypt$N=32768,r=8,p=1$<salt-b64>$<hash-b64>` — self-describing, so the
+  // work factor can be raised, or the algorithm changed, without making
+  // existing rows unverifiable. See lib/domain/password.ts. Never selected
+  // outside `findUserForLogin` and the rehash-on-login update.
+  passwordHash: text('password_hash').notNull(),
+  // Null until verified. A timestamp, not a boolean: KAN-51's "resend if
+  // older than X" needs the WHEN, and it is the same has-this-happened-and-
+  // when shape as `guest_sessions.converted_at`.
+  emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -296,5 +314,95 @@ export const rateLimitCounters = fluentinaSchema.table(
     // scan of the whole table — the same unbounded-growth problem this
     // index exists to close, just moved from row count to query cost.
     index('rate_limit_counters_window_start_idx').on(table.windowStart),
+  ],
+);
+
+/**
+ * KAN-20 — a registered user's login session (database sessions, not JWTs:
+ * a row can be deleted, which is what makes logout real).
+ *
+ * `id` is SHA-256 of the session token, 64 hex characters — NEVER the token
+ * itself. Unlike `guest_sessions.id`, nothing has a foreign key to this
+ * column, so there is no reason to keep the raw value. Without the hash, any
+ * read of this table that does not execute code — a backup, an export, a
+ * SQL-injection read — yields every live session token. With it, that same
+ * read yields digests that authenticate nothing.
+ *
+ * Expiry is two independent conditions, both evaluated in SQL in the same
+ * WHERE as the lookup (lib/db/sessions.ts), never filtered in JS after the
+ * read: an absolute `expires_at` (30 days, matching ADR-17) and an idle
+ * timeout on `last_used_at` (14 days).
+ *
+ * Expired rows are swept on session CREATION (`DELETE ... WHERE expires_at <
+ * now()`), not on read: creation is rare, reads are hot, and correctness
+ * never depends on the sweep because the lookup filters anyway. The same
+ * honest caveat as `rate_limit_counters` above applies verbatim: on a
+ * scale-to-zero service this bounds growth, it does not bound it to a fixed
+ * interval — expired rows sit until the next sign-in or registration lands
+ * on an instance. A Cloud Scheduler job would close that gap; it is not built
+ * here, because standing one up is not this story's call to make.
+ */
+export const sessions = fluentinaSchema.table(
+  'sessions',
+  {
+    id: text('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    // The FK side is not indexed for you (same reasoning as
+    // guest_sessions.user_id): every account-erasure cascade and every
+    // per-user session operation filters on it.
+    index('sessions_user_id_idx').on(table.userId),
+    // Keeps the sweep an indexed range scan rather than a sequential one.
+    index('sessions_expires_at_idx').on(table.expiresAt),
+  ],
+);
+
+/**
+ * KAN-20 / KAN-21 / KAN-22 — who agreed to what, in which version, and when.
+ * A versioned, timestamped ROW per decision, never a boolean column on
+ * `users`.
+ *
+ * APPEND-ONLY. A withdrawal is a new row with `granted = false`; nothing in
+ * this codebase UPDATEs a row here, and the current state of a `kind` is its
+ * most recent row (`lib/db/consent-records.ts`). That is what makes this an
+ * audit trail rather than a settings table: "what had this person agreed to
+ * on the 3rd of March" stays answerable after they change their mind.
+ *
+ * Registration writes one row per kind (lib/contracts/consent.ts), INCLUDING
+ * marketing when it is unticked, with `granted = false`: affirmative evidence
+ * the choice was presented and declined, which a missing row is not.
+ *
+ * `kind` and `document_version` are plain text, like every other
+ * status-shaped column in this schema: the app layer (lib/contracts/
+ * consent.ts) is the single source of truth for the valid set, not a
+ * Postgres enum a migration must chase. `document_version` is what the client
+ * actually rendered, threaded through the request, not a constant stamped on
+ * at insert time.
+ *
+ * Cascades on `user_id`: erasing an account erases its consent trail with it
+ * — the one deletion path this table has.
+ */
+export const consentRecords = fluentinaSchema.table(
+  'consent_records',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    documentVersion: text('document_version').notNull(),
+    granted: boolean('granted').notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Serves "the latest row per kind for this user" — the only read shape —
+    // and doubles as the FK-side index for the erasure cascade.
+    index('consent_records_user_kind_recorded_idx').on(table.userId, table.kind, table.recordedAt),
   ],
 );

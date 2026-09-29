@@ -46,6 +46,33 @@ export const guestSessionIdSchema = z
 
 export type GuestSessionId = z.infer<typeof guestSessionIdSchema>;
 
+// KAN-20: a registered user's session token — the value in the
+// `__Host-fluentina_session` cookie — is 256 bits (32 bytes, hex-encoded to
+// 64 lowercase hex characters), double the guest id's 128. The guest id was
+// sized for one anonymous essay; this one unlocks an account.
+//
+// Two brands, not one, and that is deliberate: the raw token and its SHA-256
+// hash are both 64 lowercase hex characters, so without distinct brands a
+// value of one shape type-checks as the other. `sessions.id` stores the HASH
+// (see lib/db/sessions.ts) and never the token, so passing a raw cookie
+// value where a hash is expected — which would store the live credential in
+// the table, the exact thing the hashing exists to prevent — is a compile
+// error here. The only ways to produce either value are these schemas'
+// `parse`/`safeParse` and `lib/domain/registered-session-token.ts`.
+export const registeredSessionTokenSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, 'must be a 64-character lowercase hex string (256 bits)')
+  .brand<'RegisteredSessionToken'>();
+
+export type RegisteredSessionToken = z.infer<typeof registeredSessionTokenSchema>;
+
+export const registeredSessionTokenHashSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, 'must be a 64-character lowercase hex SHA-256 digest')
+  .brand<'RegisteredSessionTokenHash'>();
+
+export type RegisteredSessionTokenHash = z.infer<typeof registeredSessionTokenHashSchema>;
+
 export interface GuestActor {
   readonly kind: 'guest';
   readonly sessionId: GuestSessionId;
