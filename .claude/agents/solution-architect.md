@@ -33,12 +33,22 @@ Raising these again wastes a review round. If you believe one is now wrong,
 say so once, explicitly labelled as an escalation to Irina, and continue
 reviewing everything else.
 
-- Grading: Claude (`claude-opus-5-5`) is the Phase 1 primary; Mistral stays
-  implemented and selectable via `GRADING_PROVIDER=mistral` as the deferred
-  second step. Both sit behind the `GradingProvider` abstraction. This inverts
-  the original ordering — Irina's decision of 2026-09-28, shipped as KAN-44,
-  ADR-4 amended. EU data residency is deliberately deferred for the prototype
-  and is a condition on launch, not on this ordering.
+- Grading: Claude is the Phase 1 primary (the model string is an
+  implementation detail in `claude-provider.ts`, bumped without amending the
+  ADR — review it as code, not as a locked decision); Mistral stays
+  implemented and selectable via `GRADING_PROVIDER=mistral`. Both sit behind
+  the `GradingProvider` abstraction. This inverts the original ordering —
+  Irina's decision of 2026-09-28, shipped as KAN-44, ADR-4 amended. There is
+  **no runtime fallback between providers**, by design: the factory picks the
+  provider from configuration, never from how a previous attempt went, and a
+  retryable `providerError` reverts the job to `pending` for Cloud Tasks to
+  redeliver, where the same factory picks the same provider again (see
+  `orchestrate-grading.ts`).
+  `invalidProviderResponse` and `unknown` are not retried at all. A Claude
+  timeout retrying Claude rather than falling through to Mistral is the
+  decision, not a resilience gap. EU data residency is deliberately deferred
+  for the prototype and is a condition on launch, not on this ordering —
+  Irina's decision of 2026-09-28, recorded in the ADR-4 amendment.
 - Auth: Auth.js/NextAuth with Google OAuth and **database sessions**, over the
   app's own Postgres via the Drizzle adapter. Email+password is implemented as
   our own route handler — hashing, the user insert and the session issued
@@ -46,16 +56,21 @@ reviewing everything else.
   Credentials provider. That provider only works with the JWT session strategy,
   and in a mixed-provider setup Auth.js does not warn: it mints a JWE, the
   session reader looks it up as a `sessions` row, finds nothing, and silently
-  signs the user out. Irina's decision of 2026-09-29, ADR-3 amended. Keeping
-  database sessions is what keeps registered sessions revocable, matching what
-  ADR-17 already gives the guest session.
+  signs the user out. Irina's decision of 2026-09-29, ADR-3 amended. Only the
+  *choice* is locked: how that route is implemented (see the auth bullet under
+  security requirements) is fully in review scope. Keeping database sessions
+  is what keeps registered sessions revocable — the same property the guest
+  session already has, since `lib/db/ownership.ts` and the `guest_sessions`
+  table re-evaluate its validity from a database row on every read, which a
+  self-validating JWE cannot do.
 - Infra reuse: GCP project `writewise-468912`, region `europe-west10`, Cloud
   SQL `writewise-db` with a new `fluentina` schema, Cloud Run, Cloud Tasks for
   async grading, Cloud Scheduler for cleanup. The GCP project ID and Cloud SQL
   instance name are deliberately not renamed (ADR-6).
 - Stripe pricing hidden from nav, plumbing retained, not deleted (ADR-8).
 - Merge and deploy are decoupled. Merging keeps `main` releasable; deploying
-  is a separate manual, batched action.
+  is a separate manual, batched action (Ways of Working §6, which
+  `deploy-website.yml` itself cites).
 
 ## Security requirements to check on every relevant PR
 
@@ -66,6 +81,11 @@ These are from the BRD and are not negotiable defaults:
   enforcement. Include the post-conversion cutover rule: once a record is
   attached to a registered account, the pre-registration session identifier
   must stop authorizing reads of it.
+- **Auth implementation**: the choice of our own email+password route is
+  locked, its implementation is not. Check the password hashing algorithm and
+  its cost parameters, rate limiting on login and registration, and the
+  attributes on the session cookie (`Secure`, `httpOnly`, `SameSite`, expiry).
+  A weak or missing setting here is a finding, not settled-decision territory.
 - **Rate limiting (BR-1.8)**: 5 submissions per session per hour, plus a
   looser per-IP backstop.
 - **Prompt-injection mitigation (BR-3.5)** on the grading prompt.
