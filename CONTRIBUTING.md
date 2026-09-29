@@ -45,7 +45,7 @@ sequentially):
   relevant, security/edge cases from the ACs covered.
 
 Address all feedback in **one consolidated revision**, not separate round
-trips per reviewer. If agreement isn't reached after **3 rounds**, it goes to
+trips per reviewer. If agreement isn't reached after **4 rounds**, it goes to
 Irina directly rather than looping indefinitely.
 
 ## Merge criteria
@@ -285,7 +285,7 @@ at lint time; that lint is what "the convention is worthless without these"
 | Confluence updates (BRD, architecture, strategy docs) | Reviewed with Irina before publishing |
 | Routine implementation within agreed architecture/strategy | Standard PR review applies |
 | Real architecture decisions surfacing during implementation | Solution Architect adds them to [Architecture Decisions](https://safronov.atlassian.net/wiki/spaces/MFS/pages/24838145) |
-| Scope, architecture, or security trade-offs; unresolved after 3 review rounds | Goes to Irina directly |
+| Scope, architecture, or security trade-offs; unresolved after 4 review rounds | Goes to Irina directly |
 
 Full detail, rationale, and the companion Architecture/Test Strategy pages:
 see the [Ways of Working & Delivery Model](https://safronov.atlassian.net/wiki/spaces/MFS/pages/25526274)
