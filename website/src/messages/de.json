@@ -109,7 +109,72 @@
         "pollErrorBody": "Die Verbindung zum Server ist abgebrochen, deshalb wissen wir nicht, ob dein Aufsatz schon bewertet wurde. Prüfe deine Verbindung und versuche es erneut.",
         "pollErrorNotFoundBody": "Wir haben für diesen Aufsatz kein Ergebnis gefunden. Du kannst ihn erneut einreichen.",
         "retryCta": "Erneut versuchen",
-        "tryAgainCta": "Erneut einreichen"
+        "tryAgainCta": "Erneut einreichen",
+        "registerCta": "Konto erstellen und den vollständigen Bericht freischalten"
+      },
+      "register": {
+        "metaTitle": "Konto erstellen",
+        "metaDescription": "Erstelle ein Konto, um den vollständigen Bericht zu deinem Aufsatz freizuschalten.",
+        "title": "Konto erstellen",
+        "description": "Wir brauchen nur E-Mail-Adresse und Passwort. Mit einem Konto schaltest du den vollständigen Bericht zu deinem Aufsatz frei.",
+        "emailLabel": "E-Mail-Adresse",
+        "emailRequiredError": "Bitte gib deine E-Mail-Adresse ein.",
+        "emailInvalidError": "Das sieht nicht nach einer E-Mail-Adresse aus.",
+        "passwordLabel": "Passwort",
+        "passwordHint": "Mindestens {min} Zeichen, höchstens {max}.",
+        "passwordRequiredError": "Bitte wähle ein Passwort.",
+        "passwordTooShortError": "Dein Passwort braucht mindestens {min} Zeichen.",
+        "passwordTooLongError": "Dein Passwort darf höchstens {max} Zeichen lang sein.",
+        "requiredConsentLegend": "Erforderlich",
+        "optionalConsentLegend": "Optional",
+        "consent": {
+          "termsOfService": {
+            "label": "Ich akzeptiere die {link}.",
+            "linkText": "Nutzungsbedingungen",
+            "requiredError": "Bitte akzeptiere die Nutzungsbedingungen, um ein Konto zu erstellen."
+          },
+          "privacyPolicy": {
+            "label": "Ich habe die {link} gelesen und akzeptiere sie. Die Datenschutzerklärung ist nur auf Englisch verfügbar.",
+            "linkText": "Datenschutzerklärung",
+            "requiredError": "Bitte akzeptiere die Datenschutzerklärung, um ein Konto zu erstellen."
+          },
+          "ageDeclaration16Plus": {
+            "label": "Ich bin 16 Jahre alt oder älter.",
+            "requiredError": "Du musst mindestens 16 Jahre alt sein, um ein Konto zu erstellen."
+          },
+          "marketingEmail": {
+            "label": "Schicke mir Neuigkeiten und Angebote von Fluentina per E-Mail."
+          }
+        },
+        "submitCta": "Konto erstellen",
+        "submittingCta": "Konto wird erstellt …",
+        "successTitle": "Konto erstellt",
+        "successBody": "Du bist angemeldet. Wir bringen dich zurück …",
+        "errorGeneric": "Beim Erstellen deines Kontos ist ein Fehler aufgetreten. Bitte versuche es erneut.",
+        "invalidSubmissionError": "Das konnten wir nicht annehmen. Bitte lade die Seite neu und versuche es erneut — möglicherweise wurden die Bedingungen aktualisiert, seit du sie geöffnet hast.",
+        "rateLimitedError": "Von deiner Verbindung gab es zu viele Versuche. Bitte warte eine Weile, bevor du es erneut versuchst.",
+        "emailAlreadyRegisteredError": "Mit dieser E-Mail-Adresse besteht bereits ein Konto. Prüfe die Adresse oder verwende eine andere."
+      },
+      "signIn": {
+        "metaTitle": "Anmelden",
+        "metaDescription": "Melde dich bei deinem Fluentina-Konto an.",
+        "title": "Anmelden",
+        "description": "Gib deine E-Mail-Adresse und dein Passwort ein.",
+        "emailLabel": "E-Mail-Adresse",
+        "emailRequiredError": "Bitte gib deine E-Mail-Adresse ein.",
+        "emailInvalidError": "Das sieht nicht nach einer E-Mail-Adresse aus.",
+        "passwordLabel": "Passwort",
+        "passwordRequiredError": "Bitte gib dein Passwort ein.",
+        "passwordTooLongError": "Passwörter dürfen höchstens {max} Zeichen lang sein.",
+        "submitCta": "Anmelden",
+        "submittingCta": "Du wirst angemeldet …",
+        "successTitle": "Angemeldet",
+        "successBody": "Wir bringen dich zurück …",
+        "errorGeneric": "Beim Anmelden ist ein Fehler aufgetreten. Bitte versuche es erneut.",
+        "invalidCredentialsError": "Die E-Mail-Adresse oder das Passwort ist falsch.",
+        "rateLimitedError": "Es gab zu viele Anmeldeversuche. Bitte warte eine Weile, bevor du es erneut versuchst.",
+        "registerPrompt": "Noch kein Konto?",
+        "registerLink": "Jetzt erstellen"
       }
     },
     "localeSwitcher": {

@@ -109,7 +109,72 @@
         "pollErrorBody": "We lost contact with the server, so we can't tell whether your essay has been graded yet. Check your connection and try again.",
         "pollErrorNotFoundBody": "We couldn't find a grade for this essay. You can submit it again.",
         "retryCta": "Try again",
-        "tryAgainCta": "Submit again"
+        "tryAgainCta": "Submit again",
+        "registerCta": "Create an account to unlock your full report"
+      },
+      "register": {
+        "metaTitle": "Create your account",
+        "metaDescription": "Create an account to unlock the full report on your essay.",
+        "title": "Create your account",
+        "description": "Email and password are all we ask for. Creating an account unlocks the full report on your essay.",
+        "emailLabel": "Email address",
+        "emailRequiredError": "Please enter your email address.",
+        "emailInvalidError": "That doesn't look like an email address.",
+        "passwordLabel": "Password",
+        "passwordHint": "At least {min} characters, up to {max}.",
+        "passwordRequiredError": "Please choose a password.",
+        "passwordTooShortError": "Your password needs at least {min} characters.",
+        "passwordTooLongError": "Your password can be at most {max} characters.",
+        "requiredConsentLegend": "Required",
+        "optionalConsentLegend": "Optional",
+        "consent": {
+          "termsOfService": {
+            "label": "I accept the {link}.",
+            "linkText": "Terms of Service",
+            "requiredError": "Please accept the Terms of Service to create an account."
+          },
+          "privacyPolicy": {
+            "label": "I have read and accept the {link}.",
+            "linkText": "Privacy Policy",
+            "requiredError": "Please accept the Privacy Policy to create an account."
+          },
+          "ageDeclaration16Plus": {
+            "label": "I am 16 years old or older.",
+            "requiredError": "You need to be 16 or older to create an account."
+          },
+          "marketingEmail": {
+            "label": "Send me news and offers from Fluentina by email."
+          }
+        },
+        "submitCta": "Create account",
+        "submittingCta": "Creating account...",
+        "successTitle": "Account created",
+        "successBody": "You're signed in. Taking you back...",
+        "errorGeneric": "Something went wrong creating your account. Please try again.",
+        "invalidSubmissionError": "We couldn't accept that. Please reload the page and try again — the terms may have been updated since you opened it.",
+        "rateLimitedError": "There have been too many attempts from your connection. Please wait a while before trying again.",
+        "emailAlreadyRegisteredError": "An account with this email address already exists. Check the address, or use a different one."
+      },
+      "signIn": {
+        "metaTitle": "Sign in",
+        "metaDescription": "Sign in to your Fluentina account.",
+        "title": "Sign in",
+        "description": "Enter your email address and password.",
+        "emailLabel": "Email address",
+        "emailRequiredError": "Please enter your email address.",
+        "emailInvalidError": "That doesn't look like an email address.",
+        "passwordLabel": "Password",
+        "passwordRequiredError": "Please enter your password.",
+        "passwordTooLongError": "Passwords can be at most {max} characters.",
+        "submitCta": "Sign in",
+        "submittingCta": "Signing in...",
+        "successTitle": "Signed in",
+        "successBody": "Taking you back...",
+        "errorGeneric": "Something went wrong signing you in. Please try again.",
+        "invalidCredentialsError": "The email address or password is incorrect.",
+        "rateLimitedError": "There have been too many sign-in attempts. Please wait a while before trying again.",
+        "registerPrompt": "No account yet?",
+        "registerLink": "Create one"
       }
     },
     "localeSwitcher": {
