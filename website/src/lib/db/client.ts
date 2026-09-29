@@ -36,6 +36,56 @@ const pool = new Pool({
 // parameter, the same leak by another route.
 installQueryErrorSanitiser();
 
+// KAN-43: `Pool` is an EventEmitter, and an error on an IDLE client (Cloud SQL
+// reaping a connection, a failover or maintenance restart, a network blip) has
+// no query promise to travel down, so `pg` emits it as `'error'` on the pool.
+// Node throws an unhandled `'error'` event, which is an uncaught exception and
+// ends the process — on Cloud Run, an unexplained restart. `pg` has already
+// discarded the dead client by the time this fires, so logging is the whole
+// job; the next `pool.query` opens a fresh connection.
+//
+// Attached before `drizzle(pool)` below so there is no window in which the
+// pool exists without one. NOT an empty handler: one line per event goes out
+// in the same one-JSON-object-per-line idiom as `rate-limit.ts` and
+// `grading/telemetry.ts`, with the pool's own counts, because a run of these
+// is the evidence ADR-16 (pool sizing / Cloud SQL connection limits) is
+// waiting for.
+//
+// METADATA ONLY, by allowlist. `err.message` is never copied, and neither is
+// `stack` or any other property: `pg` builds its connection errors from the
+// configuration, and a connection string (`postgres://user:PASSWORD@host/db`)
+// can end up in a message. Each field kept is a short, fixed-shape token
+// (SQLSTATE, libuv errno name, syscall) and is dropped if it does not match.
+// This is the pool-level counterpart to `query-error-sanitiser.ts`, which
+// covers errors that reach a QUERY's promise and never sees these.
+const SQLSTATE_OR_ERRNO_NAME = /^(?:[0-9A-Z]{5}|E[A-Z0-9_]{2,30})$/;
+const SYSCALL_NAME = /^[a-z_]{2,20}$/;
+const ERROR_CLASS_NAME = /^[A-Za-z][A-Za-z0-9]{0,39}$/;
+
+function shortToken(value: unknown, shape: RegExp): string | null {
+  return typeof value === 'string' && shape.test(value) ? value : null;
+}
+
+function logIdleClientError(err: unknown): void {
+  const e = typeof err === 'object' && err !== null ? (err as Record<string, unknown>) : {};
+  console.warn(
+    JSON.stringify({
+      severity: 'WARNING',
+      event: 'db_pool_idle_client_error',
+      timestamp: new Date().toISOString(),
+      errorName: shortToken(e.name, ERROR_CLASS_NAME),
+      errorCode: shortToken(e.code, SQLSTATE_OR_ERRNO_NAME),
+      syscall: shortToken(e.syscall, SYSCALL_NAME),
+      poolMax: pool.options.max ?? null,
+      poolTotal: pool.totalCount,
+      poolIdle: pool.idleCount,
+      poolWaiting: pool.waitingCount,
+    }),
+  );
+}
+
+pool.on('error', logIdleClientError);
+
 export const db = drizzle(pool, { schema });
 
 // Exposed only so tests inside lib/db can tear the pool down after a suite
