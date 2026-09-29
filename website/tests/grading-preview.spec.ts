@@ -53,6 +53,11 @@ interface LocaleFixture {
   readonly explanationLabel: string;
   /** The step indicator's accessible name for the current (Preview) step — no "completed" suffix. */
   readonly previewStepName: string;
+  /** KAN-17: the pending screen's heading, and the strings a long-running job shows. */
+  readonly pendingHeading: string;
+  readonly slowNotice: string;
+  readonly stageProcessing: string;
+  readonly slowAnnouncement: string;
 }
 
 const LOCALE_FIXTURES: readonly LocaleFixture[] = [
@@ -66,6 +71,10 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     announcementStart: 'Grading finished. Your overall score is',
     explanationLabel: "What's wrong",
     previewStepName: 'Step 4 of 5: Preview',
+    pendingHeading: 'Grading your essay',
+    slowNotice: 'This is taking longer than the minute we aim for.',
+    stageProcessing: 'Picked up for grading',
+    slowAnnouncement: 'Still grading. This is taking longer than the minute we aim for.',
   },
   {
     locale: 'de',
@@ -77,6 +86,10 @@ const LOCALE_FIXTURES: readonly LocaleFixture[] = [
     announcementStart: 'Bewertung abgeschlossen. Deine Gesamtpunktzahl:',
     explanationLabel: 'Was nicht stimmt',
     previewStepName: 'Schritt 4 von 5: Vorschau',
+    pendingHeading: 'Dein Aufsatz wird bewertet',
+    slowNotice: 'Das dauert länger als die eine Minute, die wir anstreben.',
+    stageProcessing: 'Zur Bewertung übernommen',
+    slowAnnouncement: 'Die Bewertung läuft noch. Das dauert länger als die eine Minute, die wir anstreben.',
   },
 ];
 
@@ -173,6 +186,63 @@ for (const fx of LOCALE_FIXTURES) {
 
       await expect(page.getByTestId('overall-score')).toHaveText(before, { timeout: 30_000 });
       await expect(page.getByTestId('worked-example-highlight')).toBeVisible();
+    });
+
+    // KAN-17. The mock provider finishes in milliseconds, so a genuinely slow
+    // job cannot be produced through the real pipeline here. Only the POLL is
+    // answered by the test (a job past the minute, `processing`); the submit,
+    // the navigation, the server-rendered page and its catalogue strings are
+    // all real, which is the wiring the unit suite cannot see. Nothing here
+    // proves a job can be slow — it proves the page, given a poll that says
+    // so, shows and announces it. Once the slow state has been observed the
+    // stub is removed and the real (finished) job's result must replace it.
+    //
+    // The reported age is computed PER POLL, never fixed once: a `createdAt`
+    // pinned at 70s old would age in wall-clock time toward
+    // GRADING_POLL_MAX_AGE_MS (120s), where the page stops polling for good
+    // and the phase flips to `stalled` — and a slow CI run would race it. It
+    // starts at 65s and grows with real time (so the clock visibly advances,
+    // as a real job's would) but stops growing 40s later, at 105s: it can
+    // never reach the bound, however long the run takes. (A constant age
+    // would not do either: every poll would reset the client's extrapolation,
+    // and the monotonic clock would freeze within a poll or two.)
+    test('a poll reporting a job past the minute shows real progress, is announced once, and gives way to the result', async ({ page, browserName }) => {
+      skipIfWebkitCannotStoreTheSessionCookie(browserName);
+      let firstPollAt: number | undefined;
+      await page.route('**/api/essays/*/grading', (route) => {
+        firstPollAt ??= Date.now();
+        const ageMs = 65_000 + Math.min(Date.now() - firstPollAt, 40_000);
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          headers: { date: new Date().toUTCString() },
+          body: JSON.stringify({
+            status: 'processing',
+            result: null,
+            failureReason: null,
+            createdAt: new Date(Date.now() - ageMs).toISOString(),
+          }),
+        });
+      });
+      await submitEssay(page, fx);
+
+      const notice = page.getByTestId('slow-notice');
+      await expect(notice).toContainText(fx.slowNotice, { timeout: 30_000 });
+      await expect(page.getByTestId('grading-stage')).toHaveText(fx.stageProcessing);
+      await expect(page.getByTestId('grading-elapsed')).toContainText(/^1:\d\d$/);
+      // Still the waiting screen, on the same focused heading, with one announcer.
+      await expect(page.getByRole('region', { name: fx.pendingHeading })).toHaveAttribute('data-phase', 'pending');
+      await expect(page.getByRole('heading', { name: fx.pendingHeading })).toBeFocused();
+      await expect(page.getByRole('status')).toHaveText(fx.slowAnnouncement);
+      // The clock moves between polls...
+      const before = await page.getByTestId('grading-elapsed').innerText();
+      await expect(page.getByTestId('grading-elapsed')).not.toHaveText(before, { timeout: 5_000 });
+      // ...and none of that re-announces.
+      await expect(page.getByRole('status')).toHaveText(fx.slowAnnouncement);
+
+      await page.unroute('**/api/essays/*/grading');
+      await expect(page.getByTestId('overall-score')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByTestId('slow-notice')).toHaveCount(0);
     });
 
     test('another guest cannot open this essay\'s preview — same 404 as an essay that does not exist', async ({ page, browser, browserName }) => {

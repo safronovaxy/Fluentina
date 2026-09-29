@@ -121,6 +121,23 @@ describe('GET /api/essays/[id]/grading — ADR-2 status polling', () => {
     expect(body.result).toBeNull();
   });
 
+  // KAN-17: the preview screen bounds its poll, times the wait and decides
+  // "taking longer than we aim for" from this one field; without a readable
+  // `createdAt` on an unfinished job it renders the poll-error screen. So the
+  // field is part of this route's contract, not an incidental extra.
+  it('sends the job\'s `createdAt` for a job that has not finished — the guest\'s waiting screen is built on it', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, validLengthContent('Timing matters.'));
+    const job = (await createGradingJob(actor, essay.id))!;
+
+    const body = await (await callGet(essay.id, actor.sessionId)).json();
+
+    expect(body.createdAt).toEqual(expect.any(String));
+    expect(Number.isNaN(Date.parse(body.createdAt))).toBe(false);
+    expect(body.createdAt).toBe(job.createdAt.toISOString());
+  });
+
   it('BR-3.1/BR-3.2/BR-3.3: returns the full GradingResult — rubric dimensions, overall score, and span-anchored annotations — once succeeded', async () => {
     const actor = newGuestActor();
     await createGuestSession(actor);

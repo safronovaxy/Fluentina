@@ -40,6 +40,19 @@ export const GRADING_POLL_INTERVAL_MS = 2500;
  */
 export const GRADING_POLL_MAX_AGE_MS = 2 * 60 * 1000;
 
+/**
+ * How old an unfinished job may get before the pending screen says it is
+ * taking longer than we aim for (BR-5.2, KAN-17). One minute is the
+ * acceptance criterion's number, NOT an observed one: no grading has run
+ * against a real provider yet, so nobody knows the real latency
+ * distribution, and the Solution Architect has flagged that a model whose
+ * thinking cannot be disabled may not meet it at all. Retune this against
+ * measured latency once there is some; the guest-facing copy says "the
+ * minute we aim for" (a statement about our target, true whatever the real
+ * latency is) precisely so this constant can move without the copy lying.
+ */
+export const GRADING_SLOW_AFTER_MS = 60 * 1000;
+
 export interface GradingStatus {
   readonly status: GradingJobStatus;
   /** Present only once `status === 'succeeded'`. */
@@ -84,6 +97,21 @@ function isTerminal(status: GradingJobStatus): boolean {
  */
 export function isStalled(status: GradingStatus | undefined): boolean {
   return !!status && !isTerminal(status.status) && status.jobAgeMs !== null && status.jobAgeMs > GRADING_POLL_MAX_AGE_MS;
+}
+
+/**
+ * Unfinished, past `GRADING_SLOW_AFTER_MS`, and not yet given up on.
+ * `elapsedMs` is the MONOTONIC age from `usePendingElapsed`, not the raw
+ * `jobAgeMs` of the last answer: the raw value can step back between polls
+ * (see that hook), and a state derived from it would unlatch and be
+ * announced again. `isStalled` still uses the raw value on purpose — once it
+ * fires the poll stops, no further answer arrives and the value freezes, so
+ * it latches by construction — and it wins here explicitly, so a job is
+ * slow for the minute between the two bounds and stalled after it, never
+ * both.
+ */
+export function isSlow(status: GradingStatus | undefined, elapsedMs: number | null): boolean {
+  return !!status && !isTerminal(status.status) && !isStalled(status) && elapsedMs !== null && elapsedMs > GRADING_SLOW_AFTER_MS;
 }
 
 async function fetchGradingStatus(essayId: string): Promise<GradingStatus> {

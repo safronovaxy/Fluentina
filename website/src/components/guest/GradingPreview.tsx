@@ -15,14 +15,20 @@
  * provider and the essay and is rendered as-is, never routed through the
  * catalogue.
  *
- * Scope boundary: the minimum waiting state "the moment grading finishes"
- * needs, and nothing more. A progress experience is KAN-5; the locked full
- * report (dimension scores and comments, the summary, every annotation) is
- * KAN-6. This deliberately renders none of `summary`, `dimensions` or any
- * annotation past the one example.
+ * Scope boundary: the waiting state and the moment grading finishes. The
+ * locked full report (dimension scores and comments, the summary, every
+ * annotation) is KAN-6. This deliberately renders none of `summary`,
+ * `dimensions` or any annotation past the one example.
  *
  * Six states, one per `phase` below:
- *  - pending   — job not finished (or first poll not back yet).
+ *  - pending   — job not finished (or first poll not back yet). KAN-17
+ *                (BR-5.3) adds what is really known while it waits — the
+ *                job's stage and its age — see `PendingProgress`, and a
+ *                "taking longer than we aim for" notice once the job is
+ *                past `GRADING_SLOW_AFTER_MS`. That notice is NOT a phase of
+ *                its own: a new phase would remount the heading and move the
+ *                guest's focus in the middle of a wait. It is the same
+ *                phase, same heading, with more said under it.
  *  - complete  — score, band, worked example.
  *  - flagged   — the result carries `flaggedForReview`. See `resolvePhase`.
  *  - failed    — the JOB failed; no score exists, and none is invented.
@@ -38,7 +44,12 @@
  *    region only announces changes made to a node that already exists), is
  *    the only announcer. It carries a short terminal-state message — not the
  *    whole result — and is visually hidden. Nothing else here uses
- *    `role="alert"`/`aria-live`, so a state change is announced once.
+ *    `role="alert"`/`aria-live`, so a state change is announced once. While
+ *    pending it stays empty except for ONE message, when the job first
+ *    passes the slow mark: the clock and the stage in `PendingProgress`
+ *    change every second or on a retry and are deliberately not announced —
+ *    a region that re-read them would make the page unusable with a screen
+ *    reader.
  *  - Focus follows the content. Each phase has its own `tabIndex={-1}`
  *    heading; when the phase changes, focus moves to the new one if it would
  *    otherwise be lost (the old heading, or a button in the old panel, just
@@ -51,8 +62,10 @@
  */
 import { useEffect, useId, useMemo, useRef, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
-import { useGradingStatus, isStalled, GradingStatusError, type GradingStatus } from '@/hooks/use-grading-status';
+import { usePendingElapsed } from '@/hooks/use-pending-elapsed';
+import { useGradingStatus, isSlow, isStalled, GradingStatusError, type GradingStatus } from '@/hooks/use-grading-status';
 import { bandForScore, type GradingFailureReason, type GradingResult } from '@/lib/contracts/grading';
+import { PendingProgress, type PendingProgressStrings } from './PendingProgress';
 import { pickWorkedExample } from './worked-example';
 
 /**
@@ -73,9 +86,11 @@ export const BAND_STRING_KEYS = {
 
 type BandStringKey = (typeof BAND_STRING_KEYS)[keyof typeof BAND_STRING_KEYS];
 
-export interface GradingPreviewStrings {
+export interface GradingPreviewStrings extends PendingProgressStrings {
   readonly pendingTitle: string;
   readonly pendingBody: string;
+  /** Read out once, when a still-unfinished job first passes the slow mark — e.g. "Still grading. This is taking longer than the minute we aim for." */
+  readonly slowAnnouncement: string;
   readonly completeTitle: string;
   /** Read out, followed by the score, `scoreOutOf` and the band — e.g. "Grading finished. Your overall score is". */
   readonly completeAnnouncement: string;
@@ -157,6 +172,12 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
   const query = useGradingStatus(essayId);
   const status = query.data;
   const phase = resolvePhase(status, query.isError);
+  // ONE monotonic age drives both the clock on screen and the slow state (and
+  // so the announcement): the raw age from a poll can step back between
+  // answers, and a `slow` derived from it would empty the announcer and refill
+  // it — a second read-out. Only ticks while a job is unfinished.
+  const elapsedMs = usePendingElapsed(essayId, phase === 'pending' ? status?.jobAgeMs ?? null : null, query.dataUpdatedAt);
+  const slow = phase === 'pending' && isSlow(status, elapsedMs);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -196,10 +217,12 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
         return strings.stalledTitle;
       case 'pollError':
         return strings.pollErrorTitle;
-      // Nothing for `pending`: the guest was just moved to this screen with
-      // the waiting heading focused, which already says it.
+      // Nothing for `pending` until it runs slow: the guest was just moved
+      // to this screen with the waiting heading focused, which already says
+      // it. The slow message is announced once, when it appears — it does
+      // not change again, so it is not re-read on later polls or ticks.
       case 'pending':
-        return '';
+        return slow ? strings.slowAnnouncement : '';
     }
   })();
 
@@ -231,6 +254,7 @@ export function GradingPreview({ essayId, essayContent, strings, tryAgainAction 
           <>
             {heading(strings.pendingTitle)}
             <p className="mt-2 text-sm text-muted-foreground">{strings.pendingBody}</p>
+            <PendingProgress status={status?.status} elapsedMs={elapsedMs} slow={slow} strings={strings} />
           </>
         )}
 
