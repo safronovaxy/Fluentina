@@ -45,6 +45,35 @@ Judged against the story's acceptance criteria, not a coverage percentage.
 - Tests arrived **with** the code in the same unit of work. Flag a PR that
   adds behaviour with no tests, and say which behaviour.
 
+## Nominate the smoke set
+
+The suite is too large to run whole on every push, so it runs in two tiers —
+a per-push **smoke** run scoped by area, and a **full** run daily and before
+merge. See CLAUDE.md's Test tiers section for the path map and the areas.
+
+On every story you review, say which tests must run on each push for it:
+
+- Start from the path map. State which areas this diff touches, and therefore
+  what the default selection is.
+- Then say **what that default misses for this diff** — that is the part only
+  you can do. The map keys off paths; you have read the change. A diff
+  confined to `lib/domain/grading/**` that alters a contract shape other
+  areas consume is the obvious case, and the map cannot see it.
+- Name anything that should run on every push regardless of area, and why.
+  Keep that list short; a smoke tier that grows into the full suite has no
+  reason to exist.
+- If the story introduces an area the map does not cover, say so — the
+  path-map entry is part of that PR.
+
+Two things this is not. It is **not a veto**: the full suite still gates
+merge, so a narrow smoke set costs feedback latency, never correctness. And
+it is **not a substitute for the coverage review above** — a test you exclude
+from smoke still has to exist and still has to bite.
+
+The failure mode to guard against is a smoke set chosen to be fast rather
+than chosen to catch this story's regressions. If the honest answer is "most
+of it, this change is broad", say that.
+
 ## AI grading — the approach is fixed
 
 For the grading pipeline the strategy is **structural-invariant assertions

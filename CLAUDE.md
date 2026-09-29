@@ -30,6 +30,43 @@ cd website && npm run test       # Vitest unit/integration tests
 cd website && npm run test:e2e   # Playwright e2e
 ```
 
+### Test tiers — smoke and full
+
+The suite is large enough (1100+ unit tests, 500+ Playwright instances across
+four projects) that running everything on every push is the wrong default.
+Two tiers, by **area**:
+
+| Tier | When | What |
+|------|------|------|
+| **Smoke** | Every push to a PR | `lint` + `typecheck` always, plus the unit tests and e2e specs for the areas the diff touches, chromium-desktop only |
+| **Full** | Daily on a schedule, and before merge | Everything: all unit tests, all four Playwright projects, both locales |
+
+**Areas** are derived from the changed paths, not from tags — a path map cannot
+drift out of date the way 1100 hand-applied tags would:
+
+| Area | Paths |
+|------|-------|
+| `guest-funnel` | `components/guest/**`, `app/[locale]/(guest)/**`, `app/api/essays/**` |
+| `grading` | `lib/domain/grading/**`, `lib/contracts/grading*` |
+| `auth` | `lib/domain/{owner-actor,registered-session,guest-session,login,registration,password}*`, `app/api/auth/**`, `lib/*session-cookie*` |
+| `data` | `lib/db/**`, `drizzle/**`, `scripts/migrate.ts` |
+| `marketing` | `app/(marketing)/**`, `lib/strapi*`, `page-components/**` |
+| `placement-test` | `components/placement-test/**`, `app/(placement-test)/**` |
+| `chrome` | `components/layout/**`, `messages/**`, `middleware.ts`, `i18n/**` |
+
+A change to `lib/contracts/**`, `lib/db/schema.ts`, `middleware.ts` or anything
+in `.github/` runs **everything** — those are shared by construction.
+
+> ⚠️ **Smoke is for speed while iterating, not a merge gate.** "CI green" in
+> Ways of Working §5 means a **full** run, on the PR's current head. A smoke
+> run is not a substitute, and a green smoke run on a head whose full run has
+> not completed is not a merge signal.
+
+**The Test Lead nominates the smoke set for each story**, as part of review —
+the path map gives a default, and the Test Lead says what that default misses
+for this particular diff. See `.claude/agents/test-lead.md`. A story that
+introduces a new area adds its path-map entry in the same PR.
+
 ### CMS
 ```bash
 cd cms && npm run develop        # Dev server with SQLite (localhost:1337/admin)
@@ -212,6 +249,13 @@ in parallel, every PR. Address all findings in ONE consolidated revision, not
 a round trip per reviewer. Disagreeing with a finding is fine — say why rather
 than silently complying or silently ignoring it.
 
+**The Test Lead nominates the smoke set.** On every story, as part of its
+review, the Test Lead states which tests must run on each push for that story
+— starting from the path map in the Test tiers section and saying what that
+default misses for this diff. It is a nomination, not a veto: the full suite
+still gates merge. A story introducing a new area adds its path-map entry in
+the same PR.
+
 **Escalate to Irina only when a 5th review round is triggered** by either the
 Solution Architect or the Test Lead. Four rounds of back-and-forth is the
 budget (Ways of Working §4, raised from three by Irina on 2026-09-29); if
@@ -282,4 +326,5 @@ contains a decision.
 - Deploy a change whose secrets or cloud resources do not exist yet — report it as a blocker instead
 - Monitor a GitHub Actions run after triggering a deploy (see Deployment section)
 - Merge on a green CI run from an earlier commit, on local checks standing in for CI, or on an approval that was conditional on a change not yet pushed
+- Merge on a green **smoke** run — smoke is for iteration speed; the merge gate is a full run on the PR's current head (see Test tiers)
 - Fold an unrelated chore into a story's branch — it belongs on its own branch, so the story's PR stays reviewable
