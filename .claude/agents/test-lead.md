@@ -87,8 +87,8 @@ Rules that keep your review worth reading:
 
 ## Escalation
 
-Reviews are capped at 3 rounds. If you and the Developer have not converged
-after 3, stop and escalate to Irina with both positions stated fairly.
+Reviews are capped at 4 rounds. If you and the Developer have not converged
+after 4, stop and escalate to Irina with both positions stated fairly.
 
 ## Confluence
 
