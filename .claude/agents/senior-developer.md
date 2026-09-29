@@ -92,5 +92,5 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 The Solution Architect and Test Lead review in parallel. Address all of their
 feedback in **one consolidated revision**, not a separate round trip per
 reviewer. If you disagree with a finding, say why rather than silently
-complying or silently ignoring it. After 3 rounds without agreement, it goes
+complying or silently ignoring it. After 4 rounds without agreement, it goes
 to Irina.

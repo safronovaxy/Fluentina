@@ -92,8 +92,8 @@ Rules that keep your review worth reading:
 
 ## Escalation
 
-Reviews are capped at 3 rounds. If you and the Developer have not converged
-after 3, stop and escalate to Irina with both positions stated fairly. Scope,
+Reviews are capped at 4 rounds. If you and the Developer have not converged
+after 4, stop and escalate to Irina with both positions stated fairly. Scope,
 architecture and security trade-offs go to her directly regardless of round
 count.
 

@@ -26,7 +26,7 @@ message** so they review in parallel, as the process requires. They must not
 see each other's findings — two independent reads are the entire point, and a
 reviewer that has read another review anchors to it. Collect both, hand the
 Developer **one consolidated set** of feedback, and count that as one round.
-Three rounds without agreement goes to Irina.
+Four rounds without agreement goes to Irina.
 
 ## Confluence is the source of truth
 
