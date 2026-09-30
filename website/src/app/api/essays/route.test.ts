@@ -17,7 +17,11 @@ import type { GuestSessionId } from '@/lib/contracts/actor';
 import { MAX_ESSAY_CONTENT_CHARS, MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
 import { MIN_ESSAY_WORDS, MAX_ESSAY_WORDS } from '@/lib/contracts/word-count';
 import { ESSAY_SUBMISSION_SESSION_LIMIT, ESSAY_SUBMISSION_IP_LIMIT } from '@/lib/domain/rate-limit';
+import { REGISTERED_SESSION_COOKIE_NAME } from '@/lib/registered-session-cookie';
+import { guestSessions } from '@/lib/db/schema';
+import { generateRegisteredSessionToken } from '@/lib/domain/registered-session-token';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import { registerTestAccount } from '@/test/auth-fixtures';
 import { wordsContent, validLengthContent, contentOfExactLength } from '@/test/essay-content-fixtures';
 
 /**
@@ -1585,5 +1589,360 @@ describe('POST /api/essays — KAN-24/KAN-36: a database failure returns a safe,
       transactionSpy.mockRestore();
       logSpy.mockRestore();
     }
+  });
+});
+
+/**
+ * KAN-52 — a REGISTERED user submits an essay. Every test below builds the
+ * request from the cookies a real browser would send (the registered-session
+ * cookie, with or without a guest cookie) and reads the stored owner columns
+ * directly, because the defect was WHICH owner a submission was stored under —
+ * and a test that only read the essay back through an ownership-scoped read
+ * would pass for a row that satisfied both branches.
+ */
+describe('POST /api/essays — KAN-52: a registered user\'s submission belongs to their account', () => {
+  function postAs(cookies: Record<string, string>, body: unknown, headers?: Record<string, string>): NextRequest {
+    const cookie = Object.entries(cookies)
+      .map(([name, value]) => `${name}=${value}`)
+      .join('; ');
+    return new NextRequest(new URL('http://localhost:3000/api/essays'), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: 'http://localhost:3000',
+        host: 'localhost:3000',
+        ...(cookie ? { cookie } : {}),
+        ...headers,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+  const session = (token: string) => ({ [REGISTERED_SESSION_COOKIE_NAME]: token });
+  const guest = (sessionId: string) => ({ [GUEST_SESSION_COOKIE_NAME]: sessionId });
+
+  async function storedEssay(id: string) {
+    const [row] = await db.select().from(essays).where(eq(essays.id, id));
+    return row;
+  }
+  async function guestSessionCount(): Promise<number> {
+    return (await db.select().from(guestSessions)).length;
+  }
+
+  it('AC: a registered user with NO guest session at all can submit — 201, owned by their account, visible to it, and no guest session is created', async () => {
+    const account = await registerTestAccount();
+    const content = validLengthContent('Submitted straight from a registered account.');
+    expect(await guestSessionCount()).toBe(0);
+
+    const response = await POST(postAs(session(account.token), { content }));
+    const body: { id: string } = await response.json();
+
+    expect(response.status).toBe(201);
+    const row = await storedEssay(body.id);
+    expect(row.userId).toBe(account.userId);
+    expect(row.sessionId).toBeNull();
+    const asAccount = await getEssayById({ kind: 'user', userId: account.userId }, body.id);
+    expect(asAccount?.content).toBe(content);
+    expect(await guestSessionCount()).toBe(0);
+  });
+
+  it('never sets the guest cookie for a registered submitter — there is nothing to reissue', async () => {
+    const account = await registerTestAccount();
+
+    const response = await POST(postAs(session(account.token), { content: validLengthContent('No cookie should come back.') }));
+
+    expect(response.status).toBe(201);
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('starts grading for the account-owned essay, and only the account can read the job', async () => {
+    const account = await registerTestAccount();
+    const stranger = await createTestUser();
+
+    const response = await POST(postAs(session(account.token), { content: validLengthContent('Grade this, please.') }));
+    const body: { id: string } = await response.json();
+
+    const job = await getGradingJobByEssayId({ kind: 'user', userId: account.userId }, body.id);
+    expect(job?.status).toBe('pending');
+    expect(await getGradingJobByEssayId({ kind: 'user', userId: stranger }, body.id)).toBeNull();
+    await drainGradingQueueForTests();
+  });
+
+  describe('the registered session WINS over a guest cookie the request also carries', () => {
+    it('stores the essay under the ACCOUNT, and leaves the guest session unconverted with no new essay under it', async () => {
+      // A live guest session that already holds an essay: the request carries its
+      // cookie AND a registered session. A route that resolved the guest session
+      // again (ignoring the account) would store the essay under it — owned by a
+      // guest the account cannot see, the exact defect this story closes.
+      const account = await registerTestAccount();
+      const sessionId = generateGuestSessionId();
+      await createGuestSession({ kind: 'guest', sessionId });
+      const existing = await POST(postEssay({ content: validLengthContent('Already under the guest session.') }, sessionId));
+      const existingId: string = (await existing.json()).id;
+      expect(await countEssaysForSession(sessionId)).toBe(1);
+
+      const response = await POST(postAs({ ...session(account.token), ...guest(sessionId) }, { content: validLengthContent('Submitted while signed in.') }));
+      const body: { id: string } = await response.json();
+
+      expect(response.status).toBe(201);
+      const row = await storedEssay(body.id);
+      expect(row.userId).toBe(account.userId);
+      expect(row.sessionId).toBeNull();
+      expect(await countEssaysForSession(sessionId)).toBe(1); // still just the earlier one
+      expect((await storedEssay(existingId)).sessionId).toBe(sessionId);
+      expect(await getEssayById({ kind: 'guest', sessionId }, body.id)).toBeNull();
+      expect(response.headers.getSetCookie()).toEqual([]);
+      const sessionRow = await getGuestSessionById({ kind: 'guest', sessionId }, sessionId);
+      expect(sessionRow?.userId).toBeNull();
+    });
+
+    it('a STALE guest cookie naming a converted session neither orphans the essay nor mints a guest session', async () => {
+      // What a user carries after registering in another tab: a registered
+      // session, and a guest cookie still naming the (now converted) session.
+      // Resolving that guest cookie is what minted a fresh row and stored the
+      // essay under it, unreadable by the account.
+      const stale = generateGuestSessionId();
+      await createGuestSession({ kind: 'guest', sessionId: stale });
+      const account = await registerTestAccount({ guestSessionId: stale });
+      const sessionsBefore = await guestSessionCount();
+
+      const response = await POST(postAs({ ...session(account.token), ...guest(stale) }, { content: validLengthContent('Written with a stale guest cookie.') }));
+      const body: { id: string } = await response.json();
+
+      expect(response.status).toBe(201);
+      const row = await storedEssay(body.id);
+      expect(row.userId).toBe(account.userId);
+      expect(row.sessionId).toBeNull();
+      expect(await guestSessionCount()).toBe(sessionsBefore);
+      expect(response.headers.getSetCookie()).toEqual([]);
+    });
+  });
+
+  describe('what "no identity" means now: neither a live registered session NOR a well-formed guest cookie', () => {
+    it('rejects 400 invalidSessionCookie with nothing minted when there are no cookies at all', async () => {
+      const response = await POST(postAs({}, { content: validLengthContent('Nobody is asking.') }));
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).reason).toBe('invalidSessionCookie');
+      expect(await guestSessionCount()).toBe(0);
+      expect(await db.select().from(essays)).toHaveLength(0);
+      expect(response.headers.getSetCookie()).toEqual([]);
+    });
+
+    it('rejects a MALFORMED registered token and a malformed guest cookie together — nothing minted, nothing stored', async () => {
+      const response = await POST(
+        postAs({ [REGISTERED_SESSION_COOKIE_NAME]: 'x'.repeat(64), [GUEST_SESSION_COOKIE_NAME]: 'not-a-session-id' }, { content: validLengthContent('Garbage credentials.') }),
+      );
+
+      expect(response.status).toBe(400);
+      expect(await guestSessionCount()).toBe(0);
+      expect(await db.select().from(essays)).toHaveLength(0);
+    });
+
+    it('a well-formed registered token that names NO live session is not an identity: without a guest cookie it is a 400', async () => {
+      const unknownToken = generateRegisteredSessionToken();
+
+      const response = await POST(postAs(session(unknownToken), { content: validLengthContent('An expired or forged session.') }));
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).reason).toBe('invalidSessionCookie');
+      expect(await guestSessionCount()).toBe(0);
+    });
+
+    it('...and WITH a well-formed guest cookie it falls back to the guest path, exactly as before — a guest submission is unchanged', async () => {
+      const unknownToken = generateRegisteredSessionToken();
+      const sessionId = generateGuestSessionId();
+      await createGuestSession({ kind: 'guest', sessionId });
+
+      const response = await POST(postAs({ ...session(unknownToken), ...guest(sessionId) }, { content: validLengthContent('Signed out, still a guest.') }));
+      const body: { id: string } = await response.json();
+
+      expect(response.status).toBe(201);
+      const row = await storedEssay(body.id);
+      expect(row.sessionId).toBe(sessionId);
+      expect(row.userId).toBeNull();
+    });
+  });
+
+  describe('BR-1.8: a registered user is capped at five submissions an hour', () => {
+    it('AC: the sixth is 429 rateLimited — sent from a DIFFERENT address each time, so it is the per-user bucket and not the IP one', async () => {
+      const account = await registerTestAccount();
+      const statuses: number[] = [];
+      for (let i = 0; i < ESSAY_SUBMISSION_SESSION_LIMIT + 1; i++) {
+        const response = await POST(
+          postAs(session(account.token), { content: validLengthContent(`Submission ${i}.`) }, xff(`192.0.2.${i + 1}`)),
+        );
+        statuses.push(response.status);
+      }
+
+      expect(statuses).toEqual([201, 201, 201, 201, 201, 429]);
+      const stored = await db.select().from(essays).where(eq(essays.userId, account.userId));
+      expect(stored).toHaveLength(5);
+    });
+
+    it('the refusal carries reason rateLimited, and happens BEFORE the body is read (no essay written for the refused request)', async () => {
+      const account = await registerTestAccount();
+      for (let i = 0; i < 5; i++) {
+        await POST(postAs(session(account.token), { content: validLengthContent(`Fill ${i}.`) }, xff(`198.51.100.${i + 1}`)));
+      }
+
+      // An unparseable body: were the body read first, this would be a 400.
+      const refused = await POST(
+        new NextRequest(new URL('http://localhost:3000/api/essays'), {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            origin: 'http://localhost:3000',
+            host: 'localhost:3000',
+            cookie: `${REGISTERED_SESSION_COOKIE_NAME}=${account.token}`,
+            ...xff('198.51.100.99'),
+          },
+          body: '{ not json',
+        }),
+      );
+
+      expect(refused.status).toBe(429);
+      expect((await refused.json()).reason).toBe('rateLimited');
+    });
+
+    it('is per account: another registered user on the same address is unaffected', async () => {
+      const heavy = await registerTestAccount();
+      const other = await registerTestAccount();
+      for (let i = 0; i < 6; i++) {
+        await POST(postAs(session(heavy.token), { content: validLengthContent(`Heavy ${i}.`) }, xff('203.0.113.5')));
+      }
+
+      const response = await POST(postAs(session(other.token), { content: validLengthContent('Not limited.') }, xff('203.0.113.5')));
+
+      expect(response.status).toBe(201);
+    });
+
+    it('a guest is still capped at five on the session bucket — unchanged by any of this', async () => {
+      const sessionId = generateGuestSessionId();
+      await createGuestSession({ kind: 'guest', sessionId });
+      const statuses: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        const response = await POST(postEssay({ content: validLengthContent(`Guest ${i}.`) }, sessionId, xff(`192.0.2.${i + 20}`)));
+        statuses.push(response.status);
+      }
+
+      expect(statuses).toEqual([201, 201, 201, 201, 201, 429]);
+    });
+  });
+
+  describe('the same server-side guards apply to a registered submitter', () => {
+    it('enforces the 50-word floor on the server: 400 tooShort, and nothing is stored', async () => {
+      const account = await registerTestAccount();
+
+      const response = await POST(postAs(session(account.token), { content: wordsContent(MIN_ESSAY_WORDS - 1) }));
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).reason).toBe('tooShort');
+      expect(await db.select().from(essays)).toHaveLength(0);
+    });
+
+    it('enforces the 300-word ceiling on the server: 400 tooLong', async () => {
+      const account = await registerTestAccount();
+
+      const response = await POST(postAs(session(account.token), { content: wordsContent(MAX_ESSAY_WORDS + 1) }));
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).reason).toBe('tooLong');
+    });
+
+    it('applies the shared body guard: an oversized Content-Length is 413 with Connection: close, and nothing is stored', async () => {
+      const account = await registerTestAccount();
+
+      const response = await POST(
+        postAs(session(account.token), { content: validLengthContent('x') }, { 'content-length': String(MAX_REQUEST_BODY_BYTES + 1) }),
+      );
+
+      expect(response.status).toBe(413);
+      expect(response.headers.get('connection')).toBe('close');
+      expect(await db.select().from(essays)).toHaveLength(0);
+    });
+
+    it('takes the owner from the cookies only: a body naming another user is ignored', async () => {
+      const account = await registerTestAccount();
+      const victim = await createTestUser();
+
+      const response = await POST(
+        postAs(session(account.token), { content: validLengthContent('Nominating a victim.'), userId: victim, sessionId: generateGuestSessionId() }),
+      );
+      const body: { id: string } = await response.json();
+
+      expect(response.status).toBe(201);
+      const row = await storedEssay(body.id);
+      expect(row.userId).toBe(account.userId);
+      expect(row.sessionId).toBeNull();
+    });
+  });
+
+  describe('logging: a registered submission is correlatable, and never carries an email, the content or the raw id', () => {
+    it('logs outcome "created" with a hashed user id', async () => {
+      const account = await registerTestAccount();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const content = validLengthContent('Logged registered submission.');
+
+      await POST(postAs(session(account.token), { content }));
+
+      const line = logSpy.mock.calls.map((call) => JSON.parse(call[0] as string)).find((l) => l.event === 'essay_submission');
+      expect(line).toMatchObject({ outcome: 'created', contentLength: content.length });
+      expect(line.userIdHash).toMatch(/^[0-9a-f]{12}$/);
+      const raw = JSON.stringify(line);
+      expect(raw).not.toContain(account.userId);
+      expect(raw).not.toContain(account.email);
+      expect(raw).not.toContain(content);
+      logSpy.mockRestore();
+    });
+
+    it('a database failure on the registered insert is a safe 500, and its log line still carries the hashed user id at ERROR', async () => {
+      const account = await registerTestAccount();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const leak = 'leak-probe-should-never-reach-the-response-or-a-log-line';
+      // Only the essays insert fails: the rate limiter's counter upsert goes through `db.insert` too.
+      const realInsert = db.insert.bind(db);
+      const insertSpy = vi.spyOn(db, 'insert').mockImplementation(((table: Parameters<typeof realInsert>[0]) => {
+        if (table === essays) throw new Error(`simulated failure embedding ${leak} (${account.userId})`);
+        return realInsert(table);
+      }) as typeof db.insert);
+
+      try {
+        const response = await POST(postAs(session(account.token), { content: validLengthContent('Will fail to persist.') }));
+        const body = await response.json();
+
+        expect(response.status).toBe(500);
+        expect(body.reason).toBe('internalError');
+        expect(JSON.stringify(body)).not.toContain(leak);
+        const line = logSpy.mock.calls.map((call) => JSON.parse(call[0] as string)).find((l) => l.event === 'essay_submission');
+        expect(line).toMatchObject({ outcome: 'error', severity: 'ERROR' });
+        expect(line.userIdHash).toMatch(/^[0-9a-f]{12}$/);
+        expect(JSON.stringify(line)).not.toContain(account.userId);
+        expect(JSON.stringify(line)).not.toContain(leak);
+      } finally {
+        insertSpy.mockRestore();
+        logSpy.mockRestore();
+      }
+    });
+
+    it('a failure of the registered-session lookup is a reason-carrying 500 that logs a fixed event and nothing about the error', async () => {
+      const account = await registerTestAccount();
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const selectSpy = vi.spyOn(db, 'select').mockImplementation(() => {
+        throw new Error(`down: ${account.email}`);
+      });
+
+      try {
+        const response = await POST(postAs(session(account.token), { content: validLengthContent('Lookup fails.') }));
+
+        expect(response.status).toBe(500);
+        expect((await response.json()).reason).toBe('internalError');
+        const logged = JSON.stringify(errorSpy.mock.calls);
+        expect(logged).toContain('essay_submission_failed');
+        expect(logged).not.toContain(account.email);
+      } finally {
+        selectSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+    });
   });
 });

@@ -5,7 +5,7 @@ import { createEssay } from '@/lib/db/essays';
 import { createGuestSession } from '@/lib/db/guest-sessions';
 import { createGradingJob, getGradingJobByIdUnscoped } from '@/lib/db/grading-jobs';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
-import { resetDatabase, closePool } from '@/test/db-fixtures';
+import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
 import { wordsContent } from '@/test/essay-content-fixtures';
 import { bandForScore } from '@/lib/contracts/grading';
 import type { GuestActor, SystemActor } from '@/lib/contracts/actor';
@@ -66,6 +66,27 @@ async function seedEssayWithJob(content: string) {
 function loggedGradingEvents(logSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown>[] {
   return logSpy.mock.calls.map((call) => JSON.parse(call[0] as string)).filter((line) => line.event === 'grading_job_completed');
 }
+
+describe('runGradingJob — an account-owned essay (KAN-52): its session_id is NULL', () => {
+  it('grades it and logs one telemetry line with a null sessionIdHash, never throwing on the missing session', async () => {
+    // Before KAN-52 an essay always had a session id, and `toEssay` parsed it
+    // unconditionally — a NULL would have thrown, failing every registered
+    // user's grading job. The submission id (the essay id) is still the join key.
+    const user = { kind: 'user', userId: await createTestUser() } as const;
+    const essay = await createEssay(user, wordsContent(60));
+    const job = (await createGradingJob(user, essay.id))!;
+    createGradingProviderMock.mockReturnValue(createFakeGradingProvider());
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    expect(await runGradingJob(job.id)).toBe('succeeded');
+
+    const events = loggedGradingEvents(logSpy);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ success: true, submissionId: essay.id, sessionIdHash: null });
+    expect((await getGradingJobByIdUnscoped(SYSTEM_ACTOR, job.id))?.status).toBe('succeeded');
+    logSpy.mockRestore();
+  });
+});
 
 describe('runGradingJob — happy path', () => {
   it('BR-3.1/BR-3.2/BR-3.3: succeeds, persists a result with all four rubric dimensions, an overall score, and resolved-span annotations', async () => {

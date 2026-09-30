@@ -51,7 +51,11 @@ function hashSessionId(sessionId: GuestSessionId | null): string | null {
 
 export interface GradingTelemetryEvent {
   readonly submissionId: string;
-  /** Null only for the rare "essay row already gone" failure path — see `orchestrate-grading.ts`'s own comment; there is no session id left to attach at that point. */
+  /**
+   * Null for the rare "essay row already gone" failure path (see `orchestrate-grading.ts`'s own comment — there is no session id left to attach), and, since
+   * KAN-52, for every essay an ACCOUNT owns: `essays.session_id` is NULL there, so the line carries `submissionId` as its only join key and no identity hash
+   * for a registered user's job. A `userIdHash` here would close that (see `essay-submission-telemetry.ts`); it is not part of this story.
+   */
   readonly sessionId: GuestSessionId | null;
   readonly provider: string | null;
   /** Submission -> grading-complete, in milliseconds (BR-5.2's own metric). */

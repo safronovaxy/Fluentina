@@ -486,6 +486,30 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
       expect(sessionAfter?.convertedAt).toBeNull();
     });
 
+    it('issues NO session when the adoption itself fails — a signed-in user whose adoption silently failed is not a reachable state', async () => {
+      // The other direction of the test above, and the one that catches a
+      // conversion done as a SECOND write after the session is issued: there the
+      // session commits first, the adoption then fails, and the person is signed
+      // in with their essay left stranded. Here a trigger makes the essays UPDATE
+      // (the adoption) fail; the sign-in must leave no session behind.
+      const userId = await createTestUser();
+      const guest = await newGuest();
+      const essay = await createEssay(guest, 'Ein Aufsatz, dessen Übernahme scheitert, ohne dass eine Sitzung entsteht.');
+      const request = signIn(userId, { guest });
+      await db.execute(sql`CREATE OR REPLACE FUNCTION fluentina.refuse_essay_update() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'adoption refused'; END; $$ LANGUAGE plpgsql`);
+      await db.execute(sql`CREATE TRIGGER refuse_essay_update BEFORE UPDATE ON fluentina.essays FOR EACH ROW EXECUTE FUNCTION fluentina.refuse_essay_update()`);
+      try {
+        await expect(signInUser(request)).rejects.toThrow();
+      } finally {
+        await db.execute(sql`DROP TRIGGER refuse_essay_update ON fluentina.essays`);
+        await db.execute(sql`DROP FUNCTION fluentina.refuse_essay_update()`);
+      }
+
+      expect(await findLiveSessionUserId(request.sessionTokenHash)).toBeNull();
+      expect(await count(sessions)).toBe(0);
+      expect((await rawEssay(essay.id)).userId).toBeNull();
+    });
+
     it('also rolls back the deletion of the replaced session when the insert fails', async () => {
       const previousUser: UserActor = { kind: 'user', userId: await createTestUser() };
       const previous = hashRegisteredSessionToken(generateRegisteredSessionToken());
