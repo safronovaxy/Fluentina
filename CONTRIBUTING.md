@@ -251,6 +251,213 @@ Cloud SQL instance — nothing done locally can touch real guest data. See
 Anyone — including Irina — can check out `main` and run the whole stack
 locally this way.
 
+### Running the Playwright suite locally (Chromium projects only)
+
+You can get a real-browser signal on `chromium-desktop` and `chromium-mobile`
+before opening a PR, on any machine with a Chromium build Playwright can be
+pointed at. **It is not a substitute for CI.** CI's full job is the merge gate
+and the **only** signal for `webkit-desktop` and `webkit-mobile`, which are
+required projects (see "WebKit gates every PR" above). Nothing below can run
+WebKit, and a green local Chromium run says nothing about it.
+
+This is written down because "the e2e suite can't be run outside CI" was
+believed for a long time and is **wrong for the Chromium projects**. It
+matters in practice: a spec written without ever being run shipped a German
+register button (58 unbroken characters on a `whitespace-nowrap` control) that
+measured ~480px on a 393px viewport, so it was cropped at the screen edge and
+its tap centre fell off the card. CI caught it; a local `chromium-mobile` run
+would have, before the PR existed.
+
+**Never run `npx playwright install`** in a restricted environment. It
+downloads from `cdn.playwright.dev`, which may be blocked, and it is not
+needed: use a Chromium that is already on the machine. Set
+`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so `npm ci` does not try to fetch one either.
+
+Everything below mirrors `ci.yml`'s "Website" job and was run end to end as
+written (x86_64 Linux; see the last section of this recipe for the measured
+results). Run it from `website/`, in one shell, since it relies on exported
+variables.
+
+**1. Install without downloading a browser**
+```bash
+cd website
+export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+npm ci
+```
+
+**2. Point Playwright at the Chromium you have (the "bridge")**
+
+Playwright looks for one exact browser revision, baked into the version this
+repo pins. A pre-installed Chromium is usually a different revision, so
+Playwright reports "Executable doesn't exist". The fix is a private browsers
+directory, created by you in a scratch location, whose entries are symlinks
+named for the revision Playwright wants and pointing at the build you have.
+Nothing is written into the real browsers directory and nothing into the repo.
+
+```bash
+# Revision the pinned Playwright wants (1208 for @playwright/test 1.58.2):
+WANT=$(node -p "require('./node_modules/playwright-core/browsers.json').browsers.find(b => b.name === 'chromium').revision")
+# Revision you have: `ls "$PLAYWRIGHT_BROWSERS_PATH"` shows chromium-<rev>
+# and chromium_headless_shell-<rev> (1194 on the sandbox image, /opt/pw-browsers).
+HAVE=1194
+REAL=/opt/pw-browsers
+
+PW_BRIDGE=$(mktemp -d)   # scratch, outside the repo
+mkdir -p "$PW_BRIDGE/chromium-$WANT/chrome-linux64" \
+         "$PW_BRIDGE/chromium_headless_shell-$WANT/chrome-headless-shell-linux64"
+ln -s "$REAL/chromium-$HAVE/chrome-linux/chrome" \
+      "$PW_BRIDGE/chromium-$WANT/chrome-linux64/chrome"
+ln -s "$REAL/chromium_headless_shell-$HAVE/chrome-linux/headless_shell" \
+      "$PW_BRIDGE/chromium_headless_shell-$WANT/chrome-headless-shell-linux64/chrome-headless-shell"
+export PLAYWRIGHT_BROWSERS_PATH=$PW_BRIDGE
+```
+
+The names are not negotiable, and were checked against
+`node_modules/playwright-core/lib/server/registry/index.js` for the pinned
+version rather than copied from anyone's notes:
+
+- **Directory names:** `chromium-<rev>` and `chromium_headless_shell-<rev>`.
+  The headless shell uses an **underscore** (`chromium-headless-shell-<rev>`
+  with hyphens is not found: tried, fails with "Executable doesn't exist").
+- **Layout inside, on x86_64 Linux:** `chromium-<rev>/chrome-linux64/chrome` and
+  `chromium_headless_shell-<rev>/chrome-headless-shell-linux64/chrome-headless-shell`.
+  The installed builds use different internal names (`chrome-linux/chrome`,
+  `chrome-linux/headless_shell`), which is why the links rename them. (On
+  arm64 Linux the registry expects `chrome-linux/chrome` and
+  `chrome-linux/headless_shell`.)
+- **Both links are required.** Playwright launches the headless shell for
+  ordinary headless runs, so a bridge with only the `chromium-<rev>` half fails.
+  Each is **one symlink to the real binary**: no per-file symlink farm and no
+  marker files (`INSTALLATION_COMPLETE` etc.) are needed. The binaries find their
+  resources next to their real path, not next to the link (observed working, not
+  looked up in Playwright's source).
+
+The installed build is older than the one Playwright pins (Chromium 141 here,
+against 145 in CI). The Playwright protocol tolerated that across the whole
+suite, but it is a difference, so a failure that only appears locally is worth
+a second look before it is believed, and a pass is not proof CI will pass.
+
+Check the bridge before going further:
+```bash
+node -e "require('@playwright/test').chromium.launch().then(b => { console.log(b.version()); return b.close(); })"
+```
+
+**3. A database of your own, migrated**
+
+Use a database dedicated to the e2e run, not the one your dev server uses: the
+suite writes sessions, essays and users.
+```bash
+docker compose up -d db      # from the repo root; Postgres 16 on localhost:55432
+psql postgres://fluentina:fluentina_dev@127.0.0.1:55432/postgres -c "create database fluentina_e2e"
+export DATABASE_URL=postgres://fluentina:fluentina_dev@127.0.0.1:55432/fluentina_e2e
+npm run db:migrate
+```
+No Docker (a container sandbox, say)? Any Postgres 16 will do. As root,
+`initdb` refuses to run, so create the data directory under a location the
+`postgres` user owns (for example `/var/lib/postgresql/<name>`) and start it
+with `su postgres -c "pg_ctl ..."` on a spare port. Do not assume something is
+already listening on 55432, and do not reuse someone else's server: check.
+
+**4. Build, then serve the build over TLS**
+```bash
+NEXT_PUBLIC_STRAPI_URL=http://localhost:1337 \
+NEXT_PUBLIC_APP_URL=http://localhost:3000 \
+NEXT_PUBLIC_API_URL=http://localhost:3000 \
+NEXT_PUBLIC_STRIPE_PUBLIC_KEY=pk_test_ci_placeholder \
+NEXT_PUBLIC_GROWTHBOOK_CLIENT_KEY= \
+npm run build                # needs DATABASE_URL set, or it fails collecting page data
+
+npm run tls:generate-cert -- .tls
+
+# MOCK_GRADING_PROVIDER must be on the SERVER, not just the test runner.
+MOCK_GRADING_PROVIDER=1 node_modules/.bin/next start -p 3000 &
+APP_PID=$!
+TLS_PROXY_PORT=8443 TLS_PROXY_TARGET_PORT=3000 \
+TLS_PROXY_CERT=.tls/localhost-cert.pem TLS_PROXY_KEY=.tls/localhost-key.pem \
+node scripts/tls-proxy.mjs &
+PROXY_PID=$!
+```
+`next start` is invoked directly, not as `npm run start`, so that `$!` is the
+server itself: killing the `npm` wrapper leaves the real `next-server`
+orphaned and still holding the port. If 3000 or 8443 are taken, change the
+ports here and in `BASE_URL` below.
+
+**5. Run the specs**
+```bash
+export BASE_URL=https://localhost:8443 PLAYWRIGHT_EXTERNAL_SERVER=1 MOCK_GRADING_PROVIDER=1
+
+# one spec, both Chromium projects:
+npx playwright test tests/essay-entry.spec.ts \
+  --project=chromium-desktop --project=chromium-mobile
+
+# everything, as CI does, but only the two projects that can run here:
+npx playwright test --project=chromium-desktop --project=chromium-mobile --grep-invert "@cms"
+```
+Do not set `CI`: it turns on retries and four workers, and (correctly) makes
+`playwright.config.ts` throw if `BASE_URL` is missing or not HTTPS. Without it a
+flaky test is a red test on the first attempt, which is what you want locally.
+`BASE_URL` must be the `https://localhost` proxy address for the same reason CI
+uses it: a plain-HTTP run silently skips the tests that need the `__Host-`
+session cookie stored.
+
+**6. Stop what you started**
+```bash
+kill "$APP_PID" "$PROXY_PID"
+```
+(Then drop the scratch database and `$PW_BRIDGE` if you like; both are yours.)
+
+#### Expected noise: 28 failures in the full run, all "zero console errors"
+
+A full run of the two Chromium projects at `6ae3600`, in a sandbox whose
+egress is restricted, gave **275 passed, 7 skipped, 28 failed** in about two
+minutes (`chromium-desktop`: 184 / 4 / 14, `chromium-mobile`: 91 / 3 / 14). Every
+one of the 28 is a "no console errors" assertion, and none is a signal about
+your change:
+
+| Spec | Failing test | Per project |
+|------|--------------|-------------|
+| `tests/no-console-errors.spec.ts` | `T10 — <route> has zero console errors` for `/`, `/pricing`, `/about`, `/blog`, `/contact`, `/for-freelancers`, `/placement-test`, `/placement-test/german`, `/placement-test/english`, `/privacy`, `/terms` | 11 |
+| `tests/guest-flow.spec.ts` | `zero console errors` (`/practice` and `/de/practice`) | 2 |
+| `tests/contact-form.spec.ts` | `T5.6 — Form renders without console errors` | 1 |
+
+The cause is environmental. The root layout loads two third-party scripts,
+`cdn-cookieyes.com` (consent banner) and `www.googletagmanager.com` (GA4),
+through `next/script`. Where those hosts are unreachable, the load fails
+(`net::ERR_TUNNEL_CONNECTION_FAILED` behind this sandbox's proxy) and
+`next/script` logs the failed load's DOM event with `console.error`, whose
+text is just `Event`. The shared filter in `tests/helpers/console-errors.ts`
+ignores `net::ERR_*` messages, but not a bare `Event`, so the page fails the
+assertion. You will see the failure message list `["Event"]` and nothing else.
+`localhost:1337` (Strapi) is also refused, since no CMS runs, but its messages
+are `net::ERR_*` and are filtered; it is not what fails these tests. On CI
+runners both hosts are reachable, so these pass there.
+
+Treat the same 28, and only them, as noise. Anything else red, or these
+tests failing for a different message than `["Event"]`, is real. The 7
+skipped are blog-post tests that skip themselves when no CMS content is
+published (`tests/blog.spec.ts`, and the `/blog/[slug]` JSON-LD test in
+`tests/seo.spec.ts`). Do not try to fix the 28 in an unrelated branch; they
+are environmental, not a defect in the suite.
+
+The figures are a snapshot of one run at one commit, not a contract. If a
+later run shows a different number, check that the failing tests are still this
+same family before concluding anything.
+
+#### What this gives you and what it does not
+
+| | Runs here | Signal |
+|---|---|---|
+| `chromium-desktop` | yes | real, pre-CI |
+| `chromium-mobile` (Pixel 5, 393px) | yes | real, pre-CI |
+| `webkit-desktop` | **no, no WebKit build available** | CI only |
+| `webkit-mobile` | **no, no WebKit build available** | CI only |
+
+The two WebKit projects are not optional extras: `webkit-desktop` is a required
+check, WebKit refuses the `__Host-` session cookie over plain HTTP, and twelve
+tests are conditioned on that. A local Chromium pass cannot stand in for them,
+and it cannot stand in for CI as a whole. CI is the merge gate. This recipe
+moves the first real browser signal from "after the PR is open" to "before it".
+
 ## Code layering (`website/src`, KAN-10)
 
 Several comments in `website/src` point here for "the layering rule" —
