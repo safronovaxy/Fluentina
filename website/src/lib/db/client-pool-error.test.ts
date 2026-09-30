@@ -1,6 +1,6 @@
 /** @vitest-environment node */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Client, type Pool } from 'pg';
+import { Client, type Pool, type PoolClient } from 'pg';
 
 /**
  * KAN-43. `pg` reports an error on an IDLE client as an `'error'` event on the
@@ -25,6 +25,27 @@ const DATABASE_URL = `postgres://fluentina_app:${PASSWORD}@10.20.30.40:5432/flue
  * text. The line must never contain it, from any field.
  */
 const ESSAY_MARKER = 'Meine Heimatstadt ist sehr schoen ESSAY-MARKER-7f3a';
+
+/**
+ * Markers that SURVIVE a shape check. `ESSAY_MARKER` above is rejected on
+ * charset (colon, spaces, hyphens) by all three regexes in `client.ts`, so on
+ * its own it proves the shape check works, not that the allowlist is narrow: a
+ * handler that also read `e.detail` would still log nothing. These three are
+ * alphanumeric/underscore tokens that each satisfy exactly one regex, so if the
+ * handler ever falls back to another `pg` field for that slot, the planted
+ * value is accepted and lands in the line. No single value can satisfy all
+ * three (syscall is lowercase-only, SQLSTATE/errno uppercase-only), hence one
+ * per slot. The test "the shape-passing markers really do pass" below pins each
+ * to the real handler, so none can be edited into something inert.
+ */
+const NAME_MARKER = 'ESSAYMARKER7f3a'; // errorName: /^[A-Za-z][A-Za-z0-9]{0,39}$/
+const CODE_MARKER = 'ESSAYMARKER_7F3A'; // errorCode: SQLSTATE or libuv errno name
+const SYSCALL_MARKER = 'essay_marker'; // syscall: /^[a-z_]{2,20}$/
+const SHAPE_PASSING_MARKERS = [
+  ['errorName', 'name', NAME_MARKER],
+  ['errorCode', 'code', CODE_MARKER],
+  ['syscall', 'syscall', SYSCALL_MARKER],
+] as const;
 
 /** Every field a `pg` `DatabaseError` (or Drizzle's wrapper around one) can carry that is not a short token. */
 const PG_ERROR_FIELDS = [
@@ -67,9 +88,12 @@ const LOGGED_KEYS = [
  * with them decides which branch runs: a valid token is used, an invalid or
  * absent one is where a careless fallback to another field would leak.
  */
-function pgErrorCarryingSecrets(tokens: { name: unknown; code: unknown; syscall: unknown }): Error {
+function pgErrorCarryingSecrets(
+  tokens: { name: unknown; code: unknown; syscall: unknown },
+  plant: (field: string) => string = (f) => `${f}: ${ESSAY_MARKER} ${DATABASE_URL}`,
+): Error {
   const err = new Error(`connection to ${DATABASE_URL} failed: read ECONNRESET`);
-  const planted = Object.fromEntries(PG_ERROR_FIELDS.map((f) => [f, `${f}: ${ESSAY_MARKER} ${DATABASE_URL}`]));
+  const planted = Object.fromEntries(PG_ERROR_FIELDS.map((f) => [f, plant(f)]));
   return Object.assign(err, planted, {
     length: 123,
     errno: -104,
@@ -175,6 +199,51 @@ describe('client.ts — KAN-43: an error on an idle pooled client must not kill 
     }
   });
 
+  // `max` is hardcoded in client.ts, so a differently-configured pool cannot be
+  // had by importing. `pool.options` is a mutable plain object, though: change
+  // it after construction and the line must follow. A literal `poolMax: 10`
+  // would keep every other assertion here green and misreport once ADR-16
+  // changes `max`.
+  it('reads poolMax from the pool at the moment the event fires, not a constant', async () => {
+    const { mod, pool } = await importClientWith(DATABASE_URL);
+    const console_ = spyOnEveryConsoleMethod();
+    const configuredMax = pool.options.max;
+    try {
+      expect(configuredMax).toBe(10);
+      pool.options.max = 27;
+      pool.emit('error', Object.assign(new Error('x'), { code: 'ECONNRESET' }));
+      const lines = console_.lines();
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]).poolMax).toBe(27);
+    } finally {
+      pool.options.max = configuredMax;
+      await mod.closePool();
+    }
+  });
+
+  // Only `Date` is faked: pg, timers and the event loop stay real. Two events at
+  // two different times, so neither a fixed string nor a value captured once at
+  // module load can satisfy both.
+  it('stamps each line with the time the event fired', async () => {
+    const { mod, pool } = await importClientWith(DATABASE_URL);
+    const console_ = spyOnEveryConsoleMethod();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-03-04T05:06:07.089Z'));
+      pool.emit('error', Object.assign(new Error('x'), { code: 'ECONNRESET' }));
+      vi.setSystemTime(new Date('2026-11-12T13:14:15.161Z'));
+      pool.emit('error', Object.assign(new Error('x'), { code: 'ECONNRESET' }));
+
+      const lines = console_.lines();
+      expect(lines).toHaveLength(2);
+      expect(JSON.parse(lines[0]).timestamp).toBe('2026-03-04T05:06:07.089Z');
+      expect(JSON.parse(lines[1]).timestamp).toBe('2026-11-12T13:14:15.161Z');
+    } finally {
+      vi.useRealTimers();
+      await mod.closePool();
+    }
+  });
+
   it('keeps the SQLSTATE of a server-side termination (what a Cloud SQL restart looks like)', async () => {
     const { mod, pool } = await importClientWith(DATABASE_URL);
     const console_ = spyOnEveryConsoleMethod();
@@ -232,7 +301,28 @@ describe('client.ts — KAN-43: the logged line never carries the connection str
     // The guest's essay text (see ESSAY_MARKER) — what `detail`/`where`/... hold.
     expect(line).not.toContain('ESSAY-MARKER');
     expect(line).not.toContain('Heimatstadt');
+    // Shape-passing markers: would be accepted by a regex, so their absence is
+    // down to WHICH field was read, not to the charset check.
+    for (const [, , marker] of SHAPE_PASSING_MARKERS) expect(line).not.toContain(marker);
   }
+
+  // Without this, a marker edited into something a regex rejects would turn the
+  // next test back into one that only exercises the charset check.
+  it.each(SHAPE_PASSING_MARKERS)(
+    'the shape-passing markers really do pass client.ts\'s shape check: %s',
+    async (logged, field, marker) => {
+      const { mod, pool } = await importClientWith(DATABASE_URL);
+      const console_ = spyOnEveryConsoleMethod();
+      try {
+        pool.emit('error', Object.assign(new Error('x'), { name: undefined, code: undefined, syscall: undefined, [field]: marker }));
+        const lines = console_.lines();
+        expect(lines).toHaveLength(1);
+        expect(JSON.parse(lines[0])[logged]).toBe(marker);
+      } finally {
+        await mod.closePool();
+      }
+    },
+  );
 
   // The same dirty error is run down each branch of the short-token handling.
   // A leak is only possible where a field OTHER than the three short tokens is
@@ -281,6 +371,42 @@ describe('client.ts — KAN-43: the logged line never carries the connection str
     },
   );
 
+  // The allowlist itself: every `pg` field carries a value that PASSES the shape
+  // check for one slot, and the real `name`/`code`/`syscall` are valid, absent or
+  // hostile. Only a handler that reads a field other than the three tokens (as a
+  // fallback, when the token is absent or rejected) can put the marker in the
+  // line. Each marker is run separately so a failure names the slot it leaked
+  // through; the valid row passes for any handler and shows nothing is swallowed.
+  it.each(
+    SHAPE_PASSING_MARKERS.flatMap(([logged, , marker]) =>
+      [
+        ['valid name, code and syscall', { name: 'error', code: 'ECONNRESET', syscall: 'read' }],
+        ['name, code and syscall all absent', { name: undefined, code: undefined, syscall: undefined }],
+        ['name, code and syscall that are really the connection string', { name: DATABASE_URL, code: DATABASE_URL, syscall: DATABASE_URL }],
+      ].map(([label, tokens]) => [logged, marker, label, tokens] as const),
+    ),
+  )(
+    'a value that would pass the %s shape check, planted in every other pg field, is not read (%s): %s',
+    async (logged, marker, _label, tokens) => {
+      const { mod, pool } = await importClientWith(DATABASE_URL);
+      const console_ = spyOnEveryConsoleMethod();
+      try {
+        const err = pgErrorCarryingSecrets(tokens as never, () => marker);
+        for (const field of PG_ERROR_FIELDS) expect((err as never)[field]).toBe(marker);
+
+        pool.emit('error', err);
+
+        const lines = console_.lines();
+        expect(lines).toHaveLength(1);
+        assertNoCredentialIn(lines[0]);
+        expect(lines[0]).not.toContain(marker);
+        expect(JSON.parse(lines[0])[logged]).not.toBe(marker);
+      } finally {
+        await mod.closePool();
+      }
+    },
+  );
+
   it.each([
     ['a bare string', DATABASE_URL],
     ['undefined', undefined],
@@ -293,6 +419,7 @@ describe('client.ts — KAN-43: the logged line never carries the connection str
       expect(() => pool.emit('error', thrown)).not.toThrow();
       const lines = console_.lines();
       expect(lines).toHaveLength(1);
+      // Incidental for the undefined/null rows (nothing there to leak); their coverage is not.toThrow and exactly-one-line.
       assertNoCredentialIn(lines[0]);
     } finally {
       await mod.closePool();
@@ -363,9 +490,11 @@ describe('client.ts — KAN-43: against a real database, a killed idle connectio
     const mod = await import('./client');
     const pool = mod.db.$client as Pool;
     const console_ = spyOnEveryConsoleMethod();
+    let held: PoolClient[] = [];
+    let queued: Promise<PoolClient>[] = [];
     try {
-      const held = await Promise.all(Array.from({ length: 10 }, () => pool.connect()));
-      const queued = [pool.connect(), pool.connect()];
+      held = await Promise.all(Array.from({ length: 10 }, () => pool.connect()));
+      queued = [pool.connect(), pool.connect()];
       await vi.waitFor(() => expect(pool.waitingCount).toBe(2));
 
       pool.emit('error', Object.assign(new Error('x'), { code: 'ECONNRESET' }));
@@ -373,10 +502,13 @@ describe('client.ts — KAN-43: against a real database, a killed idle connectio
       const lines = console_.lines();
       expect(lines).toHaveLength(1);
       expect(JSON.parse(lines[0])).toMatchObject({ poolMax: 10, poolTotal: 10, poolIdle: 0, poolWaiting: 2 });
-
-      held.forEach((c) => c.release());
-      (await Promise.all(queued)).forEach((c) => c.release());
     } finally {
+      // In the finally so a failed assertion above reports itself: `pool.end()`
+      // waits for every checked-out client, so releasing after the assertions
+      // would turn any failure into "Test timed out". Held first, which hands
+      // the queued requests their clients; those are released in turn.
+      held.forEach((c) => c.release());
+      (await Promise.allSettled(queued)).forEach((r) => r.status === 'fulfilled' && r.value.release());
       await mod.closePool();
     }
   });
