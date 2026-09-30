@@ -179,6 +179,94 @@ docker compose up -d db          # Postgres 16 on localhost:55432 (repo root)
 Local-only, isolated from the shared production Cloud SQL instance — see
 `CONTRIBUTING.md` and Architecture Decisions ADR-1/ADR-10 on Confluence.
 
+### Running Playwright in a restricted sandbox (no browser download, no Docker, root)
+
+The local Playwright recipe lives in `CONTRIBUTING.md` ("Running the Playwright
+suite locally"); this is only the part that depends on the sandbox image, which
+is why it is here and not there. Nothing in it is versioned by this repo, so if
+it drifts, **re-derive it; do not conclude the suite is unrunnable.** The
+"belief" that the e2e suite cannot be run outside CI was wrong for Chromium.
+
+**A Chromium Playwright will accept (the "bridge").** `npx playwright install`
+downloads from `cdn.playwright.dev`, blocked here, so never run it. Playwright
+wants one exact browser revision (baked into the pinned version) and the image
+has a different one, so `chromium.launch()` says "Executable doesn't exist". The
+fix is a private browsers directory, in a scratch location, of symlinks named
+for the revision Playwright wants and pointing at the build you have. Nothing is
+written into the real browsers directory or the repo. From `website/`:
+
+```bash
+export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1   # harmless: npm install does not fetch browsers anyway
+npm ci
+
+REAL=/opt/pw-browsers      # where the image keeps its browsers
+WANT=$(node -p "require('./node_modules/playwright-core/browsers.json').browsers.find(b => b.name === 'chromium').revision")
+HAVE=$(ls -d "$REAL"/chromium-[0-9]* | sed 's/.*chromium-//')   # must be exactly one revision
+
+PW_BRIDGE=$(mktemp -d)     # scratch, outside the repo
+mkdir -p "$PW_BRIDGE/chromium-$WANT/chrome-linux64" \
+         "$PW_BRIDGE/chromium_headless_shell-$WANT/chrome-headless-shell-linux64"
+ln -s "$REAL/chromium-$HAVE/chrome-linux/chrome" \
+      "$PW_BRIDGE/chromium-$WANT/chrome-linux64/chrome"
+ln -s "$REAL/chromium_headless_shell-$HAVE/chrome-linux/headless_shell" \
+      "$PW_BRIDGE/chromium_headless_shell-$WANT/chrome-headless-shell-linux64/chrome-headless-shell"
+export PLAYWRIGHT_BROWSERS_PATH=$PW_BRIDGE
+
+node -e "require('@playwright/test').chromium.launch().then(b => { console.log(b.version()); return b.close(); })"
+```
+
+The names were checked against
+`node_modules/playwright-core/lib/server/registry/index.js` for the pinned
+version, not copied from anyone's notes:
+
+- **Directory names:** `chromium-<rev>` and `chromium_headless_shell-<rev>`. The
+  headless shell uses an **underscore**; the hyphenated form is not found.
+- **Layout inside, x86_64 Linux:** `chromium-<rev>/chrome-linux64/chrome` and
+  `chromium_headless_shell-<rev>/chrome-headless-shell-linux64/chrome-headless-shell`.
+  The installed builds use different internal names (`chrome-linux/chrome`,
+  `chrome-linux/headless_shell`), which is why the links rename them. On arm64
+  Linux the registry expects `chrome-linux/chrome` and
+  `chrome-linux/headless_shell`.
+- **Both links are required.** Playwright launches the headless shell for
+  ordinary headless runs, so a bridge with only the `chromium-<rev>` half fails.
+  Each is **one symlink to the real binary**: no per-file symlink farm and no
+  marker files are needed (the binaries find their resources next to their real
+  path; observed working, not looked up in Playwright's source).
+
+The installed build is typically a few majors behind the one Playwright pins.
+Compare `chrome --version` (the real binary under `$REAL`) against
+`browsers.json`'s `browserVersion`. The protocol tolerated the gap across the
+whole suite when this was measured, but it is a difference, so a failure that
+only appears locally deserves a second look, and a pass is not proof CI passes.
+
+**If you hit "Executable doesn't exist"** (a Playwright bump, or a different
+image), the expected names have changed. Re-derive them from
+`node_modules/playwright-core/lib/server/registry/index.js` for the
+currently-pinned version: `browserDirectoryPrefix` with `-` replaced by `_`,
+then `-` and the revision, and `EXECUTABLE_PATHS` for the layout inside. **Do
+not conclude the suite is unrunnable.**
+
+**Postgres without Docker, as root.** `initdb` refuses to run as root, so
+create a data directory the `postgres` user owns and run both commands as that
+user. `-U fluentina` is what creates the `fluentina` role that
+`DATABASE_URL` in `CONTRIBUTING.md` uses (a plain `initdb` would name the
+superuser after the invoking user and the connection then fails with
+`role "fluentina" does not exist`):
+
+```bash
+D=/var/lib/postgresql/<a-name-of-your-own>   # check nobody else's cluster is there or on 55432
+mkdir -p "$D" && chown postgres:postgres "$D"
+PGBIN=/usr/lib/postgresql/16/bin
+runuser -u postgres -- $PGBIN/initdb -D "$D" -U fluentina --auth=trust
+runuser -u postgres -- $PGBIN/pg_ctl -D "$D" -w -l "$D/server.log" \
+  -o "-p 55432 -c listen_addresses=127.0.0.1 -c unix_socket_directories=$D" start
+# ...when done:
+runuser -u postgres -- $PGBIN/pg_ctl -D "$D" stop
+```
+Then continue at step 2 of the `CONTRIBUTING.md` recipe (`psql` is on the image).
+The sandbox has no WebKit, so `webkit-desktop` and `webkit-mobile` cannot be run
+here; that is a fact about this image, not about the repo.
+
 ### Deployment (CI/CD via GitHub Actions)
 
 > ⚠️ **Merging does not deploy.** Pushing or merging to `main` runs `ci.yml`
@@ -369,9 +457,12 @@ Working §5 criteria must hold: Solution Architect approved, Test Lead approved,
 CI green, and the story's acceptance criteria demonstrably met. Then merge, and
 move the ticket to *Done*. "CI green" means a real CI run on the PR's current
 head — not local checks standing in for it, and not a green run on an earlier
-commit. Local checks are never a substitute, particularly where they could not
-run at all: a browser suite that no local environment could execute is unrun,
-not passed, and CI is its first real signal.
+commit. Local checks are never a substitute: a local run is not CI, and on this
+repo a local run cannot cover WebKit at all in the restricted sandbox (no WebKit
+build), so CI is the first real signal for `webkit-desktop` and `webkit-mobile`.
+The Chromium projects can be run locally (see the local Chromium recipe in
+`CONTRIBUTING.md`); a browser suite you did not run is unrun, not passed, and
+a passing local Chromium run says nothing about WebKit.
 
 If any of the four is missing, do not merge — say which one and what it needs.
 An approval conditional on a change is not an approval until that change is
