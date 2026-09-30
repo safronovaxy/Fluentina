@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { z } from 'zod';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
 import { Link } from '@/i18n/navigation';
 import { GuestFlowShell } from '@/components/guest/chrome/GuestFlowShell';
@@ -25,27 +26,44 @@ export async function generateMetadata({
  * `SignInForm` for what it must not do. Not a step of the guest essay flow, so
  * no progress indicator.
  *
- * Reads no query parameters: no `?essay=` and no return path. A guest who signs
- * in to an existing account has their guest-owned essay orphaned (KAN-52), so
- * carrying an essay id through here would land them on a 404, and a
- * caller-supplied return path is an open redirect this page has no reason to
- * take on. The form lands on the practice landing page.
+ * `?essay=<id>` is how the register page says which report the person came
+ * from. It is read here and accepted only as a UUID — the same guard, and the
+ * same reasoning, as the register page: what reaches the form is a well-formed
+ * id or nothing, and the form builds the landing route from it, so the
+ * destination is never a caller-supplied path (no open redirect: there is no
+ * path to supply). It is not checked against ownership here; signing in adopts
+ * the guest essay the browser holds (KAN-52), and the preview page it lands on
+ * does the ownership read and 404s for an essay that is not the account's.
+ * Without it the form lands on the practice landing page.
  *
- * Links TO registration, and registration deliberately does not link back:
- * see that page's comment.
+ * Reading `searchParams` makes this route dynamic, so it is no longer
+ * prerendered — which is also what keeps the guest-session cookie the
+ * middleware sets on it from being cached with the page.
+ *
+ * Links TO registration, and registration links back here.
  */
-export default async function SignInPage({ params }: { params: Promise<{ locale: string }> }) {
+export default async function SignInPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ locale: string }>;
+  searchParams: Promise<{ essay?: string | string[] }>;
+}) {
   const { locale } = await params;
+  const { essay: essayParam } = await searchParams;
   setRequestLocale(locale);
+  const parsedEssay = z.string().uuid().safeParse(essayParam);
+  const essayId = parsedEssay.success ? parsedEssay.data : undefined;
   const t = await getTranslations('chrome.guest.signIn');
 
   return (
-    <GuestFlowShell steps={[]} currentStepId="none" backHref="/practice">
+    <GuestFlowShell steps={[]} currentStepId="none" backHref={essayId ? `/practice/preview?essay=${essayId}` : '/practice'}>
       <div className="mx-auto max-w-xl">
         <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{t('title')}</h1>
         <p className="mt-2 text-muted-foreground">{t('description')}</p>
         <div className="mt-6">
           <SignInForm
+            essayId={essayId}
             strings={{
               emailLabel: t('emailLabel'),
               emailRequiredError: t('emailRequiredError'),
@@ -65,7 +83,10 @@ export default async function SignInPage({ params }: { params: Promise<{ locale:
         </div>
         <p className="mt-6 text-sm text-muted-foreground">
           {t('registerPrompt')}{' '}
-          <Link href="/register" className="font-medium text-foreground underline underline-offset-2">
+          <Link
+            href={essayId ? { pathname: '/register', query: { essay: essayId } } : '/register'}
+            className="font-medium text-foreground underline underline-offset-2"
+          >
             {t('registerLink')}
           </Link>
         </p>

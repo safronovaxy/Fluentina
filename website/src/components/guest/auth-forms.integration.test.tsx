@@ -17,6 +17,11 @@ import { CONSENT_KINDS, CURRENT_CONSENT_VERSIONS, REQUIRED_CONSENT_KINDS, type C
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@/lib/contracts/auth';
 import { LOGIN_EMAIL_LIMIT, REGISTRATION_IP_LIMIT } from '@/lib/domain/rate-limit';
 import { REGISTERED_SESSION_COOKIE_NAME } from '@/lib/registered-session-cookie';
+import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
+import { createEssay } from '@/lib/db/essays';
+import { createGuestSession } from '@/lib/db/guest-sessions';
+import { getOwnedEssay } from '@/lib/domain/essay-read';
+import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { resetDatabase, closePool } from '@/test/db-fixtures';
 import { TEST_PASSWORD, registerTestAccount, registrationBody, uniqueEmail } from '@/test/auth-fixtures';
 import { jsonPost, setCookieLine, xff } from '@/test/auth-requests';
@@ -48,14 +53,14 @@ let ipCounter = 0;
 let clientIp = '203.0.113.1';
 
 /** Routes the form's `fetch` to the real handlers. `mutateBody` lets a test stand in for a form that rendered earlier than the server's current state. */
-function wireFetchToRoutes(mutateBody?: (body: any) => any) {
+function wireFetchToRoutes(mutateBody?: (body: any) => any, options: { cookies?: Record<string, string> } = {}) {
   const calls: Array<{ path: string; status: number }> = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       const path = String(url);
       const parsed = JSON.parse(String(init?.body));
-      const request: NextRequest = jsonPost(path, mutateBody ? mutateBody(parsed) : parsed, { headers: xff(clientIp) });
+      const request: NextRequest = jsonPost(path, mutateBody ? mutateBody(parsed) : parsed, { headers: xff(clientIp), cookies: options.cookies });
       const handler = path === '/api/auth/register' ? registerRoute : loginRoute;
       const response = await handler(request);
       calls.push({ path, status: response.status });
@@ -75,11 +80,11 @@ function renderRegistration(essayId?: string) {
   );
 }
 
-function renderSignIn() {
+function renderSignIn(essayId?: string) {
   return render(
     <QueryClientProvider client={new QueryClient()}>
       <IntlProvider locale="en" messages={enMessages}>
-        <SignInForm strings={SIGN_IN} />
+        <SignInForm strings={SIGN_IN} essayId={essayId} />
       </IntlProvider>
     </QueryClientProvider>,
   );
@@ -377,6 +382,46 @@ describe('sign-in form -> POST /api/auth/login', () => {
     expect(alert).toHaveTextContent(SIGN_IN.rateLimitedError);
     expect(alert).not.toHaveTextContent(SIGN_IN.invalidCredentialsError);
     expect(replace).not.toHaveBeenCalled();
+  });
+});
+
+// KAN-52 made sign-in ADOPT the guest essay the browser holds, and KAN-55's pages
+// and form were first written as if it did not. These are the tests that would
+// have said so: the real form, the real login route, the real guest cookie, a
+// real essay row, and the real ownership read the report page makes.
+describe('sign-in form -> the guest essay the browser holds (KAN-52)', () => {
+  async function guestWithEssay() {
+    const guest = { kind: 'guest', sessionId: generateGuestSessionId() } as const;
+    await createGuestSession(guest);
+    const essay = await createEssay(guest, 'Gestern habe ich einen Satz geschrieben.');
+    return { guest, essay };
+  }
+
+  it('signing in with the guest cookie present adopts the essay: the account can read it, the old session id cannot, and the form lands on its report', async () => {
+    const { guest, essay } = await guestWithEssay();
+    const account = await registerTestAccount();
+    const calls = wireFetchToRoutes(undefined, { cookies: { [GUEST_SESSION_COOKIE_NAME]: guest.sessionId } });
+    renderSignIn(essay.id);
+
+    fillSignIn(account.email, account.password);
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith(`/practice/preview?essay=${essay.id}`));
+    expect(calls).toEqual([{ path: '/api/auth/login', status: 200 }]);
+    expect((await getOwnedEssay({ kind: 'user', userId: account.userId }, essay.id))?.id).toBe(essay.id);
+    expect(await getOwnedEssay(guest, essay.id)).toBeNull();
+  });
+
+  it('control: the same sign-in with NO guest cookie adopts nothing — so the test above is about the cookie reaching login, not about sign-in in general', async () => {
+    const { guest, essay } = await guestWithEssay();
+    const account = await registerTestAccount();
+    wireFetchToRoutes();
+    renderSignIn(essay.id);
+
+    fillSignIn(account.email, account.password);
+
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
+    expect(await getOwnedEssay({ kind: 'user', userId: account.userId }, essay.id)).toBeNull();
+    expect((await getOwnedEssay(guest, essay.id))?.id).toBe(essay.id);
   });
 });
 

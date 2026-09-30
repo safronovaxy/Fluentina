@@ -31,13 +31,15 @@
  * ERRORS. `reasonMessages` is exhaustive over `RejectionReason`, the
  * compile-or-else mechanism `EssayEntryForm` documents. Two of those entries
  * are choices worth stating:
- *  - `emailAlreadyRegistered` is a PLAIN message. No "sign in instead" link,
- *    no button: a guest who signs in with an existing account has their
- *    guest-owned essay orphaned (`resolveOwnerActor` resolves the registered
- *    session first and never consults the guest cookie — KAN-52), so a helpful
- *    link would walk them into it. It is a form-level alert, not attached to
- *    the email field, so nothing about it is styled or announced differently
- *    from any other refusal.
+ *  - `emailAlreadyRegistered` is a PLAIN message: no link or button inside it,
+ *    and no "sign in instead" wording. It is a form-level alert, not attached
+ *    to the email field, so nothing about it is styled or announced differently
+ *    from any other refusal. The way forward for someone who already has an
+ *    account is the register PAGE's "already have an account? Sign in" link,
+ *    which is there on every render, before anyone has typed anything — so it
+ *    says nothing about any address. (Signing in with the guest cookie in the
+ *    browser adopts the guest's essay — `login()`, KAN-52 — so the link loses
+ *    nobody their report; it used to be withheld on the premise that it would.)
  *  - `staleConsentVersion` (the register route's answer when the ONLY schema
  *    failures are on `consent.*.version`) says the terms may have changed, and
  *    to reload. `invalidSubmission` is a different string on purpose: the form
@@ -61,7 +63,7 @@
  * it here, so the destination is never a caller-supplied path.
  */
 import { useState, type ReactNode } from 'react';
-import { useForm, type Resolver } from 'react-hook-form';
+import { useForm, type FieldErrors, type Resolver } from 'react-hook-form';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@/i18n/navigation';
 import { Button } from '@/components/ui/button';
@@ -78,6 +80,7 @@ import {
   CONSENT_FIELDS,
   emptyRegistrationValues,
   fillPlaceholders,
+  FORM_LEVEL_ERROR_KEY,
   validateRegistration,
   type RegistrationFormValues,
 } from './auth-form-model';
@@ -160,11 +163,13 @@ export function RegistrationForm({ strings, essayId }: RegistrationFormProps) {
     const result = validateRegistration(values);
     if (result.ok) return { values, errors: {} };
 
-    const { email, password, consent } = result.errors;
+    const { email, password, consent, form } = result.errors;
     const fieldError = (message: string) => ({ type: 'validate', message });
     return {
       values: {},
       errors: {
+        // A refusal no field accounts for still has to refuse: see `FORM_LEVEL_ERROR_KEY`.
+        ...(form && { [FORM_LEVEL_ERROR_KEY]: fieldError(strings.invalidSubmissionError) }),
         ...(email && {
           email: fieldError(email === 'required' ? strings.emailRequiredError : strings.emailInvalidError),
         }),
@@ -182,7 +187,7 @@ export function RegistrationForm({ strings, essayId }: RegistrationFormProps) {
             Object.keys(consent).map((kind) => [kind, fieldError(strings.consent[kind as ConsentKind].requiredError ?? '')]),
           ),
         }),
-      },
+      } as FieldErrors<RegistrationFormValues>,
     };
   };
 
@@ -229,6 +234,10 @@ export function RegistrationForm({ strings, essayId }: RegistrationFormProps) {
     // Sign-in's reason; `POST /api/auth/register` never produces it.
     invalidCredentials: strings.errorGeneric,
   };
+
+  // The form-level refusal the resolver raises for a failure no field accounts
+  // for. It is not a field, so it is read off the error map by key.
+  const formLevelMessage = (form.formState.errors as Record<string, { message?: string } | undefined>)[FORM_LEVEL_ERROR_KEY]?.message;
 
   if (mutation.isSuccess) {
     return (
@@ -317,9 +326,9 @@ export function RegistrationForm({ strings, essayId }: RegistrationFormProps) {
           {optionalFields.map(({ kind }) => consentField(kind))}
         </fieldset>
 
-        {failure && (
+        {(formLevelMessage || failure) && (
           <p role="alert" className="text-sm text-destructive">
-            {failure === 'unknown' ? strings.errorGeneric : reasonMessages[failure]}
+            {formLevelMessage ?? (failure === 'unknown' ? strings.errorGeneric : reasonMessages[failure!])}
           </p>
         )}
 

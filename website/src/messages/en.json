@@ -154,7 +154,9 @@
         "invalidSubmissionError": "We couldn't accept that. Please reload the page and try again.",
         "staleConsentVersionError": "We couldn't accept that. Please reload the page and try again — the terms may have been updated since you opened it.",
         "rateLimitedError": "There have been too many attempts from your connection. Please wait a while before trying again.",
-        "emailAlreadyRegisteredError": "An account with this email address already exists. Check the address, or use a different one."
+        "emailAlreadyRegisteredError": "An account with this email address already exists. Check the address, or use a different one.",
+        "signInPrompt": "Already have an account?",
+        "signInLink": "Sign in"
       },
       "signIn": {
         "metaTitle": "Sign in",

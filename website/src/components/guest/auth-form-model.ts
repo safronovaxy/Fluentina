@@ -76,17 +76,38 @@ export function emptyRegistrationValues(): RegistrationFormValues {
 export type EmailFieldError = 'required' | 'invalid';
 export type PasswordFieldError = 'required' | 'tooShort' | 'tooLong';
 
+/**
+ * What a form does when the schema refused the values for a reason no field
+ * accounts for: a required top-level field added to the contract after the form
+ * was written, or an object-level issue (path `['consent']`, where there is no
+ * kind to name). The form cannot say which field to fix, but it must still
+ * refuse. Without this an `ok: false` whose issues all fell through the mapping
+ * below came back as an empty error map, which React Hook Form reads as VALID —
+ * `onValid` ran with `{}` and the request builder threw on it.
+ */
+export type FormLevelError = 'unmapped';
+
 export interface RegistrationFieldErrors {
   email?: EmailFieldError;
   password?: PasswordFieldError;
   /** Only ever set for the three required kinds. */
   consent?: Partial<Record<ConsentKind, 'required'>>;
+  form?: FormLevelError;
 }
 
 export interface SignInFieldErrors {
   email?: EmailFieldError;
   password?: 'required' | 'tooLong';
+  form?: FormLevelError;
 }
+
+/**
+ * Where a resolver puts a `form` error so React Hook Form blocks the submit.
+ * NOT `root`: `handleSubmit` unsets `errors.root` before it decides whether the
+ * form is valid, so a resolver-supplied root error is silently discarded and the
+ * submit goes ahead.
+ */
+export const FORM_LEVEL_ERROR_KEY = 'form';
 
 export type Validation<TRequest, TErrors> =
   | { readonly ok: true; readonly request: TRequest }
@@ -100,6 +121,10 @@ export function buildRegisterRequest(values: RegistrationFormValues) {
       CONSENT_KINDS.map((kind) => [kind, { version: CURRENT_CONSENT_VERSIONS[kind], granted: values.consent[kind] }]),
     ) as Record<ConsentKind, { version: string; granted: boolean }>,
   };
+}
+
+function isRequiredConsentKind(kind: unknown): kind is ConsentKind {
+  return typeof kind === 'string' && (REQUIRED_CONSENT_KINDS as readonly string[]).includes(kind);
 }
 
 function emailError(email: string): EmailFieldError {
@@ -118,10 +143,12 @@ export function validateRegistration(values: RegistrationFormValues): Validation
     } else if (field === 'password') {
       const length = passwordLength(values.password);
       errors.password ??= length === 0 ? 'required' : length < PASSWORD_MIN_LENGTH ? 'tooShort' : 'tooLong';
-    } else if (field === 'consent' && typeof kind === 'string') {
+    } else if (field === 'consent' && isRequiredConsentKind(kind)) {
       // Only the three required kinds can fail: `marketingEmail`'s schema
       // accepts any boolean, and the form only ever sends one.
-      (errors.consent ??= {})[kind as ConsentKind] = 'required';
+      (errors.consent ??= {})[kind] = 'required';
+    } else {
+      errors.form = 'unmapped';
     }
   }
   return { ok: false, errors };
@@ -136,7 +163,7 @@ export function validateSignIn(values: { email: string; password: string }): Val
     if (issue.path[0] === 'email') errors.email ??= emailError(values.email);
     else if (issue.path[0] === 'password') {
       errors.password ??= passwordLength(values.password) > PASSWORD_MAX_LENGTH ? 'tooLong' : 'required';
-    }
+    } else errors.form = 'unmapped';
   }
   return { ok: false, errors };
 }

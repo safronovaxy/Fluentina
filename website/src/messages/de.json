@@ -154,7 +154,9 @@
         "invalidSubmissionError": "Das konnten wir nicht annehmen. Bitte lade die Seite neu und versuche es erneut.",
         "staleConsentVersionError": "Das konnten wir nicht annehmen. Bitte lade die Seite neu und versuche es erneut — möglicherweise wurden die Bedingungen aktualisiert, seit du sie geöffnet hast.",
         "rateLimitedError": "Von deiner Verbindung gab es zu viele Versuche. Bitte warte eine Weile, bevor du es erneut versuchst.",
-        "emailAlreadyRegisteredError": "Mit dieser E-Mail-Adresse besteht bereits ein Konto. Prüfe die Adresse oder verwende eine andere."
+        "emailAlreadyRegisteredError": "Mit dieser E-Mail-Adresse besteht bereits ein Konto. Prüfe die Adresse oder verwende eine andere.",
+        "signInPrompt": "Du hast schon ein Konto?",
+        "signInLink": "Anmelden"
       },
       "signIn": {
         "metaTitle": "Anmelden",

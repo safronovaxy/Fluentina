@@ -469,15 +469,24 @@ describe('RegistrationForm — errors the server produces', () => {
     expect(alert).toHaveTextContent(EN.emailAlreadyRegisteredError);
   });
 
-  it('the 409 message offers no way to sign in — no link in it, none anywhere new, and no "sign in" wording (KAN-52: it would orphan the guest\'s essay)', async () => {
-    const { alert } = await submitAndGetRefusal(409, 'emailAlreadyRegistered');
+  // The link to sign-in is the PAGE's, and it is there before anyone has typed
+  // anything (register/page.test.tsx) — that is what keeps it from telling anyone
+  // which addresses have accounts. This form's refusal stays exactly as plain as
+  // every other one: nothing in it, and nothing added to the form because of it.
+  it('the 409 alert is a plain message — no link or button in it, no sign-in wording, and nothing is added to the form because of it', async () => {
+    stubFetch(() => refusal(409, 'emailAlreadyRegistered'));
+    renderForm();
+    const linksBefore = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+    fillCredentials();
+    tick(...REQUIRED_CONSENT_KINDS);
+    submit();
+    const alert = await screen.findByRole('alert');
 
     expect(within(alert).queryAllByRole('link')).toHaveLength(0);
     expect(within(alert).queryAllByRole('button')).toHaveLength(0);
-    // The only links on the whole form are the two consent documents.
-    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
-    expect(hrefs.sort()).toEqual([CONSENT_DOCUMENT_HREFS.privacyPolicy, CONSENT_DOCUMENT_HREFS.termsOfService].sort());
-    expect(hrefs.join(' ')).not.toMatch(/sign-?in|log-?in/i);
+    // The only links on the form are the two consent documents, before and after the refusal.
+    expect(linksBefore.sort()).toEqual([CONSENT_DOCUMENT_HREFS.privacyPolicy, CONSENT_DOCUMENT_HREFS.termsOfService].sort());
+    expect(screen.getAllByRole('link').map((link) => link.getAttribute('href')).sort()).toEqual(linksBefore);
     for (const strings of [EN, DE]) expect(strings.emailAlreadyRegisteredError).not.toMatch(/sign in|log in|anmeld|einlogg/i);
   });
 

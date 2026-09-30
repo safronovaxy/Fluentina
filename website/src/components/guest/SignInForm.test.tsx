@@ -33,12 +33,14 @@ afterEach(() => {
 const EN = enMessages.chrome.guest.signIn as unknown as SignInFormStrings;
 const DE = deMessages.chrome.guest.signIn as unknown as SignInFormStrings;
 
-function renderForm(options: { strings?: SignInFormStrings; locale?: 'en' | 'de'; client?: QueryClient } = {}) {
-  const { strings = EN, locale = 'en', client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } }) } = options;
+const ESSAY_ID = 'a6afa382-8223-4b5d-b4ea-d5a7f0694211';
+
+function renderForm(options: { strings?: SignInFormStrings; locale?: 'en' | 'de'; essayId?: string; client?: QueryClient } = {}) {
+  const { strings = EN, locale = 'en', essayId, client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } }) } = options;
   return render(
     <QueryClientProvider client={client}>
       <IntlProvider locale={locale} messages={locale === 'de' ? deMessages : enMessages}>
-        <SignInForm strings={strings} />
+        <SignInForm strings={strings} essayId={essayId} />
       </IntlProvider>
     </QueryClientProvider>,
   );
@@ -257,7 +259,7 @@ describe('SignInForm — other refusals', () => {
 });
 
 describe('SignInForm — success', () => {
-  it('lands on the practice landing page, not on any essay (KAN-52: a guest essay would be orphaned)', async () => {
+  it('with no essay to come back to, lands on the practice landing page', async () => {
     stubFetch(ok);
     renderForm();
 
@@ -265,6 +267,39 @@ describe('SignInForm — success', () => {
 
     await waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
     expect(replace).toHaveBeenCalledWith('/practice');
+  });
+
+  // Signing in adopts the guest essay the browser holds (KAN-52), so the report
+  // is the account's by the time they arrive; auth-forms.integration.test.tsx
+  // proves the adoption itself against the real route.
+  it('with an essay to come back to, lands on that essay\'s report, built from the id and not from any path', async () => {
+    stubFetch(ok);
+    renderForm({ essayId: ESSAY_ID });
+
+    signIn('guest@example.test', 'pw');
+
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
+    expect(replace).toHaveBeenCalledWith(`/practice/preview?essay=${ESSAY_ID}`);
+  });
+
+  it('the report link stays under /de for a German visitor', async () => {
+    stubFetch(ok);
+    renderForm({ strings: DE, locale: 'de', essayId: ESSAY_ID });
+
+    signIn('guest@example.test', 'pw', DE);
+
+    await waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
+    expect(replace).toHaveBeenCalledWith(`/de/practice/preview?essay=${ESSAY_ID}`);
+  });
+
+  it('a refused sign-in goes nowhere, essay or not', async () => {
+    stubFetch(() => refusal(401, 'invalidCredentials'));
+    renderForm({ essayId: ESSAY_ID });
+
+    signIn('guest@example.test', 'pw');
+
+    await screen.findByRole('alert');
+    expect(replace).not.toHaveBeenCalled();
   });
 
   it('stays under /de for a German visitor', async () => {

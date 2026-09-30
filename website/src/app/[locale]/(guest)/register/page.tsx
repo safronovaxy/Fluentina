@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { z } from 'zod';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
+import { Link } from '@/i18n/navigation';
 import { GuestFlowShell } from '@/components/guest/chrome/GuestFlowShell';
 import { RegistrationForm } from '@/components/guest/RegistrationForm';
 import { GUEST_FLOW_STEPS } from '@/components/guest/flow-steps';
@@ -41,11 +42,15 @@ export async function generateMetadata({
  * existing and `<GuestSessionBootstrap>` is not rendered: registration
  * converts a session if the cookie names one and works without.
  *
- * Deliberately no "already have an account? Sign in" link. A guest who signs
- * in to an existing account has their guest-owned essay orphaned (KAN-52,
- * `resolveOwnerActor` resolves the registered session first and never looks
- * at the guest cookie), so that link would walk people who have an essay
- * straight into it. Add it once KAN-52 is fixed.
+ * Links to sign-in, carrying `?essay=` when it is a valid id. Someone who
+ * already has an account gets a 409 from the form and needs somewhere to go;
+ * signing in with the guest cookie in the browser adopts their essay (KAN-52:
+ * `login()` is handed the cookie, `signInUser` moves the session's essays to the
+ * account), so the link does not cost anyone their report, and the sign-in page
+ * lands them back on it. The link is on every render, not shown in response to
+ * the 409, so it says nothing about any address. It was originally left out on
+ * the premise that sign-in orphaned the essay; that stopped being true when
+ * KAN-52 merged.
  */
 export default async function RegisterPage({
   params,
@@ -114,6 +119,15 @@ export default async function RegisterPage({
             }}
           />
         </div>
+        <p className="mt-6 text-sm text-muted-foreground">
+          {t('signInPrompt')}{' '}
+          <Link
+            href={essayId ? { pathname: '/sign-in', query: { essay: essayId } } : '/sign-in'}
+            className="font-medium text-foreground underline underline-offset-2"
+          >
+            {t('signInLink')}
+          </Link>
+        </p>
       </div>
     </GuestFlowShell>
   );

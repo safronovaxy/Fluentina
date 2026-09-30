@@ -22,14 +22,19 @@
  *    not be told "too short" by a form that would then behave differently from
  *    the server for it.
  *
- * ON SUCCESS the person lands on the practice landing page, NOT on any essay.
- * There is deliberately no `essayId` here: a guest who signs in to an existing
- * account has their guest-owned essay orphaned (KAN-52), so carrying it
- * forward would land them on a 404. Nothing on the registration page links here
- * for the same reason.
+ * ON SUCCESS the person lands back on their essay's report when they came from
+ * one, and on the practice landing page otherwise. Signing in ADOPTS the guest
+ * essay the browser is holding (KAN-52: `login()` is handed the guest cookie and
+ * `signInUser` moves the session's essays to the account in the same
+ * transaction that creates the registered session), so the report is theirs by
+ * the time they arrive and opens in full. `essayId`, when present, is that
+ * essay's id from the register page's link (the page has already checked it is
+ * a UUID); the landing route is built from it here, so the destination is never
+ * a caller-supplied path. If it is NOT theirs — someone else's link — the
+ * preview page's ownership read answers 404, exactly as for any other visitor.
  */
 import { useState } from 'react';
-import { useForm, type Resolver } from 'react-hook-form';
+import { useForm, type FieldErrors, type Resolver } from 'react-hook-form';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@/i18n/navigation';
 import { Button } from '@/components/ui/button';
@@ -39,7 +44,7 @@ import { GRADING_STATUS_QUERY_KEY } from '@/hooks/use-grading-status';
 import { AuthRequestError, postAuth } from '@/lib/auth-client';
 import { PASSWORD_MAX_LENGTH } from '@/lib/contracts/auth';
 import type { RejectionReason } from '@/lib/contracts/rejection-reason';
-import { fillPlaceholders, validateSignIn } from './auth-form-model';
+import { fillPlaceholders, FORM_LEVEL_ERROR_KEY, validateSignIn } from './auth-form-model';
 
 export interface SignInFormStrings {
   readonly emailLabel: string;
@@ -64,7 +69,13 @@ interface SignInFormValues {
   password: string;
 }
 
-export function SignInForm({ strings }: { readonly strings: SignInFormStrings }) {
+export interface SignInFormProps {
+  readonly strings: SignInFormStrings;
+  /** The guest's own essay, if they came from its report. Already validated as a UUID by the page. */
+  readonly essayId?: string;
+}
+
+export function SignInForm({ strings, essayId }: SignInFormProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<RejectionReason | 'unknown' | null>(null);
@@ -73,11 +84,13 @@ export function SignInForm({ strings }: { readonly strings: SignInFormStrings })
     const result = validateSignIn(values);
     if (result.ok) return { values, errors: {} };
 
-    const { email, password } = result.errors;
+    const { email, password, form } = result.errors;
     const fieldError = (message: string) => ({ type: 'validate', message });
     return {
       values: {},
       errors: {
+        // A refusal no field accounts for still has to refuse: see `FORM_LEVEL_ERROR_KEY`.
+        ...(form && { [FORM_LEVEL_ERROR_KEY]: fieldError(strings.errorGeneric) }),
         ...(email && { email: fieldError(email === 'required' ? strings.emailRequiredError : strings.emailInvalidError) }),
         ...(password && {
           password: fieldError(
@@ -86,7 +99,7 @@ export function SignInForm({ strings }: { readonly strings: SignInFormStrings })
               : fillPlaceholders(strings.passwordTooLongError, { max: PASSWORD_MAX_LENGTH }),
           ),
         }),
-      },
+      } as FieldErrors<SignInFormValues>,
     };
   };
 
@@ -103,7 +116,7 @@ export function SignInForm({ strings }: { readonly strings: SignInFormStrings })
     onSuccess: () => {
       // A different identity now: what was cached for the guest is not theirs to see again.
       queryClient.removeQueries({ queryKey: GRADING_STATUS_QUERY_KEY });
-      router.replace('/practice');
+      router.replace(essayId ? { pathname: '/practice/preview', query: { essay: essayId } } : '/practice');
     },
     onError: (error) => setFailure(error instanceof AuthRequestError && error.reason ? error.reason : 'unknown'),
   });
@@ -126,6 +139,9 @@ export function SignInForm({ strings }: { readonly strings: SignInFormStrings })
     emailAlreadyRegistered: strings.errorGeneric,
     staleConsentVersion: strings.errorGeneric,
   };
+
+  // See RegistrationForm: the form-level refusal for a failure no field accounts for.
+  const formLevelMessage = (form.formState.errors as Record<string, { message?: string } | undefined>)[FORM_LEVEL_ERROR_KEY]?.message;
 
   if (mutation.isSuccess) {
     return (
@@ -167,9 +183,9 @@ export function SignInForm({ strings }: { readonly strings: SignInFormStrings })
           )}
         />
 
-        {failure && (
+        {(formLevelMessage || failure) && (
           <p role="alert" className="text-sm text-destructive">
-            {failure === 'unknown' ? strings.errorGeneric : reasonMessages[failure]}
+            {formLevelMessage ?? (failure === 'unknown' ? strings.errorGeneric : reasonMessages[failure!])}
           </p>
         )}
 
