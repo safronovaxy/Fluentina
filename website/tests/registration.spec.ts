@@ -157,6 +157,16 @@ for (const fx of FIXTURES) {
       // The CTA lives in the locked panel and carries this essay's id.
       const cta = page.getByTestId('locked-report').getByRole('link', { name: fx.registerCta });
       await expect(cta).toBeVisible();
+      // Fits the viewport, in every project. Button's default is a no-wrap pill,
+      // and the German label once ran past a phone's right edge: cropped, with
+      // its centre off the card, so a tap missed the link. The click below fails
+      // on that too, but only as an opaque "intercepts pointer events" timeout.
+      const box = await cta.boundingBox();
+      const viewport = page.viewportSize();
+      expect(box, 'the call to action has a layout box').not.toBeNull();
+      expect(viewport, 'the project sets a viewport').not.toBeNull();
+      expect(box!.x, 'the call to action starts inside the viewport').toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width, 'the call to action ends inside the viewport').toBeLessThanOrEqual(viewport!.width);
       await cta.click();
       await expect(page).toHaveURL(new RegExp(`${fx.prefix}/register\\?essay=${essayId}$`));
       await waitForHydration(page, 'form');

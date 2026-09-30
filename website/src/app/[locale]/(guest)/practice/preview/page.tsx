@@ -101,8 +101,14 @@ export default async function GuestPreviewPage({
             // Carries this essay's id, so registering lands the guest back on
             // this report (KAN-55). `essay.id` is the id `getOwnedEssay` just
             // returned for this actor, not the raw query parameter.
+            //
+            // The label wraps (`h-auto whitespace-normal`): Button's default is a
+            // fixed-height, no-wrap pill, and the German label is long enough to
+            // run past a phone's edge — cropped, and its centre (where a tap
+            // lands) off the card. Found by tests/registration.spec.ts on
+            // chromium-mobile; English fits, which is why it took a real browser.
             registerAction={
-              <Button asChild>
+              <Button asChild className="h-auto whitespace-normal py-2 text-center">
                 <Link href={{ pathname: '/register', query: { essay: essay.id } }}>{t('registerCta')}</Link>
               </Button>
             }
