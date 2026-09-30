@@ -1,6 +1,6 @@
 /** @vitest-environment node */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from './client';
 import { consentRecords, essays, guestSessions, sessions, users } from './schema';
 import { createEssay, getEssayById } from './essays';
@@ -11,7 +11,9 @@ import {
   isEmailUniqueViolation,
   registerUser,
   replacePasswordHash,
+  signInUser,
   type RegisterUserInput,
+  type SignInUserInput,
 } from './users';
 import type { ConsentDecision } from './consent-records';
 import { emailSchema } from '@/lib/contracts/auth';
@@ -358,5 +360,178 @@ describe('replacePasswordHash — compare-and-swap for rehash-on-login', () => {
 
     expect(await replacePasswordHash(other, HASH, 'scrypt$N=65536,r=8,p=1$c2FsdA==$bmV3')).toBe(false);
     expect((await findUserForLogin(request.email))?.passwordHash).toBe(HASH);
+  });
+});
+
+describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is holding, in one transaction', () => {
+  function signIn(userId: string, overrides: Partial<SignInUserInput> = {}): SignInUserInput {
+    return {
+      userId,
+      guest: null,
+      sessionTokenHash: hashRegisteredSessionToken(generateRegisteredSessionToken()),
+      replacing: null,
+      ...overrides,
+    };
+  }
+
+  async function rawEssay(id: string) {
+    const [row] = await db.select().from(essays).where(eq(essays.id, id));
+    return row;
+  }
+
+  it('attaches the guest essay to the account signed into, and the account can then read it', async () => {
+    const userId = await createTestUser();
+    const guest = await newGuest();
+    const essay = await createEssay(guest, 'Ein Aufsatz, geschrieben als Gast, bevor man sich anmeldet.');
+    const request = signIn(userId, { guest });
+
+    const result = await signInUser(request);
+
+    expect(result.guestConversion).toBe('converted');
+    const row = await rawEssay(essay.id);
+    expect(row.userId).toBe(userId);
+    expect(row.sessionId).toBeNull();
+    expect((await getEssayById({ kind: 'user', userId }, essay.id))?.id).toBe(essay.id);
+    // ...and the guest cookie no longer authorises it.
+    expect(await getEssayById(guest, essay.id)).toBeNull();
+    expect((await findLiveSessionUserId(request.sessionTokenHash))?.userId).toBe(userId);
+  });
+
+  it('signs in with nothing to adopt when the request carried no guest cookie', async () => {
+    const userId = await createTestUser();
+    const request = signIn(userId);
+
+    await expect(signInUser(request)).resolves.toEqual({ guestConversion: 'nothingToConvert' });
+
+    expect((await findLiveSessionUserId(request.sessionTokenHash))?.userId).toBe(userId);
+  });
+
+  it('reports nothingToConvert, and still signs in, for a guest session that does not exist (retention deleted it)', async () => {
+    const userId = await createTestUser();
+    const neverCreated: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
+    const request = signIn(userId, { guest: neverCreated });
+
+    await expect(signInUser(request)).resolves.toEqual({ guestConversion: 'nothingToConvert' });
+
+    expect((await findLiveSessionUserId(request.sessionTokenHash))?.userId).toBe(userId);
+  });
+
+  it('cannot take an essay from an account that already adopted that guest session — a stale cookie is not a way in', async () => {
+    const first = await createTestUser();
+    const second = await createTestUser();
+    const guest = await newGuest();
+    const essay = await createEssay(guest, 'Ein Aufsatz, den nur das erste Konto übernehmen darf.');
+    await signInUser(signIn(first, { guest }));
+
+    const result = await signInUser(signIn(second, { guest }));
+
+    expect(result.guestConversion).toBe('nothingToConvert');
+    expect((await rawEssay(essay.id)).userId).toBe(first);
+    expect(await getEssayById({ kind: 'user', userId: second }, essay.id)).toBeNull();
+  });
+
+  it('adopts EVERY essay the guest session holds, and only that session\'s', async () => {
+    const userId = await createTestUser();
+    const guest = await newGuest();
+    const bystander = await newGuest();
+    const one = await createEssay(guest, 'Der erste Aufsatz dieser Gast-Sitzung.');
+    const two = await createEssay(guest, 'Der zweite Aufsatz derselben Gast-Sitzung.');
+    const other = await createEssay(bystander, 'Der Aufsatz einer fremden Gast-Sitzung.');
+
+    await signInUser(signIn(userId, { guest }));
+
+    expect((await rawEssay(one.id)).userId).toBe(userId);
+    expect((await rawEssay(two.id)).userId).toBe(userId);
+    const untouched = await rawEssay(other.id);
+    expect(untouched.userId).toBeNull();
+    expect(untouched.sessionId).toBe(bystander.sessionId);
+  });
+
+  it('deletes the presented session and inserts a fresh one — never promotes the old row (fixation)', async () => {
+    const userId = await createTestUser();
+    const previousUser: UserActor = { kind: 'user', userId: await createTestUser() };
+    const previous = hashRegisteredSessionToken(generateRegisteredSessionToken());
+    await createSession(previousUser, previous);
+    const request = signIn(userId, { replacing: { actor: previousUser, tokenHash: previous } });
+
+    await signInUser(request);
+
+    expect(await findLiveSessionUserId(previous)).toBeNull();
+    expect((await findLiveSessionUserId(request.sessionTokenHash))?.userId).toBe(userId);
+  });
+
+  describe('atomicity — the session insert is the LAST statement, so its failure rolls everything before it back', () => {
+    it('does NOT adopt the guest essay when the session insert fails: the essay stays readable by its guest', async () => {
+      const userId = await createTestUser();
+      const guest = await newGuest();
+      const essay = await createEssay(guest, 'Ein Aufsatz, der nicht verloren gehen darf, wenn die Anmeldung scheitert.');
+      // A live session that already owns the hash this sign-in will try to
+      // insert: the INSERT (the LAST statement) fails on its primary key, AFTER
+      // the adoption has already executed.
+      const collidingHash = hashRegisteredSessionToken(generateRegisteredSessionToken());
+      await createSession({ kind: 'user', userId: await createTestUser() }, collidingHash);
+      const sessionsBefore = await count(sessions);
+
+      await expect(signInUser(signIn(userId, { guest, sessionTokenHash: collidingHash }))).rejects.toThrow();
+
+      expect(await count(sessions)).toBe(sessionsBefore);
+      // The dangerous half: the adoption did NOT commit. Nothing is stranded
+      // under an account nobody managed to sign into.
+      const row = await rawEssay(essay.id);
+      expect(row.userId).toBeNull();
+      expect(row.sessionId).toBe(guest.sessionId);
+      expect((await getEssayById(guest, essay.id))?.id).toBe(essay.id);
+      const sessionAfter = await getGuestSessionById(guest, guest.sessionId);
+      expect(sessionAfter?.userId).toBeNull();
+      expect(sessionAfter?.convertedAt).toBeNull();
+    });
+
+    it('also rolls back the deletion of the replaced session when the insert fails', async () => {
+      const previousUser: UserActor = { kind: 'user', userId: await createTestUser() };
+      const previous = hashRegisteredSessionToken(generateRegisteredSessionToken());
+      await createSession(previousUser, previous);
+      const colliding = hashRegisteredSessionToken(generateRegisteredSessionToken());
+      await createSession(previousUser, colliding);
+
+      await expect(
+        signInUser(signIn(await createTestUser(), { sessionTokenHash: colliding, replacing: { actor: previousUser, tokenHash: previous } })),
+      ).rejects.toThrow();
+
+      expect(await findLiveSessionUserId(previous)).not.toBeNull();
+    });
+  });
+
+  describe('the expired-session sweep runs AFTER the commit, outside the transaction', () => {
+    it('sweeps expired sessions on a successful sign-in', async () => {
+      const userId = await createTestUser();
+      const stale = hashRegisteredSessionToken(generateRegisteredSessionToken());
+      await createSession({ kind: 'user', userId }, stale);
+      await db.execute(sql`UPDATE fluentina.sessions SET expires_at = now() - interval '1 day' WHERE id = ${stale}`);
+
+      await signInUser(signIn(userId));
+
+      expect(await db.select().from(sessions).where(eq(sessions.id, stale))).toHaveLength(0);
+    });
+
+    it('a sweep that fails cannot fail (or un-commit) a sign-in that already succeeded', async () => {
+      const userId = await createTestUser();
+      const guest = await newGuest();
+      const essay = await createEssay(guest, 'Ein Aufsatz, dessen Übernahme ein fehlgeschlagener Sweep nicht rückgängig macht.');
+      const request = signIn(userId, { guest });
+      // Makes ONLY the sweep's statement fail: a rule on DELETE raising an error.
+      // The sign-in transaction issues no DELETE here (nothing is replaced), so if
+      // the sweep were inside the transaction this would roll the adoption back.
+      await db.execute(sql`CREATE OR REPLACE FUNCTION fluentina.refuse_session_delete() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'sweep refused'; END; $$ LANGUAGE plpgsql`);
+      await db.execute(sql`CREATE TRIGGER refuse_session_delete BEFORE DELETE ON fluentina.sessions FOR EACH STATEMENT EXECUTE FUNCTION fluentina.refuse_session_delete()`);
+      try {
+        await expect(signInUser(request)).resolves.toEqual({ guestConversion: 'converted' });
+      } finally {
+        await db.execute(sql`DROP TRIGGER refuse_session_delete ON fluentina.sessions`);
+        await db.execute(sql`DROP FUNCTION fluentina.refuse_session_delete()`);
+      }
+
+      expect((await rawEssay(essay.id)).userId).toBe(userId);
+      expect((await findLiveSessionUserId(request.sessionTokenHash))?.userId).toBe(userId);
+    });
   });
 });

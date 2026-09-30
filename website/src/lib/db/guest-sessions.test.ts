@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { eq } from 'drizzle-orm';
 import { db } from './client';
-import { guestSessions } from './schema';
+import { essays, guestSessions } from './schema';
 import { createEssay, getEssayById } from './essays';
 import {
   createGuestSession,
@@ -119,6 +119,60 @@ describe('convertGuestSessionToUser', () => {
     expect(convertedSession?.convertedAt).not.toBeNull();
     expect(convertedEssayOne?.userId).toBe(user.userId);
     expect(convertedEssayTwo?.userId).toBe(user.userId);
+  });
+
+  it('NULLs essays.session_id and sets user_id in the same write — the stored row has exactly one owner (KAN-52)', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, 'Written as a guest, owned by the account after conversion.');
+    // Before: the guest-unconverted state, so the "after" below is a real change.
+    const [before] = await db.select().from(essays).where(eq(essays.id, essay.id));
+    expect(before.sessionId).toBe(actor.sessionId);
+    expect(before.userId).toBeNull();
+    const user = await newUserActor();
+
+    await convertGuestSessionToUser(actor, user.userId);
+
+    const [after] = await db.select().from(essays).where(eq(essays.id, essay.id));
+    expect(after.sessionId).toBeNull();
+    expect(after.userId).toBe(user.userId);
+    // The session row itself keeps its id and gains the user — it is the
+    // ESSAY that loses its session anchor, not the session that loses its row.
+    const sessionRow = await rawSessionRow(actor.sessionId);
+    expect(sessionRow.id).toBe(actor.sessionId);
+    expect(sessionRow.userId).toBe(user.userId);
+    expect(sessionRow.convertedAt).not.toBeNull();
+  });
+
+  it('takes the converted essays out of the guest_sessions cascade: deleting the session row no longer deletes them (KAN-52)', async () => {
+    // What a retention sweep that forgot the `converted_at IS NULL` guard would
+    // do. Before this story it cascade-deleted the registered user's whole
+    // history through the session row it originated from; the essay is only
+    // "still there" here because conversion released it, which is why this
+    // converts through the real function rather than inserting an account-owned
+    // row directly (which would survive for a much less interesting reason).
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, 'An essay whose session a careless sweep is about to delete.');
+    const user = await newUserActor();
+    await convertGuestSessionToUser(actor, user.userId);
+
+    await db.delete(guestSessions).where(eq(guestSessions.id, actor.sessionId));
+
+    expect((await getEssayById(user, essay.id))?.id).toBe(essay.id);
+  });
+
+  it('still cascades for an UNconverted guest: deleting the session deletes its essay', async () => {
+    // The control for the test above — proves the cascade is still there to be
+    // escaped, so the survival above is the nulling and not a missing FK.
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, 'An unconverted essay that the cascade should still delete.');
+
+    await db.delete(guestSessions).where(eq(guestSessions.id, actor.sessionId));
+
+    const rows = await db.select().from(essays).where(eq(essays.id, essay.id));
+    expect(rows).toHaveLength(0);
   });
 
   it('reports "nothingToConvert" for a session id that was never created, rather than throwing', async () => {

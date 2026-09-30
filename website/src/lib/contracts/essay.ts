@@ -7,9 +7,14 @@ import type { GuestSessionId } from './actor';
 
 export interface Essay {
   readonly id: string;
-  /** The guest session an essay originated under — set for the row's whole lifetime, even after conversion. */
-  readonly sessionId: GuestSessionId;
-  /** Set once the owning session is converted to a registered account. */
+  /**
+   * The guest session that owns the essay while it is a guest's; NULL once it
+   * belongs to an account — nulled at conversion, and never set on an essay a
+   * registered user submits (KAN-52). Exactly one of `sessionId` and `userId`
+   * is non-null (the `essays_exactly_one_owner` CHECK).
+   */
+  readonly sessionId: GuestSessionId | null;
+  /** Set once the essay belongs to an account: at conversion, or at creation by a registered user. */
   readonly userId: string | null;
   readonly content: string;
   readonly createdAt: Date;

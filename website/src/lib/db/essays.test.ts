@@ -2,6 +2,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
+import { eq } from 'drizzle-orm';
+import { db } from './client';
+import { essays, guestSessions } from './schema';
 import { createEssay, getEssayById, getEssayByIdUnscoped } from './essays';
 import { createGuestSession, convertGuestSessionToUser } from './guest-sessions';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
@@ -15,6 +18,15 @@ function newGuestActor(): GuestActor {
 // A real users row: essays.user_id/guest_sessions.user_id both FK to it.
 async function newUserActor(): Promise<UserActor> {
   return { kind: 'user', userId: await createTestUser() };
+}
+
+// The stored columns, not the `Essay` the repository hands back: KAN-52's whole
+// point is WHICH of the two owner columns a row carries, and an assertion that
+// only read the mapped object through an ownership-scoped read would pass for
+// a row that satisfied both branches.
+async function rawEssayRow(id: string) {
+  const [row] = await db.select().from(essays).where(eq(essays.id, id));
+  return row;
 }
 
 beforeAll(async () => {
@@ -39,6 +51,10 @@ describe('createEssay', () => {
     expect(essay.sessionId).toBe(actor.sessionId);
     expect(essay.userId).toBeNull();
     expect(essay.content).toBe('The content of a freshly created essay.');
+    // The guest-unconverted legal state, in the stored row: session set, user NULL.
+    const row = await rawEssayRow(essay.id);
+    expect(row.sessionId).toBe(actor.sessionId);
+    expect(row.userId).toBeNull();
   });
 
   it('attaches the essay to the user rather than orphaning it, when the write arrives on a session that already converted', async () => {
@@ -55,6 +71,14 @@ describe('createEssay', () => {
     const essay = await createEssay(actor, 'Written by a request that still has the old session id.');
 
     expect(essay.userId).toBe(user.userId);
+    // KAN-52, the edge that fires the CHECK in production if missed: the
+    // stale-cookie insert must write the ACCOUNT as owner and leave
+    // `session_id` NULL. Copying `session.userId` while ALSO writing
+    // `actor.sessionId` would set both columns and this insert would throw.
+    expect(essay.sessionId).toBeNull();
+    const row = await rawEssayRow(essay.id);
+    expect(row.sessionId).toBeNull();
+    expect(row.userId).toBe(user.userId);
     const readAsConvertedUser = await getEssayById(user, essay.id);
     const readAsStaleGuestSession = await getEssayById(actor, essay.id);
     expect(readAsConvertedUser?.id).toBe(essay.id);
@@ -98,6 +122,10 @@ describe('createEssay', () => {
     const readAsStaleGuestSession = await getEssayById(actor, essay.id);
     expect(readAsUser?.id).toBe(essay.id);
     expect(readAsStaleGuestSession).toBeNull();
+    // Whichever way the lock let the two interleave, exactly one owner column.
+    const row = await rawEssayRow(essay.id);
+    expect(row.userId).toBe(user.userId);
+    expect(row.sessionId).toBeNull();
   });
 
   it('blocks a concurrent write behind the session row lock, rather than merely racing it', async () => {
@@ -147,6 +175,48 @@ describe('createEssay', () => {
       await blocker.query('COMMIT').catch(() => {});
       await blocker.end();
     }
+  });
+});
+
+describe('createEssay — a registered user (KAN-52)', () => {
+  it('owns the essay by account: user_id set, session_id NULL, readable by that user', async () => {
+    const user = await newUserActor();
+
+    const essay = await createEssay(user, 'An essay submitted straight from a registered account.');
+
+    expect(essay.userId).toBe(user.userId);
+    expect(essay.sessionId).toBeNull();
+    const row = await rawEssayRow(essay.id);
+    expect(row.userId).toBe(user.userId);
+    expect(row.sessionId).toBeNull();
+    expect((await getEssayById(user, essay.id))?.content).toBe('An essay submitted straight from a registered account.');
+  });
+
+  it('needs no guest session at all — the row a registered user does not have is not required', async () => {
+    const user = await newUserActor();
+
+    await createEssay(user, 'No guest_sessions row exists anywhere in this database.');
+
+    expect(await db.select().from(guestSessions)).toHaveLength(0);
+  });
+
+  it('is invisible to a guest — including one whose own session has essays — and to another user', async () => {
+    // A stranger guest WITH a session and an essay of its own, so the read
+    // below is a query that could match something, not one over an empty table.
+    const owner = await newUserActor();
+    const strangerUser = await newUserActor();
+    const strangerGuest = newGuestActor();
+    await createGuestSession(strangerGuest);
+    await createEssay(strangerGuest, 'The stranger guest has an essay of their own, so their reads are not trivially empty.');
+    const essay = await createEssay(owner, 'An account-owned essay that only its owner may read.');
+
+    expect(await getEssayById(strangerGuest, essay.id)).toBeNull();
+    expect(await getEssayById(strangerUser, essay.id)).toBeNull();
+    expect((await getEssayById(owner, essay.id))?.id).toBe(essay.id);
+  });
+
+  it('refuses a user id that names no account — the foreign key, not a silent orphan', async () => {
+    await expect(createEssay({ kind: 'user', userId: randomUUID() }, 'An essay for an account that does not exist.')).rejects.toThrow();
   });
 });
 
