@@ -108,6 +108,7 @@ export default async function RegisterPage({
               successBody: t('successBody'),
               errorGeneric: t('errorGeneric'),
               invalidSubmissionError: t('invalidSubmissionError'),
+              staleConsentVersionError: t('staleConsentVersionError'),
               rateLimitedError: t('rateLimitedError'),
               emailAlreadyRegisteredError: t('emailAlreadyRegisteredError'),
             }}

@@ -503,12 +503,36 @@ describe('RegistrationForm — errors the server produces', () => {
     expect(EN.rateLimitedError).not.toBe(EN.errorGeneric);
   });
 
-  it('a stale consent form is refused as invalidSubmission, and the copy says to reload — because the terms may have changed', async () => {
-    const { alert } = await submitAndGetRefusal(400, 'invalidSubmission');
+  // The two copies share a prefix, so each assertion is on the WHOLE text
+  // (`toBe`, not the substring match `toHaveTextContent` does): otherwise the
+  // longer stale-consent string would satisfy an assertion for the shorter one.
+  it('staleConsentVersion says to reload and that the terms may have changed — its own text, not the generic or the invalidSubmission one', async () => {
+    const { alert } = await submitAndGetRefusal(400, 'staleConsentVersion');
 
-    expect(alert).toHaveTextContent(EN.invalidSubmissionError);
+    expect(alert.textContent).toBe(EN.staleConsentVersionError);
     expect(alert.textContent).toMatch(/reload/i);
     expect(alert.textContent).toMatch(/terms/i);
+    expect(alert.textContent).not.toBe(EN.errorGeneric);
+    expect(alert.textContent).not.toBe(EN.invalidSubmissionError);
+  });
+
+  it('invalidSubmission says to reload but does not claim the terms changed — it is what a stale bundle that disagrees about more than a consent version gets', async () => {
+    const { alert } = await submitAndGetRefusal(400, 'invalidSubmission');
+
+    expect(alert.textContent).toBe(EN.invalidSubmissionError);
+    expect(alert.textContent).toMatch(/reload/i);
+    expect(alert.textContent).not.toMatch(/terms/i);
+    expect(alert.textContent).not.toBe(EN.errorGeneric);
+  });
+
+  it.each([['en', EN], ['de', DE]] as const)('%s: staleConsentVersion shows the stale-consent string of that locale, not the invalidSubmission one', async (locale, strings) => {
+    stubFetch(() => refusal(400, 'staleConsentVersion'));
+    renderForm({ strings, locale });
+    fillCredentials();
+    tick(...REQUIRED_CONSENT_KINDS);
+    submit();
+
+    expect((await screen.findByRole('alert')).textContent).toBe(strings.staleConsentVersionError);
   });
 
   it.each([
@@ -666,8 +690,8 @@ describe('RegistrationForm — catalogue (both locales)', () => {
   const REQUIRED_STRING_KEYS = [
     'emailLabel', 'emailRequiredError', 'emailInvalidError', 'passwordLabel', 'passwordHint', 'passwordRequiredError',
     'passwordTooShortError', 'passwordTooLongError', 'requiredConsentLegend', 'optionalConsentLegend', 'submitCta',
-    'submittingCta', 'successTitle', 'successBody', 'errorGeneric', 'invalidSubmissionError', 'rateLimitedError',
-    'emailAlreadyRegisteredError',
+    'submittingCta', 'successTitle', 'successBody', 'errorGeneric', 'invalidSubmissionError', 'staleConsentVersionError',
+    'rateLimitedError', 'emailAlreadyRegisteredError',
   ] as const;
 
   it.each([['en', EN], ['de', DE]] as const)('%s has every string the form takes, and the placeholders the form fills', (_locale, strings) => {
@@ -688,11 +712,24 @@ describe('RegistrationForm — catalogue (both locales)', () => {
     expect(strings.consent.marketingEmail.label).toBeTruthy();
   });
 
-  it('the messages that must differ from each other do: the generic, rate-limit and stale-form refusals are three distinct texts in each language', () => {
+  it('the messages that must differ from each other do: generic, rate-limit, invalid-submission, stale-consent and already-registered are distinct texts in each language', () => {
     for (const strings of [EN, DE]) {
-      const texts = [strings.errorGeneric, strings.rateLimitedError, strings.invalidSubmissionError, strings.emailAlreadyRegisteredError];
+      const texts = [
+        strings.errorGeneric,
+        strings.rateLimitedError,
+        strings.invalidSubmissionError,
+        strings.staleConsentVersionError,
+        strings.emailAlreadyRegisteredError,
+      ];
       expect(new Set(texts).size).toBe(texts.length);
     }
+  });
+
+  it('German stale-consent and invalid-submission strings are German, not the English ones', () => {
+    expect(DE.staleConsentVersionError).not.toBe(EN.staleConsentVersionError);
+    expect(DE.invalidSubmissionError).not.toBe(EN.invalidSubmissionError);
+    expect(DE.staleConsentVersionError).toMatch(/Bedingungen/);
+    expect(EN.staleConsentVersionError).not.toMatch(/Bedingungen/);
   });
 
   it('German: the privacy consent tells the guest the policy is available in English only — and English does not carry that note', () => {

@@ -27,7 +27,8 @@ import { jsonPost, setCookieLine, xff } from '@/test/auth-requests';
  * (the form's `fetch` calls the handler directly). This is where the claims the
  * unit tests can only assume are shown to hold: that what the browser refuses
  * the server refuses too, that a stale consent version is refused as
- * `invalidSubmission`, that the consent records the server writes are the ones
+ * `staleConsentVersion` (and a stale bundle that disagrees about anything else
+ * as `invalidSubmission`), each with its own copy, that the consent records the server writes are the ones
  * the form displayed, and that sign-in cannot tell an unknown email from a wrong
  * password.
  */
@@ -208,10 +209,10 @@ describe('registration form -> POST /api/auth/register', () => {
     expect(await db.select().from(users)).toHaveLength(1);
   });
 
-  it('a stale consent form is refused by the server as invalidSubmission, and the form explains it', async () => {
+  it('a stale consent form is refused by the server as staleConsentVersion, and the form says the terms may have changed', async () => {
     // A form rendered before a policy change carries the old version; the
     // server accepts only the version in force.
-    wireFetchToRoutes((body) => ({
+    const calls = wireFetchToRoutes((body) => ({
       ...body,
       consent: { ...body.consent, privacyPolicy: { ...body.consent.privacyPolicy, version: '2020-01-01' } },
     }));
@@ -221,9 +222,37 @@ describe('registration form -> POST /api/auth/register', () => {
     submitRegistration();
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(REGISTER.invalidSubmissionError);
+    // Whole-text comparisons: the two reload messages share a prefix, so a
+    // substring match on the shorter would also pass for the longer.
+    expect(alert.textContent).toBe(REGISTER.staleConsentVersionError);
+    expect(alert.textContent).not.toBe(REGISTER.invalidSubmissionError);
+    expect(alert.textContent).not.toBe(REGISTER.errorGeneric);
+    expect(calls).toEqual([{ path: '/api/auth/register', status: 400 }]);
     expect(await db.select().from(users)).toEqual([]);
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('a stale bundle that disagrees with the server about more than a consent version gets invalidSubmission, and the form says reload without blaming the terms', async () => {
+    // The one way this form can be refused invalidSubmission: it validated
+    // against ITS bundle's schema, and the server has since changed. Stood in
+    // for by a password the server's policy refuses (a bundle from before the
+    // minimum was raised), sent alongside a stale consent version — reloading
+    // fixes both, but "the terms changed" would only be half the story.
+    const calls = wireFetchToRoutes((body) => ({
+      ...body,
+      password: 'a'.repeat(PASSWORD_MIN_LENGTH - 1),
+      consent: { ...body.consent, privacyPolicy: { ...body.consent.privacyPolicy, version: '2020-01-01' } },
+    }));
+    renderRegistration();
+
+    fillRegistration(uniqueEmail(), TEST_PASSWORD);
+    submitRegistration();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe(REGISTER.invalidSubmissionError);
+    expect(alert.textContent).not.toBe(REGISTER.staleConsentVersionError);
+    expect(calls).toEqual([{ path: '/api/auth/register', status: 400 }]);
+    expect(await db.select().from(users)).toEqual([]);
   });
 
   it('a rate-limit refusal from the real cap shows the rate-limit message', async () => {

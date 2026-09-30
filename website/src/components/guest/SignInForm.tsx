@@ -122,8 +122,9 @@ export function SignInForm({ strings }: { readonly strings: SignInFormStrings })
     internalError: strings.errorGeneric,
     tooShort: strings.errorGeneric,
     tooLong: strings.errorGeneric,
-    // Registration's reason; `POST /api/auth/login` never produces it.
+    // Registration's reasons; `POST /api/auth/login` never produces them.
     emailAlreadyRegistered: strings.errorGeneric,
+    staleConsentVersion: strings.errorGeneric,
   };
 
   if (mutation.isSuccess) {

@@ -219,13 +219,15 @@ describe('SignInForm — other refusals', () => {
     [500, 'internalError'],
     [400, 'invalidSubmission'],
     [400, 'crossOrigin'],
+    // Registration's reason: the login route never sends it, so if it ever arrives it is unexplained here.
+    [400, 'staleConsentVersion'],
   ])('%i %s gets the generic message', async (status, reason) => {
     stubFetch(() => refusal(status, reason));
     renderForm();
 
     signIn('guest@example.test', 'pw');
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(EN.errorGeneric);
+    expect((await screen.findByRole('alert')).textContent).toBe(EN.errorGeneric);
   });
 
   it('a dropped connection and a non-JSON body get the generic message', async () => {

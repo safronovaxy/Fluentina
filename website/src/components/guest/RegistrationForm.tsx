@@ -38,10 +38,15 @@
  *    link would walk them into it. It is a form-level alert, not attached to
  *    the email field, so nothing about it is styled or announced differently
  *    from any other refusal.
- *  - `invalidSubmission` doubles as the stale-consent refusal (the request
- *    schema accepts only the version in force and there is no dedicated
- *    reason), so its copy has to make sense for "the terms changed while this
- *    page was open" and not only for "something was malformed".
+ *  - `staleConsentVersion` (the register route's answer when the ONLY schema
+ *    failures are on `consent.*.version`) says the terms may have changed, and
+ *    to reload. `invalidSubmission` is a different string on purpose: the form
+ *    validates with the server's own schema and sends the versions in force in
+ *    its bundle, so it can only get `invalidSubmission` when the page's bundle
+ *    and the server disagree about something OTHER than (or as well as) a
+ *    consent version — a deploy while the tab was open that tightened the
+ *    password policy or added a consent kind. Reloading fixes that too, but
+ *    "the terms may have changed" would be untrue there.
  * The form makes NO request before submit: no availability check, no inline
  * or on-blur lookup of the address. Registration is already an
  * email-enumeration oracle (see `emailAlreadyRegistered`'s own comment in
@@ -118,6 +123,7 @@ export interface RegistrationFormStrings {
   readonly successBody: string;
   readonly errorGeneric: string;
   readonly invalidSubmissionError: string;
+  readonly staleConsentVersionError: string;
   readonly rateLimitedError: string;
   readonly emailAlreadyRegisteredError: string;
 }
@@ -204,11 +210,14 @@ export function RegistrationForm({ strings, essayId }: RegistrationFormProps) {
     // Plain and form-level on purpose — see the file comment.
     emailAlreadyRegistered: strings.emailAlreadyRegisteredError,
     rateLimited: strings.rateLimitedError,
-    // Also what a stale consent form is refused with.
+    // The terms in force are not the ones this page rendered: reload.
+    staleConsentVersion: strings.staleConsentVersionError,
+    // A stale bundle that disagrees with the server about more than a consent
+    // version (see the file comment): reload, without blaming the terms.
     invalidSubmission: strings.invalidSubmissionError,
-    // Reachable only by a caller that bypasses this form (it is same-origin,
-    // sends `JSON.stringify`'d output of the server's own schema, and cannot be
-    // submitted invalid), or a server fault: nothing more specific to say.
+    // Reachable only by a caller that bypasses this form (it is same-origin and
+    // cannot be submitted invalid against its own bundle's schema), or a
+    // server fault: nothing more specific to say.
     crossOrigin: strings.errorGeneric,
     invalidSessionCookie: strings.errorGeneric,
     bodyTooLarge: strings.errorGeneric,
