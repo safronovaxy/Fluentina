@@ -23,7 +23,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // scripts/**: the CI tooling's own tests (scripts/test-tiers.test.ts, the
+    // smoke-tier selection). They run in the ordinary suite so a broken
+    // selector fails `npm run test`, not just the job that depends on it.
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'scripts/**/*.test.ts'],
     // Bare 'node_modules' is not a recursive glob; keep Vitest's defaults and
     // add to them rather than replacing the list.
     exclude: ['**/node_modules/**', '**/.next/**', 'tests/**'],

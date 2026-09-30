@@ -59,17 +59,43 @@ jobs:
             // which runs main's workflow against main's tip and needs write
             // access anyway. Excluding dispatch left no working recovery when
             // a push run was cancelled.
-            const ok = data.workflow_runs.find(
+            //
+            // ci.yml has two test tiers, and a run that succeeded is not
+            // necessarily a run where the FULL suite ran: the smoke job is a
+            // separate job, and a future change may skip the full one on some
+            // events. So the run's conclusion is not enough — the full job
+            // itself must have succeeded in it. FULL_JOB is that job's `name:`
+            // in ci.yml; scripts/ci-workflows.test.ts fails if they drift
+            // apart. Pushes to main always run it (it has no `if:`), so this
+            // never blocks a legitimately CI'd commit.
+            const FULL_JOB = 'Website — lint, typecheck, test, build, e2e';
+            const onMain = data.workflow_runs.filter(
               r => r.conclusion === 'success' &&
                    (r.event === 'push' || r.event === 'workflow_dispatch') &&
                    r.head_branch === 'main'
             );
+            let ok;
+            for (const run of onMain) {
+              const { data: jobs } = await github.rest.actions.listJobsForWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                filter: 'latest',
+                per_page: 100,
+              });
+              const full = jobs.jobs.find(j => j.name === FULL_JOB);
+              if (full && full.conclusion === 'success') {
+                ok = run;
+                break;
+              }
+            }
             if (!ok) {
               const seen = data.workflow_runs
                 .map(r => `${r.event}/${r.head_branch}: ${r.conclusion}`)
                 .join(', ') || 'none';
               core.setFailed(
-                `No successful ci.yml run on main found for commit ${sha}. ` +
+                `No ci.yml run on main found for commit ${sha} in which the full ` +
+                `suite (job "${FULL_JOB}") succeeded. ` +
                 `Deploys require ci.yml to pass for the exact commit being ` +
                 `deployed (Ways of Working §6 / Test Strategy §7). ` +
                 `Runs seen for this SHA: ${seen}.`

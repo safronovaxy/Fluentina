@@ -7,6 +7,18 @@ name: CI
 # validates nothing yet (see grading-regression.yml).
 # deploy-website.yml / deploy-cms.yml require a successful run of this
 # workflow for the commit being deployed before they'll run.
+#
+# Two test tiers (CLAUDE.md, "Test tiers"):
+#   - FULL — the `website` job below: everything, on every event. It is the
+#     merge gate and what the deploy workflows' verify-ci looks for.
+#   - SMOKE — the `website-smoke` job: only the tests the diff selects
+#     (website/scripts/test-tiers.ts), chromium-desktop only, PRs only. It is
+#     an additional, faster signal and gates nothing.
+# The split is staged. This is stage 1: nothing that gates merge got weaker,
+# so there is no wall-clock saving on the gate yet either. Stage 2 (make the
+# full job conditional on PRs) needs a branch-protection change first — a job
+# skipped by `if:` reports success to a required check, so flipping it without
+# that change would silently remove the gate.
 
 on:
   pull_request:
@@ -22,10 +34,19 @@ on:
     # successful ci.yml run for the exact SHA being deployed. A docs-only
     # commit that matched no path produced no run, so main became undeployable
     # until someone manually dispatched CI.
+  # A daily full run of main, so drift nobody pushed (a dependency, a base
+  # image, a flaky order dependence) surfaces on its own. Scheduled workflows
+  # only ever run on the default branch. No `paths` filter, for the same
+  # reasons as above. Note verify-ci accepts `push` and `workflow_dispatch`
+  # runs only, so this run cannot stand in for one when deploying.
+  schedule:
+    - cron: '23 4 * * *'
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # The scheduled run gets its own group: sharing main's, it could sit in the
+  # single "pending" slot and be replaced by, or replace, a push run's.
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'schedule' && '-scheduled' || '' }}
   # Only cancel superseded PR runs. On main, two merges in quick succession
   # would cancel the first — conclusion `cancelled`, not `success` — and that
   # commit could then never be deployed, even after the fact.
@@ -37,6 +58,22 @@ permissions:
   contents: read
 
 jobs:
+  # THE FULL TIER. Runs every test on every event — pull_request, push to
+  # main, schedule, workflow_dispatch — with no `if:` on purpose:
+  #   - pushes to main must always run full, because deploy-website.yml and
+  #     deploy-cms.yml's verify-ci requires THIS job to have succeeded for the
+  #     exact SHA (by job name, see FULL_JOB there), so a smoke run can never
+  #     satisfy the deploy gate;
+  #   - on PRs it is the required check that gates merge.
+  # The `name:` is that contract, and it lives in FOUR places, only two of
+  # which a test can see: this file and the FULL_JOB constant in both deploy
+  # workflows' verify-ci (scripts/ci-workflows.test.ts fails if those
+  # disagree), plus the branch-protection required check, which is repo
+  # settings and invisible to any test. The test does latch it: it asserts this
+  # name equals the one recorded in .github/required-checks.json, so renaming
+  # the job forces a touch of the file that says "change branch protection in
+  # lockstep" (an Administration-scoped manual change). The latch cannot verify
+  # that the change was made.
   website:
     name: Website — lint, typecheck, test, build, e2e
     runs-on: ubuntu-latest
@@ -257,7 +294,9 @@ jobs:
       # project now requires editing playwright.config.ts, same file, so both
       # guards sit together. Verified this changes nothing about what runs:
       # config's `projects` array is exactly these four and no more, and
-      # `--list --grep-invert "@cms"` reports the identical 470 tests with
+      # `--list --grep-invert "@cms"` reports the identical 470 tests (as measured
+      # for KAN-33; 526 at aa58e70 — 202 chromium-desktop, 108 in each other
+      # project) with
       # and without the flags (KAN-33: down from 561 across three projects —
       # playwright.config.ts's own `REQUEST_ONLY_SPECS` now excludes
       # seo/redirects/routing/sitemap.spec.ts from every project but
@@ -289,6 +328,231 @@ jobs:
           path: website/playwright-report/
           retention-days: 7
 
+  # THE SMOKE TIER — stage 1: additional, not a replacement. The `website` job
+  # above still runs the complete suite on every PR push, so nothing that gates
+  # merge is weaker; this job only reports sooner (and costs extra runner
+  # minutes). It must NOT be made a required check in stage 1 and its green is
+  # not a merge signal.
+  #
+  # Selection happens INSIDE this job, never as a workflow-level `paths:`
+  # filter — see the two incidents documented on `pull_request` and `push`
+  # above. The job always starts on a PR; what it then runs is decided by
+  # website/scripts/select-tests.ts, which fails OPEN: a path it does not
+  # recognise, an empty diff, or a diff it cannot compute all select the whole
+  # suite. The rules and their tests: website/scripts/test-tiers.ts.
+  #
+  # Smoke is chromium-desktop only (no mobile, no WebKit). That is exactly why
+  # it cannot be the gate: the WebKit cookie coverage only the full job has.
+  #
+  # The prologue below is a deliberate copy of the `website` job's, minus the
+  # WebKit install. Kept as a copy rather than refactored into a shared action
+  # so this PR does not touch the job that gates merge; the cost is that the
+  # two must be kept in step by hand.
+  website-smoke:
+    name: Website smoke — selected tests, chromium-desktop only
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16.10-alpine
+        env:
+          POSTGRES_DB: fluentina
+          POSTGRES_USER: fluentina
+          POSTGRES_PASSWORD: fluentina_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fluentina -d fluentina"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://fluentina:fluentina_ci@localhost:5432/fluentina
+      CI: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The diff needs both the PR base and head commits.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      # Writes mode, areas, run_unit, run_e2e, unit_files, e2e_files to the
+      # step outputs and the selection, with the reason for any "everything",
+      # to the job summary. Metadata only — paths and counts.
+      - name: Select tests from the diff
+        id: select
+        working-directory: website
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: npx tsx scripts/select-tests.ts --base "$BASE_SHA" --head "$HEAD_SHA"
+
+      - name: Lint
+        working-directory: website
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: website
+        run: npm run typecheck
+
+      - name: Apply database migrations
+        working-directory: website
+        run: npm run db:migrate
+
+      # Same drift check as the full job (see its comment for the two failure
+      # modes it closes). Copied verbatim.
+      - name: Migrations match the schema
+        working-directory: website
+        timeout-minutes: 2
+        run: |
+          set -o pipefail
+          npx drizzle-kit generate < /dev/null 2>&1 | tee /tmp/drizzle-generate.log
+          if grep -qi '^Error' /tmp/drizzle-generate.log; then
+            echo "::error::drizzle-kit generate did not complete cleanly (see log above) — treating as drift rather than trusting its exit code."
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain drizzle)" ]; then
+            echo "::error::Schema and checked-in migrations have drifted — drizzle-kit generate produced changes (tracked or untracked) that are not committed:"
+            git status --porcelain drizzle
+            exit 1
+          fi
+
+      # Gating is `!= 'false'`, not `== 'true'`, on purpose: select-tests.ts fails
+      # OPEN everywhere, and an `== 'true'` guard would skip the step on an absent
+      # or malformed output, so the job could go green having run only lint and
+      # typecheck. Only the literal string `false` (which toOutputs emits only for
+      # a subset with nothing of that kind to run) skips a step.
+      #
+      # `mode=all` runs the ordinary `npm run test`. A subset names files, read
+      # into an array so that route paths like [id] are never glob-expanded.
+      - name: Unit & integration tests (selected)
+        if: steps.select.outputs.run_unit != 'false'
+        working-directory: website
+        env:
+          MODE: ${{ steps.select.outputs.mode }}
+          UNIT_FILES: ${{ steps.select.outputs.unit_files }}
+        run: |
+          if [ "$MODE" = "all" ]; then
+            npm run test
+          else
+            read -r -a files <<< "$UNIT_FILES"
+            npx vitest run "${files[@]}"
+          fi
+
+      # Everything from here to the e2e run is skipped when the selection has
+      # no spec, because building and serving the app is the expensive part.
+      - name: Build
+        if: steps.select.outputs.run_e2e != 'false'
+        working-directory: website
+        env:
+          NEXT_PUBLIC_STRAPI_URL: http://localhost:1337
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          NEXT_PUBLIC_API_URL: http://localhost:3000
+          NEXT_PUBLIC_STRIPE_PUBLIC_KEY: pk_test_ci_placeholder
+          NEXT_PUBLIC_GROWTHBOOK_CLIENT_KEY: ''
+        run: npm run build
+
+      - name: Install Playwright browser
+        if: steps.select.outputs.run_e2e != 'false'
+        working-directory: website
+        run: npx playwright install --with-deps chromium
+
+      # Still through the TLS proxy, although only Chromium runs: playwright.config.ts
+      # throws in CI on a plain-HTTP BASE_URL, and this keeps the served
+      # app identical to the full job's.
+      - name: Generate self-signed TLS certificate
+        if: steps.select.outputs.run_e2e != 'false'
+        working-directory: website
+        run: npm run tls:generate-cert -- .tls
+
+      - name: Start built app
+        if: steps.select.outputs.run_e2e != 'false'
+        working-directory: website
+        env:
+          MOCK_GRADING_PROVIDER: '1'
+        run: |
+          npm run start -- -p 3000 &
+          echo $! > /tmp/next-server.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000 > /dev/null; then
+              echo "App is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App did not become ready in time" >&2
+          exit 1
+
+      - name: Start TLS proxy in front of the built app
+        if: steps.select.outputs.run_e2e != 'false'
+        working-directory: website
+        env:
+          TLS_PROXY_PORT: '8443'
+          TLS_PROXY_TARGET_PORT: '3000'
+          TLS_PROXY_CERT: .tls/localhost-cert.pem
+          TLS_PROXY_KEY: .tls/localhost-key.pem
+        run: |
+          node scripts/tls-proxy.mjs &
+          echo $! > /tmp/tls-proxy.pid
+          for i in $(seq 1 30); do
+            if curl -sfk https://localhost:8443 > /dev/null; then
+              echo "TLS proxy is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "TLS proxy did not become ready in time" >&2
+          exit 1
+
+      # Unlike the full job, `--project=chromium-desktop` IS named here, on
+      # purpose: narrowing to one engine is what makes this smoke. `@cms`
+      # specs are excluded for the same reason as in the full job. A subset
+      # passes the selected spec files as filters; `all` passes none.
+      - name: E2E (Playwright, selected, chromium-desktop)
+        if: steps.select.outputs.run_e2e != 'false'
+        working-directory: website
+        env:
+          BASE_URL: https://localhost:8443
+          MOCK_GRADING_PROVIDER: '1'
+          PLAYWRIGHT_EXTERNAL_SERVER: '1'
+          MODE: ${{ steps.select.outputs.mode }}
+          E2E_FILES: ${{ steps.select.outputs.e2e_files }}
+        run: |
+          files=()
+          if [ "$MODE" != "all" ]; then
+            read -r -a files <<< "$E2E_FILES"
+          fi
+          npx playwright test --project=chromium-desktop --grep-invert "@cms" "${files[@]}"
+
+      - name: Stop TLS proxy
+        if: always() && steps.select.outputs.run_e2e != 'false'
+        run: kill "$(cat /tmp/tls-proxy.pid)" 2>/dev/null || true
+
+      - name: Stop built app
+        if: always() && steps.select.outputs.run_e2e != 'false'
+        run: kill "$(cat /tmp/next-server.pid)" 2>/dev/null || true
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-smoke
+          path: website/playwright-report/
+          retention-days: 7
+
   cms:
     name: CMS — install & build smoke check
     runs-on: ubuntu-latest
@@ -314,6 +578,12 @@ jobs:
     # regression" going green reads as "grading was validated"; nothing is
     # called. Say so where it shows.
     name: AI grading golden-set regression (PLACEHOLDER — validates nothing yet)
+    # Not on the daily schedule. The trigger scope is Irina's to decide once
+    # KAN-39 makes this real (see grading-regression.yml): it starts spending
+    # live API money then, and a nightly run would be "and daily" appended to a
+    # set she has not chosen. The `schedule` trigger above is a full run of
+    # main's own tests, not a decision to exercise the live providers.
+    if: github.event_name != 'schedule'
     needs: [website]
     uses: ./.github/workflows/grading-regression.yml
     # Explicit, not `secrets: inherit`. Inherit exposed GCP_SA_KEY_BASE64,

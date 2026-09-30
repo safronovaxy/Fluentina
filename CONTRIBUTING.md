@@ -70,6 +70,13 @@ always releasable but does not itself deploy to production.
   migrations → confirm migrations match the schema → Vitest → build →
   Playwright against the locally built app, served through a self-signed
   TLS proxy (`website/scripts/tls-proxy.mjs`) as of KAN-30 — see below.
+  That is the **full** job, and it still runs **everything** on every PR push
+  and every push to `main`; it is the check that gates merge. Alongside it, PRs
+  also get a **smoke** job that runs only the tests the diff selects (chromium
+  only). Smoke is an earlier signal, not a gate: a green smoke run is not "CI
+  is green" for the merge criteria above. Anything the selection does not
+  recognise runs everything. See CLAUDE.md's "Test tiers" section, and note that
+  only stage 1 of it exists — the full job is not yet conditional on PRs.
 - **What that covers today is narrower than it sounds, but less narrow than
   it used to be.** The Playwright suite used to be the marketing regression
   suite only, with no funnel specs — KAN-14 added the first one
@@ -171,7 +178,10 @@ always releasable but does not itself deploy to production.
   `chromium-mobile`, `webkit-desktop` and `webkit-mobile` — 470 total, down
   from 561 (187 x 3) while adding a whole engine, because real in-browser
   executions went UP (93 x 3 = 279 to 94 x 4 = 376) and the drop is entirely
-  the 188 engine-less duplicates. Treat these as a snapshot, not a contract:
+  the 188 engine-less duplicates. **Current figure:** 526 (`--list --grep-invert
+  "@cms"`, as of `aa58e70`): 202 in `chromium-desktop` and 108 in each of the other
+  three projects; the 470 above is the KAN-33 snapshot, before the later specs.
+  Treat these as a snapshot, not a contract:
   nothing enforces them, and the first spec anyone adds makes them stale.
   `REQUEST_ONLY_SPECS`'s patterns are anchored to a path separator so a future
   `blog-seo.spec.ts` is not silently swept into the exclusion, but the list
