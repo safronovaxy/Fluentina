@@ -480,6 +480,31 @@ describe('GET /api/essays/[id]/grading — a registered owner, resolved ahead of
     expect((await response.json()).report.access).toBe('full');
   });
 
+  it('KAN-52: an essay a registered user SUBMITTED directly (session_id NULL, never a guest\'s) is graded and served to its account as a FULL report — and to nobody else', async () => {
+    const user = await newUserActor();
+    const essay = await createEssay(user, REPORT_ESSAY);
+    expect(essay.sessionId).toBeNull();
+    const job = (await createGradingJob(user, essay.id))!;
+    await markGradingJobSucceededUnscoped(SYSTEM_ACTOR, job.id, {
+      provider: 'fake',
+      rawInput: 'prompt',
+      rawOutput: 'raw',
+      result: richResult(),
+      promptInjectionSuspected: false,
+    });
+    const strangerGuest = newGuestActor();
+    await createGuestSession(strangerGuest);
+
+    registeredSession.current = user;
+    const asOwner = await callGet(essay.id);
+    registeredSession.current = null;
+    const asGuest = await callGet(essay.id, strangerGuest.sessionId);
+
+    expect(asOwner.status).toBe(200);
+    expect((await asOwner.json()).report.access).toBe('full');
+    expect(asGuest.status).toBe(404);
+  });
+
   it('a flagged result is withheld from the registered owner as well — the flag wins over access level', async () => {
     const actor = newGuestActor();
     await createGuestSession(actor);

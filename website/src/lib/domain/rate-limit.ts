@@ -11,8 +11,9 @@ import 'server-only';
  * Two guards, one shape, applied at two call sites:
  *
  * - `checkEssaySubmissionRateLimit` — `POST /api/essays` (route.ts). The
- *   session cap (5/hour) is the acceptance criterion verbatim, not an
- *   engineering call; the IP cap is.
+ *   per-owner cap (5/hour — per guest session, or per registered user since
+ *   KAN-52) is the acceptance criterion verbatim, not an engineering call; the
+ *   IP cap is.
  * - `checkGuestSessionResolveRateLimit` — `POST /api/guest-session`
  *   (route.ts). Added for the same reason the essay endpoint needs one, not
  *   a lighter version of it: the accumulated finding on this ticket is that
@@ -116,7 +117,7 @@ import 'server-only';
  */
 import { createHash } from 'node:crypto';
 import { incrementRateLimitCounter } from '@/lib/db/rate-limit';
-import type { GuestSessionId } from '@/lib/contracts/actor';
+import type { GuestSessionId, OwnerActor } from '@/lib/contracts/actor';
 import type { NormalisedEmail } from '@/lib/contracts/auth';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -220,6 +221,16 @@ function warnRejectedEnvOverride(name: string, raw: string, fallback: number): v
 /** Fixed by the ticket — not an engineering call. See this module's own comment. */
 export const ESSAY_SUBMISSION_SESSION_LIMIT = 5;
 export const ESSAY_SUBMISSION_SESSION_WINDOW_MS = ONE_HOUR_MS;
+
+/**
+ * KAN-52 — BR-1.8's cap for a REGISTERED submitter. The same rule, not a new
+ * number: it is the one constant, so the two cannot drift apart. Before this
+ * a registered user had no guest cookie to key the per-session bucket on, so
+ * once they could submit at all only the per-IP backstop applied — 24x the
+ * mandated cap, and up to 120 paid grading calls per address per hour.
+ */
+export const ESSAY_SUBMISSION_USER_LIMIT = ESSAY_SUBMISSION_SESSION_LIMIT;
+export const ESSAY_SUBMISSION_USER_WINDOW_MS = ESSAY_SUBMISSION_SESSION_WINDOW_MS;
 
 /**
  * The per-IP backstop, and its window — see this module's own comment for
@@ -389,8 +400,8 @@ function logRefusal(action: string, scope: RefusalScope, limit: number, count: n
  * recoverable, and inherits whatever retention policy the log store has —
  * a privacy or retention answer built on "pseudonymised" would be wrong.
  *
- * For a HIGH-entropy input — a guest session id (see session-id.ts) — the
- * same construction genuinely is a one-way correlation key: there is no
+ * For a HIGH-entropy input — a guest session id (see session-id.ts), or a
+ * registered user's id (a random UUID, KAN-52) — the same construction genuinely is a one-way correlation key: there is no
  * space small enough to brute-force from 48 bits of truncated hash output
  * back to the original value. That asymmetry is a property of the INPUT's
  * entropy, not of this function, which does not know or care which kind of
@@ -417,7 +428,7 @@ function hashAndTruncate(value: string): string {
  * refusal now logs a correlation key the same as an IP-scoped one does,
  * rather than the identity being optional and omitted for one of the two).
  */
-type RefusalScope = 'session' | 'ip' | 'email';
+type RefusalScope = 'session' | 'user' | 'ip' | 'email';
 
 async function underLimit(
   bucketKey: string,
@@ -459,30 +470,49 @@ async function underIpLimit(action: string, ip: string | null, limit: number, wi
  * `POST /api/essays`'s rate limit — both caps, always both checked (never
  * short-circuited): a request that fails the session cap still increments
  * the IP counter, and vice versa, so a caller cannot dodge one counter by
- * arranging to fail the other first. `sessionId` is the RAW, schema-
- * validated cookie value the caller presented (route.ts calls this BEFORE
- * `resolveGuestSession` ever runs — see that route's own comment on why),
- * not a resolved actor — see this module's own top comment for why that
- * specific choice is what the design rests on. Round-1 review (Architect):
- * this doc comment used to say "the actor's resolved session id", disagreeing
- * with both the top-of-module comment and route.ts's own comment, neither
- * of which this ever was true of — corrected to match the code and the
- * other two. `ip` is `clientIp(request)` (`lib/client-ip.ts`).
+ * arranging to fail the other first.
+ *
+ * `actor` is the caller's `OwnerActor` (KAN-52), and the per-owner bucket is
+ * keyed on whichever identity it carries: `essaySubmission:session:<id>` for a
+ * guest, `essaySubmission:user:<id>` for a registered user. Both are capped at
+ * 5/hour (BR-1.8). A `UserActor` must NOT fall through to the IP cap alone —
+ * that is the bug this signature exists to close (it used to take a
+ * `GuestSessionId`, and a registered submitter has none).
+ *
+ * For a guest, `actor.sessionId` is the RAW, schema-validated cookie value the
+ * caller presented — route.ts builds the actor from the cookie and calls this
+ * BEFORE `resolveGuestSession` ever runs (see that route's own comment on
+ * why), so the identity counted is the presented one, not a resolved one — see
+ * this module's own top comment for why that specific choice is what the
+ * design rests on. `ip` is `clientIp(request)` (`lib/client-ip.ts`).
+ *
+ * Known and accepted: a guest who registers gets a fresh per-owner bucket (the
+ * user bucket is a different key from the session bucket they spent). That is
+ * bounded by the registration caps, not by this one.
  */
 export async function checkEssaySubmissionRateLimit(
-  sessionId: GuestSessionId,
+  actor: OwnerActor,
   ip: string | null,
   now: Date = new Date(),
 ): Promise<boolean> {
-  const sessionOk = await underLimit(
-    `essaySubmission:session:${sessionId}`,
-    ESSAY_SUBMISSION_SESSION_LIMIT,
-    ESSAY_SUBMISSION_SESSION_WINDOW_MS,
-    now,
-    { action: 'essaySubmission', scope: 'session', identity: sessionId },
-  );
+  const ownerOk =
+    actor.kind === 'user'
+      ? await underLimit(
+          `essaySubmission:user:${actor.userId}`,
+          ESSAY_SUBMISSION_USER_LIMIT,
+          ESSAY_SUBMISSION_USER_WINDOW_MS,
+          now,
+          { action: 'essaySubmission', scope: 'user', identity: actor.userId },
+        )
+      : await underLimit(
+          `essaySubmission:session:${actor.sessionId}`,
+          ESSAY_SUBMISSION_SESSION_LIMIT,
+          ESSAY_SUBMISSION_SESSION_WINDOW_MS,
+          now,
+          { action: 'essaySubmission', scope: 'session', identity: actor.sessionId },
+        );
   const ipOk = await underIpLimit('essaySubmission', ip, ESSAY_SUBMISSION_IP_LIMIT, ESSAY_SUBMISSION_IP_WINDOW_MS, now);
-  return sessionOk && ipOk;
+  return ownerOk && ipOk;
 }
 
 /**

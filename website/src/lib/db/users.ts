@@ -2,7 +2,7 @@ import 'server-only';
 
 /**
  * KAN-20 — the users repository: registration's one transaction, and the
- * login lookup.
+ * login lookup. KAN-52 adds sign-in's one transaction (`signInUser`).
  */
 import { and, eq } from 'drizzle-orm';
 import { db } from './client';
@@ -115,6 +115,73 @@ export async function registerUser(input: RegisterUserInput): Promise<RegisterUs
 
   await sweepExpiredSessionsBestEffort();
   return { status: 'registered', ...result };
+}
+
+export interface SignInUserInput {
+  /** The guest whose session and essays the account adopts, if the request carried a well-formed guest cookie. */
+  readonly guest: GuestActor | null;
+  /** Hash of the freshly generated token for this sign-in's session. */
+  readonly sessionTokenHash: RegisteredSessionTokenHash;
+  /** A live session the request already carried, to delete in the same transaction (fixation). */
+  readonly replacing: { readonly actor: UserActor; readonly tokenHash: RegisteredSessionTokenHash } | null;
+}
+
+export interface SignInUserResult {
+  readonly guestConversion: 'converted' | 'nothingToConvert';
+}
+
+/**
+ * Sign-in, atomically: the fixation delete, the guest adoption and the new
+ * login session commit together or not at all — `registerUser`'s shape, for
+ * the same reason (Irina, 2026-09-29: sign-in adopts whatever guest essay the
+ * browser is holding).
+ *
+ * Without adoption, a guest who signs in loses sight of their essay:
+ * `resolveOwnerActor` prefers the registered session (correct — KAN-19), so the
+ * guest cookie is never consulted and `essays.user_id` stays NULL. Nothing can
+ * read the row, and no retention sweep exists to delete it.
+ *
+ * ONE transaction, and the session insert LAST, for the interleaving that
+ * hurts: adoption committing and the session insert then failing. The person
+ * has attached their essay to an account they are not signed into, the guest
+ * cookie no longer authorises it (`session_id` is NULL now), and the response
+ * is a 500 that tells them nothing about why their essay is gone. With the
+ * session insert last, a failure there rolls the adoption back. A conversion
+ * done as a second write AFTER the session is issued would leave the opposite
+ * hole: a signed-in user whose adoption can fail silently.
+ *
+ * The caller has already done the ~90 ms of scrypt (verification, and the
+ * rehash if due) BEFORE this: none of it may hold a pooled connection and the
+ * row locks conversion takes. The expired-session sweep runs AFTER the commit,
+ * outside the transaction, for the reason `sweepExpiredSessionsBestEffort`
+ * gives: an error inside a transaction aborts it, so best-effort housekeeping
+ * cannot live in here.
+ *
+ * `actor` is the verified account — the caller has already checked the
+ * password — and is the mandatory first parameter like every other function
+ * here that acts on one user's rows (sessions.ts's header lists the closed set
+ * of exceptions; this is not one of them).
+ *
+ * `nothingToConvert` is returned but must never be counted as a conversion
+ * metric — retention deletion produces it too (see `GuestConversionOutcome`).
+ */
+export async function signInUser(actor: UserActor, input: SignInUserInput): Promise<SignInUserResult> {
+  const result = await db.transaction(async (tx) => {
+    if (input.replacing) {
+      await deleteSessionWithin(tx, input.replacing.actor, input.replacing.tokenHash);
+    }
+
+    const guestConversion = input.guest
+      ? await convertGuestSessionToUserWithin(tx, input.guest, actor.userId)
+      : 'nothingToConvert';
+
+    await insertSessionWithin(tx, actor, input.sessionTokenHash);
+
+    return { guestConversion } as const;
+  });
+
+  await sweepExpiredSessionsBestEffort();
+  return result;
 }
 
 export interface LoginCandidate {

@@ -17,7 +17,9 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { db, closePool } from '@/lib/db/client';
-import { users } from '@/lib/db/schema';
+import { guestSessions, users } from '@/lib/db/schema';
+import { insertSessionWithin } from '@/lib/db/sessions';
+import type { RegisteredSessionTokenHash, UserActor } from '@/lib/contracts/actor';
 
 /**
  * Refuses to run `resetDatabase` against anything but a local database.
@@ -86,6 +88,29 @@ export async function createTestUser(): Promise<string> {
     .values({ email: `fixture-${randomUUID()}@example.test`, passwordHash: 'fixture-not-a-real-hash' })
     .returning({ id: users.id });
   return row.id;
+}
+
+/**
+ * How many `guest_sessions` rows exist. Routes that must never MINT a guest
+ * session (sign-in, registration, an account-owned submission) assert this is
+ * unchanged across a request: `resolveGuestSession` mints for a missing or
+ * unusable cookie, so a route that called it instead of merely parsing the
+ * cookie would turn into an unauthenticated guest-session issuer, and nothing
+ * but a row count sees it.
+ */
+export async function countGuestSessions(): Promise<number> {
+  return (await db.select({ id: guestSessions.id }).from(guestSessions)).length;
+}
+
+/**
+ * Inserts a `sessions` row for a fixture user and nothing else — no sweep, no
+ * adoption. It stands in for the standalone `createSession` that production no
+ * longer has (sign-in is `signInUser`, one transaction); tests that need a
+ * session row to already exist, or to be aged, use this rather than a
+ * production primitive whose shape this story retired.
+ */
+export async function createTestSession(actor: UserActor, tokenHash: RegisteredSessionTokenHash): Promise<void> {
+  await insertSessionWithin(db, actor, tokenHash);
 }
 
 export { closePool };

@@ -1,7 +1,8 @@
 import 'server-only';
 
 /**
- * KAN-14 — persists a guest's essay under an already-resolved actor.
+ * KAN-14 — persists an essay under an already-resolved actor. KAN-52: the
+ * actor is an `OwnerActor` — a guest OR a registered user — not a guest only.
  * Storage only: grading is KAN-16's job, the recommended-length/word-count
  * UI and its server-side counterpart are KAN-15's, and this function does
  * not know either of those stories exists — KAN-15 landed its check in
@@ -24,24 +25,25 @@ import 'server-only';
  * route's own comment).
  *
  * This function's only remaining job is the insert: `createEssay`
- * (lib/db/essays.ts), inside a transaction that locks the session row so a
- * write racing a concurrent conversion can never land unattached. Kept as a
- * named seam in `lib/domain` rather than the route calling `lib/db`
- * directly, for the ADR-14 layering (adapters talk to domain, domain talks
- * to db).
+ * (lib/db/essays.ts) — for a guest, inside a transaction that locks the session
+ * row so a write racing a concurrent conversion can never land unattached; for
+ * a registered user, a plain insert owned by the account (there is no session
+ * row to lock). Kept as a named seam in `lib/domain` rather than the route
+ * calling `lib/db` directly, for the ADR-14 layering (adapters talk to domain,
+ * domain talks to db).
  */
 import { createEssay } from '@/lib/db/essays';
-import type { GuestActor } from '@/lib/contracts/actor';
+import type { OwnerActor } from '@/lib/contracts/actor';
 import type { Essay } from '@/lib/contracts/essay';
 
 /**
- * Persists `content` under `actor` — the id the CALLER already resolved
- * (and, if necessary, reissued a cookie for). `content` is taken as-is —
+ * Persists `content` under `actor` — the owner the CALLER already resolved
+ * (for a guest, and if necessary reissued a cookie for). `content` is taken as-is —
  * already validated (shape, the KAN-14 character-cap safety limit, and
  * KAN-15's real 50-300 word-count bounds) by the adapter's own
  * request-schema check (`essaySubmissionRequestSchema`) before this is ever
  * called.
  */
-export async function submitEssay(actor: GuestActor, content: string): Promise<Essay> {
+export async function submitEssay(actor: OwnerActor, content: string): Promise<Essay> {
   return createEssay(actor, content);
 }

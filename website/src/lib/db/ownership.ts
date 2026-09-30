@@ -13,6 +13,22 @@ import 'server-only';
  *
  * A registered user owns a row by `user_id` match, full stop.
  *
+ * --- KAN-52: `essays.session_id` is NULL for account-owned essays, and this
+ * predicate is deliberately unchanged by it ---
+ *
+ * The guest branch is `session_id = <id> AND user_id IS NULL`. For an
+ * account-owned essay `session_id` is NULL, so the first conjunct is
+ * `NULL = '<id>'`, which SQL evaluates to NULL, not false — and `WHERE` keeps
+ * only rows for which the condition is TRUE. A NULL `session_id` therefore
+ * matches no guest, with no `IS NOT NULL` guard needed and none wanted: adding
+ * one would only make a reader think the equality could otherwise match a
+ * NULL. Nothing here ever builds `eq(col, null)` either: `actor.sessionId` is
+ * a branded non-null string. The `isNull(user_id)` conjunct stays: it is what makes the cutover rule hold on
+ * `guest_sessions`, where a converted row legitimately keeps its `id` AND gains
+ * a `user_id`. On `essays` the CHECK constraint now guarantees the two
+ * conjuncts cannot disagree, so there it is a second, independent lock on the
+ * same door rather than the only one.
+ *
  * Every function in `lib/db` that reads or mutates an owned row calls this
  * with the caller's `Actor` and gets back a condition to `.where()` — never
  * a bare boolean, never hand-rolled `eq`/`and` at the call site, so this is
