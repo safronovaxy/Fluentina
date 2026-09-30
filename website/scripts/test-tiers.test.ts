@@ -739,17 +739,49 @@ describe('select-tests CLI', () => {
   // `--import tsx` resolves from the cwd, so name it by absolute URL: the rename
   // test below runs the CLI inside a throwaway repo that has no node_modules.
   const tsx = pathToFileURL(require.resolve('tsx')).href;
+  // The CLI switches behaviour on $GITHUB_OUTPUT / $GITHUB_STEP_SUMMARY: with
+  // them set it appends to those files and prints no JSON. GitHub Actions sets
+  // both on every step, so a child that inherited them would (a) fail to parse
+  // here, which is exactly how this suite went red in CI while green locally,
+  // and (b) append four bogus selections to the real job's output file. Every
+  // child therefore starts without them; the test that wants them passes its own.
+  const childEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => {
+    const { GITHUB_OUTPUT: _o, GITHUB_STEP_SUMMARY: _s, ...rest } = process.env;
+    return { ...rest, ...extra };
+  };
+  const exec = (args: string[], input?: string, cwd: string = websiteDir, env: NodeJS.ProcessEnv = childEnv()) =>
+    execFileSync(process.execPath, ['--import', tsx, cli, ...args], { cwd, input, encoding: 'utf8', env });
   const run = (args: string[], input?: string, cwd: string = websiteDir) =>
-    JSON.parse(
-      execFileSync(process.execPath, ['--import', tsx, cli, ...args], { cwd, input, encoding: 'utf8' })
-        .split('\n\n')
-        .pop()!,
-    ) as Record<string, string>;
+    JSON.parse(exec(args, input, cwd).split('\n\n').pop()!) as Record<string, string>;
 
   it('reads a diff from stdin', () => {
     const out = run([], `${S}/lib/same-origin.ts\n`);
     expect(out).toMatchObject({ mode: 'subset', areas: 'api-edge', run_unit: 'true' });
     expect(out.unit_files).toContain('src/lib/same-origin.test.ts');
+  });
+
+  // The path the smoke job actually depends on: the `select` step's outputs are
+  // what `steps.select.outputs.*` reads. Until now nothing exercised it, because
+  // the other tests here run with both variables removed.
+  it('under GitHub Actions it appends key=value job outputs and a summary, and prints no JSON', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'select-tests-gh-'));
+    try {
+      const output = path.join(dir, 'output');
+      const summary = path.join(dir, 'summary');
+      const stdout = exec([], `${S}/lib/same-origin.ts\n`, websiteDir, childEnv({ GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary }));
+      expect(stdout).toContain('Selection: subset');
+      expect(stdout).not.toContain('"mode"');
+      const lines = readFileSync(output, 'utf8').split('\n').filter(Boolean);
+      const parsed = Object.fromEntries(lines.map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+      expect(Object.keys(parsed).sort()).toEqual(
+        ['areas', 'e2e_files', 'mode', 'run_e2e', 'run_unit', 'unit_files'].sort(),
+      );
+      expect(parsed).toMatchObject({ mode: 'subset', areas: 'api-edge', run_unit: 'true' });
+      expect(parsed.unit_files).toContain('src/lib/same-origin.test.ts');
+      expect(readFileSync(summary, 'utf8')).toContain('### Smoke selection');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('an empty stdin selects everything', () => {
