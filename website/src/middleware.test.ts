@@ -206,3 +206,50 @@ describe('middleware — KAN-10 guest session cookie, composed onto KAN-9 locale
     expect(guestSessionIdSchema.safeParse(sessionCookie?.value).success).toBe(true);
   });
 });
+
+/**
+ * KAN-55 — `/register` and `/sign-in` joined the matcher. Extending it changes
+ * which requests the middleware sees; it must not change what it does with them.
+ * The behaviour that matters most is the one already pinned for `/practice`
+ * above — a syntactically valid cookie is left COMPLETELY alone, which is what
+ * keeps a returning guest's session id stable — so it is pinned here for the new
+ * routes too, in every locale spelling, rather than assumed to carry over.
+ */
+describe.each(['/register', '/sign-in', '/de/register', '/de/sign-in'])('middleware on %s — KAN-55', (path) => {
+  it('is in the matcher, so the middleware actually runs for it', () => {
+    expect(config.matcher).toContain(path);
+    expect(config.matcher).toContain(`${path}/:path*`);
+  });
+
+  it('mints a session cookie for a visitor with none', () => {
+    const cookie = middleware(requestWithCookie(path)).cookies.get(GUEST_SESSION_COOKIE_NAME);
+
+    expect(guestSessionIdSchema.safeParse(cookie?.value).success).toBe(true);
+  });
+
+  it('leaves a valid cookie completely untouched — no write, no re-issuance', () => {
+    const existing = generateGuestSessionId();
+
+    const response = middleware(requestWithCookie(path, existing));
+
+    expect(response.cookies.get(GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
+    expect(response.headers.getSetCookie().join('\n')).not.toContain(GUEST_SESSION_COOKIE_NAME);
+  });
+
+  it('replaces a malformed cookie rather than trusting it', () => {
+    const response = middleware(requestWithCookie(path, 'attacker-supplied-value'));
+
+    const cookie = response.cookies.get(GUEST_SESSION_COOKIE_NAME);
+    expect(cookie?.value).not.toBe('attacker-supplied-value');
+    expect(guestSessionIdSchema.safeParse(cookie?.value).success).toBe(true);
+  });
+});
+
+describe('middleware locale routing for the KAN-55 routes', () => {
+  it.each(['/en/register', '/en/sign-in'])('redirects the prefixed default-locale path %s to the canonical unprefixed one', (path) => {
+    const response = middleware(requestWithCookie(path));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe(`http://localhost:3000${path.replace('/en', '')}`);
+  });
+});

@@ -131,8 +131,8 @@ export interface GradingPreviewStrings extends PendingProgressStrings {
   readonly lockedItemAnnotations: string;
   // PROVISIONAL COPY. The wording of `lockedNote` (and the other `locked*`
   // catalogue keys) is unreviewed: BR-4.2 specifies WHAT is locked, not what
-  // the panel says. It names an account but has no CTA, because no
-  // registration route exists until KAN-20.
+  // the panel says. It names an account; the way to get one is
+  // `registerAction`, below.
   readonly lockedNote: string;
   readonly flaggedTitle: string;
   readonly flaggedBody: string;
@@ -152,6 +152,15 @@ export interface GradingPreviewProps {
   readonly strings: GradingPreviewStrings;
   /** A pre-rendered, locale-aware link back to essay entry — shown where the guest has no result to look at. */
   readonly tryAgainAction: ReactNode;
+  /**
+   * KAN-55 — the locked panel's call to action: a pre-rendered, locale-aware
+   * link to registration that carries this essay's id, so the guest comes back
+   * to this report once they have an account. Pre-rendered for the same reason
+   * `tryAgainAction` is (this component cannot reach `next-intl` or the
+   * locale-aware `Link`). Rendered ONLY in the locked panel — a `full` report
+   * has nothing left to unlock, so it never shows.
+   */
+  readonly registerAction: ReactNode;
 }
 
 type Phase = 'pending' | 'complete' | 'flagged' | 'failed' | 'stalled' | 'pollError';
@@ -212,10 +221,12 @@ function LockedPanel({
   report,
   shown,
   strings,
+  registerAction,
 }: {
   report: Extract<VisibleReport, { access: 'locked' }>;
   shown: number;
   strings: GradingPreviewStrings;
+  registerAction: ReactNode;
 }) {
   const headingId = useId();
   const count =
@@ -255,11 +266,15 @@ function LockedPanel({
         <li>{strings.lockedItemAnnotations}</li>
       </ul>
       <p className="mt-3 text-sm font-medium">{strings.lockedNote}</p>
+      {/* The funnel: the one place a guest looking at this panel can act on it. */}
+      <div className="mt-3" data-testid="locked-register-cta">
+        {registerAction}
+      </div>
     </div>
   );
 }
 
-export function GradingPreview({ essayId, strings, tryAgainAction }: GradingPreviewProps) {
+export function GradingPreview({ essayId, strings, tryAgainAction, registerAction }: GradingPreviewProps) {
   const query = useGradingStatus(essayId);
   const status = query.data;
   const phase = resolvePhase(status, query.isError);
@@ -404,7 +419,7 @@ export function GradingPreview({ essayId, strings, tryAgainAction }: GradingPrev
             </div>
 
             {report.access === 'locked' && (
-              <LockedPanel report={report} shown={example ? 1 : 0} strings={strings} />
+              <LockedPanel report={report} shown={example ? 1 : 0} strings={strings} registerAction={registerAction} />
             )}
           </>
         )}

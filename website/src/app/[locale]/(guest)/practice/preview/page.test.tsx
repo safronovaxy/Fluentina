@@ -7,8 +7,10 @@ import { createEssay } from '@/lib/db/essays';
 import { createGuestSession, convertGuestSessionToUser } from '@/lib/db/guest-sessions';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import { Button } from '@/components/ui/button';
 import { GradingPreview } from '@/components/guest/GradingPreview';
 import { GuestFlowShell } from '@/components/guest/chrome/GuestFlowShell';
+import { Link } from '@/i18n/navigation';
 import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
 import type { GuestActor, UserActor } from '@/lib/contracts/actor';
 
@@ -100,6 +102,35 @@ describe('guest preview page — ownership of the essay it renders (KAN-18)', ()
     expect(preview?.props).not.toHaveProperty('essayContent');
     expect(JSON.stringify(preview?.props.strings)).not.toContain('Geheimer');
     expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  // KAN-55: the CTA on the locked panel. The link's target is what makes the
+  // funnel close — registration has to know which report to return to.
+  it("links the locked panel's call to action to registration with the essay's own id", async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, 'Mein Aufsatz.');
+    cookieValue = actor.sessionId;
+
+    const preview = findElement(await render(essay.id), GradingPreview);
+    const link = findElement(preview?.props.registerAction as ReactNode, Link);
+
+    expect(link?.props.href).toEqual({ pathname: '/register', query: { essay: essay.id } });
+    expect(link?.props.children).toBe('registerCta');
+  });
+
+  // The German label is long enough to run off a phone's edge in the stock
+  // fixed-height no-wrap Button. jsdom cannot see that, so this pins the choice
+  // of size and tests/registration.spec.ts pins the outcome in a real browser.
+  it('renders the call to action as a wrapping Button (size="cta"), because its German label is long', async () => {
+    const actor = newGuestActor();
+    await createGuestSession(actor);
+    const essay = await createEssay(actor, 'Mein Aufsatz.');
+    cookieValue = actor.sessionId;
+
+    const preview = findElement(await render(essay.id), GradingPreview);
+
+    expect(findElement(preview?.props.registerAction as ReactNode, Button)?.props.size).toBe('cta');
   });
 
   it('highlights the "preview" step in the guest flow indicator — not "write", which it would silently be if this were copy-pasted from the entry page', async () => {

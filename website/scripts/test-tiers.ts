@@ -109,6 +109,7 @@ export const AREAS: Area[] = [
       `${T}/guest-flow.spec.ts`,
       `${T}/guest-flow-i18n.spec.ts`,
       `${T}/guest-session.spec.ts`,
+      `${T}/registration.spec.ts`,
     ],
   },
   {
@@ -122,7 +123,7 @@ export const AREAS: Area[] = [
     ],
     // The e2e job serves the built app with MOCK_GRADING_PROVIDER=1, so the
     // funnel specs exercise the orchestration end to end.
-    specs: [`${T}/grading-preview.spec.ts`, `${T}/essay-entry.spec.ts`],
+    specs: [`${T}/grading-preview.spec.ts`, `${T}/essay-entry.spec.ts`, `${T}/registration.spec.ts`],
   },
   {
     name: 'auth',
@@ -137,7 +138,7 @@ export const AREAS: Area[] = [
       `${S}/components/guest/GuestSessionBootstrap*`,
       `${S}/middleware.test.ts`,
     ],
-    specs: [`${T}/guest-session.spec.ts`],
+    specs: [`${T}/guest-session.spec.ts`, `${T}/registration.spec.ts`],
   },
   {
     name: 'api-edge',
@@ -151,21 +152,21 @@ export const AREAS: Area[] = [
       `${S}/lib/domain/rate-limit*`,
       `${S}/lib/db/rate-limit*`,
     ],
-    specs: [`${T}/essay-entry.spec.ts`, `${T}/guest-session.spec.ts`],
+    specs: [`${T}/essay-entry.spec.ts`, `${T}/guest-session.spec.ts`, `${T}/registration.spec.ts`],
   },
   {
     name: 'data',
     note: 'The data layer (schema.ts and the migrations are in RUN_EVERYTHING).',
     paths: [`${S}/lib/db/**`],
     // The only specs that reach the real database through the built app.
-    specs: [`${T}/essay-entry.spec.ts`, `${T}/guest-session.spec.ts`],
+    specs: [`${T}/essay-entry.spec.ts`, `${T}/guest-session.spec.ts`, `${T}/registration.spec.ts`],
   },
   {
     name: 'i18n',
     note: 'Locale routing, message catalogues, the intl provider.',
     paths: [`${S}/messages/**`, `${S}/i18n/**`, `${S}/components/IntlProvider.tsx`],
     // Every guest component renders from the catalogues.
-    specs: [`${T}/guest-flow-i18n.spec.ts`, `${T}/guest-flow.spec.ts`, `${T}/essay-entry.spec.ts`],
+    specs: [`${T}/guest-flow-i18n.spec.ts`, `${T}/guest-flow.spec.ts`, `${T}/essay-entry.spec.ts`, `${T}/registration.spec.ts`],
   },
   {
     name: 'marketing',

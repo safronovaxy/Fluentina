@@ -129,12 +129,12 @@ source); its e2e specs are listed by name, because Playwright's `testDir` is
 
 | Area | Covers | e2e specs |
 |------|--------|-----------|
-| `guest-funnel` | guest components, `[locale]` pages, essays API, status/elapsed hooks | essay-entry, word-count, grading-preview, guest-flow, guest-flow-i18n, guest-session |
-| `grading` | `lib/domain/grading`, grading routes and jobs | grading-preview, essay-entry |
-| `auth` | sessions, login, registration, ownership, session cookies | guest-session |
-| `api-edge` | every route handler; same-origin, client-ip, rate-limit, request-body, rejection-response | essay-entry, guest-session |
-| `data` | `lib/db/**` (not `schema.ts`) | essay-entry, guest-session |
-| `i18n` | messages, `i18n/**`, `IntlProvider` | guest-flow-i18n, guest-flow, essay-entry |
+| `guest-funnel` | guest components, `[locale]` pages, essays API, status/elapsed hooks | essay-entry, word-count, grading-preview, guest-flow, guest-flow-i18n, guest-session, registration |
+| `grading` | `lib/domain/grading`, grading routes and jobs | grading-preview, essay-entry, registration |
+| `auth` | sessions, login, registration, ownership, session cookies | guest-session, registration |
+| `api-edge` | every route handler; same-origin, client-ip, rate-limit, request-body, rejection-response | essay-entry, guest-session, registration |
+| `data` | `lib/db/**` (not `schema.ts`) | essay-entry, guest-session, registration |
+| `i18n` | messages, `i18n/**`, `IntlProvider` | guest-flow-i18n, guest-flow, essay-entry, registration |
 | `marketing` | `(marketing)` pages, `page-components`, Strapi, SEO, sitemap | blog, contact-form, navigation, no-console-errors, redirects, routing, seo, sitemap |
 | `placement-test` | placement-test components and pages | placement-test, no-console-errors |
 | `shell` | layout, providers, global CSS, shared `lib` helpers | navigation, no-console-errors, guest-flow |

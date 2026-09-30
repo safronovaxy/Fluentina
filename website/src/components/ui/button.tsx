@@ -21,6 +21,16 @@ const buttonVariants = cva(
         sm: "h-9 rounded-md px-3",
         lg: "h-11 rounded-md px-8",
         icon: "h-10 w-10",
+        // A call to action whose label is long or localised. Every other size
+        // pins a height and, through the shared base, `whitespace-nowrap`, which
+        // crops a long label at the viewport edge instead of wrapping it: the
+        // German register CTA ("Konto erstellen und den vollständigen Bericht
+        // freischalten") ran ~480px on a 393px phone. `h-auto whitespace-normal`
+        // lets the label wrap and the box grow with it. Deliberately a size, not a
+        // change to the base or to `default`: that would alter every button on the
+        // marketing site. See also the "German labels are longer" note in
+        // components/guest/flow-steps.ts.
+        cta: "h-auto whitespace-normal px-4 py-2 text-center",
       },
     },
     defaultVariants: {
