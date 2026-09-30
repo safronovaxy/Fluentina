@@ -26,16 +26,17 @@ if (process.env.CI && !process.env.BASE_URL) {
 // KAN-30 round-1 review (blocking, found independently by both reviewers):
 // the whole point of this story is that ci.yml's pipeline run goes through
 // scripts/tls-proxy.mjs and is therefore encrypted — that's what lets
-// WebKit store the __Host--prefixed session cookie at all. The three specs'
-// skip predicate (tests/guest-session.spec.ts, tests/essay-entry.spec.ts,
-// tests/word-count.spec.ts — see each file's own comment, and
+// WebKit store the __Host--prefixed session cookie at all. The specs' skip
+// predicate (originally tests/guest-session.spec.ts, tests/essay-entry.spec.ts
+// and tests/word-count.spec.ts — see each file's own comment, and
 // tests/helpers/webkit.ts for the shared `browserName`-derived predicate
 // they all key off as of KAN-33) only checks whether BASE_URL is plain
 // HTTP, and a Playwright skip is not a failure: if the proxy steps in
 // ci.yml are ever dropped or reordered, or a merge resolution restores the
-// plain address, the twelve tests (six in guest-session.spec.ts including
-// KAN-33's own maxAge assertion, four in essay-entry.spec.ts, two in
-// word-count.spec.ts — eleven before that addition) go straight back to
+// plain address, every test that needs the __Host- session cookie stored
+// (grep the call sites of isWebKitOverPlainHttp; deliberately no count here,
+// this comment once said "twelve" and went stale as grading-preview.spec.ts
+// and registration.spec.ts joined the list) goes straight back to
 // silently skipping and the job stays green — exactly the drift this story
 // exists to end, and the reason the skip condition has already drifted
 // silently three times across earlier stories. So: in the pipeline

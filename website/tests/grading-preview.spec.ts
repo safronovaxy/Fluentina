@@ -2,9 +2,15 @@
  * KAN-18 (BR-4.1) — submit an essay, then see the overall band score and one
  * fully worked example from your own text, end to end.
  *
- * NOT RUN when this was written: no Playwright browser could be installed in
- * the authoring environment (cdn.playwright.dev is blocked), so CI's e2e job
- * is this file's first real execution. The component's behaviour (all six
+ * RUN HISTORY. Written where no Playwright browser could be installed in the
+ * authoring environment (cdn.playwright.dev is blocked), so its first real
+ * execution was CI's. That premise no longer holds: the Chromium projects can
+ * be run locally without installing anything — see "Running the Playwright
+ * suite locally" in CONTRIBUTING.md — and this spec has since run locally on
+ * BOTH chromium-desktop and chromium-mobile, against a production build behind
+ * scripts/tls-proxy.mjs. WebKit is the part that has NOT run outside CI: there
+ * is no WebKit in the local environment, so webkit-desktop and webkit-mobile
+ * are CI's to prove. The component's behaviour (all six
  * states, polling, focus, live region, the highlight/explanation
  * association) is covered by the unit suite — src/components/guest/
  * GradingPreview.test.tsx — which HAS been run; this spec proves only the
@@ -157,7 +163,8 @@ for (const fx of LOCALE_FIXTURES) {
     });
 
     // KAN-19 (BR-4.2). NOT RUN when written, like the rest of this file: CI's
-    // e2e job is its first real execution. The unit and route tests prove what
+    // e2e job WAS its first real execution — see the header for what has run
+    // locally since. The unit and route tests prove what
     // the server sends; this proves it end to end, in a real browser, from
     // the poll the page itself makes — the lock is what arrives, not what the
     // page chooses to draw. Assertions are about SHAPE (which keys exist), not

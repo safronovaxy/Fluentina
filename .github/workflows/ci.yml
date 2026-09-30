@@ -193,10 +193,10 @@ jobs:
         # established this — which is exactly why this job now serves the
         # built app through scripts/tls-proxy.mjs's self-signed TLS proxy
         # below rather than plain HTTP: without it, WebKit here would still
-        # skip the twelve tests conditioned on the connection being
-        # encrypted (tests/guest-session.spec.ts, tests/essay-entry.spec.ts,
-        # tests/word-count.spec.ts — see each file's own comment) for the
-        # same reason it used to when this job only ran Chromium.
+        # skip every test conditioned on the connection being encrypted
+        # (see tests/helpers/webkit.ts for the predicate, and grep its call
+        # sites for the list — no count here, it goes stale) for the same
+        # reason it used to when this job only ran Chromium.
         run: npx playwright install --with-deps chromium webkit
 
       - name: Generate self-signed TLS certificate
