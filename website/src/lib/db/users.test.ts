@@ -5,7 +5,7 @@ import { db } from './client';
 import { consentRecords, essays, guestSessions, sessions, users } from './schema';
 import { createEssay, getEssayById } from './essays';
 import { createGuestSession, getGuestSessionById } from './guest-sessions';
-import { createSession, findLiveSessionUserId } from './sessions';
+import { findLiveSessionUserId } from './sessions';
 import {
   findUserForLogin,
   isEmailUniqueViolation,
@@ -20,7 +20,7 @@ import { emailSchema } from '@/lib/contracts/auth';
 import { CONSENT_KINDS, CURRENT_CONSENT_VERSIONS } from '@/lib/contracts/consent';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { generateRegisteredSessionToken, hashRegisteredSessionToken } from '@/lib/domain/registered-session-token';
-import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import { resetDatabase, createTestSession, createTestUser, closePool } from '@/test/db-fixtures';
 import type { GuestActor, UserActor } from '@/lib/contracts/actor';
 
 const HASH = 'scrypt$N=32768,r=8,p=1$c2FsdA==$aGFzaA==';
@@ -178,7 +178,7 @@ describe('registerUser — the one transaction', () => {
       // insert: the session INSERT (the LAST statement) fails on its primary key,
       // AFTER the user, the consent rows and the conversion have all executed.
       const collidingHash = hashRegisteredSessionToken(generateRegisteredSessionToken());
-      await createSession({ kind: 'user', userId: await createTestUser() }, collidingHash);
+      await createTestSession({ kind: 'user', userId: await createTestUser() }, collidingHash);
       const usersBefore = await count(users);
       const sessionsBefore = await count(sessions);
 
@@ -202,9 +202,9 @@ describe('registerUser — the one transaction', () => {
     it('also rolls back the deletion of the replaced session when a later statement fails', async () => {
       const previousUser: UserActor = { kind: 'user', userId: await createTestUser() };
       const previous = hashRegisteredSessionToken(generateRegisteredSessionToken());
-      await createSession(previousUser, previous);
+      await createTestSession(previousUser, previous);
       const colliding = hashRegisteredSessionToken(generateRegisteredSessionToken());
-      await createSession(previousUser, colliding);
+      await createTestSession(previousUser, colliding);
 
       await expect(
         registerUser(input({ sessionTokenHash: colliding, replacing: { actor: previousUser, tokenHash: previous } })),
@@ -216,7 +216,7 @@ describe('registerUser — the one transaction', () => {
     it('deletes the presented session and inserts a fresh one — never promotes the old row', async () => {
       const previousUser: UserActor = { kind: 'user', userId: await createTestUser() };
       const previous = hashRegisteredSessionToken(generateRegisteredSessionToken());
-      await createSession(previousUser, previous);
+      await createTestSession(previousUser, previous);
       const request = input({ replacing: { actor: previousUser, tokenHash: previous } });
 
       const result = await registerUser(request);
@@ -246,7 +246,7 @@ describe('registerUser — the one transaction', () => {
 
     it('is decided by the constraint name, not by any unique violation: a session-hash collision is a real error', async () => {
       const collidingHash = hashRegisteredSessionToken(generateRegisteredSessionToken());
-      await createSession({ kind: 'user', userId: await createTestUser() }, collidingHash);
+      await createTestSession({ kind: 'user', userId: await createTestUser() }, collidingHash);
 
       // 23505 again — but on sessions_pkey. Reporting it as "email taken" would be a lie.
       await expect(registerUser(input({ sessionTokenHash: collidingHash }))).rejects.toThrow();
@@ -364,7 +364,9 @@ describe('replacePasswordHash — compare-and-swap for rehash-on-login', () => {
 });
 
 describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is holding, in one transaction', () => {
-  function signIn(userId: string, overrides: Partial<SignInUserInput> = {}): SignInUserInput {
+  // `userId` rides along on the request only so `signInAs` can build the actor;
+  // `signInUser` itself takes the actor as its first parameter.
+  function signIn(userId: string, overrides: Partial<SignInUserInput> = {}): SignInUserInput & { readonly userId: string } {
     return {
       userId,
       guest: null,
@@ -372,6 +374,10 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
       replacing: null,
       ...overrides,
     };
+  }
+
+  function signInAs(request: SignInUserInput & { readonly userId: string }) {
+    return signInUser({ kind: 'user', userId: request.userId }, request);
   }
 
   async function rawEssay(id: string) {
@@ -385,7 +391,7 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
     const essay = await createEssay(guest, 'Ein Aufsatz, geschrieben als Gast, bevor man sich anmeldet.');
     const request = signIn(userId, { guest });
 
-    const result = await signInUser(request);
+    const result = await signInAs(request);
 
     expect(result.guestConversion).toBe('converted');
     const row = await rawEssay(essay.id);
@@ -401,7 +407,7 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
     const userId = await createTestUser();
     const request = signIn(userId);
 
-    await expect(signInUser(request)).resolves.toEqual({ guestConversion: 'nothingToConvert' });
+    await expect(signInAs(request)).resolves.toEqual({ guestConversion: 'nothingToConvert' });
 
     expect((await findLiveSessionUserId(request.sessionTokenHash))?.userId).toBe(userId);
   });
@@ -411,7 +417,7 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
     const neverCreated: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
     const request = signIn(userId, { guest: neverCreated });
 
-    await expect(signInUser(request)).resolves.toEqual({ guestConversion: 'nothingToConvert' });
+    await expect(signInAs(request)).resolves.toEqual({ guestConversion: 'nothingToConvert' });
 
     expect((await findLiveSessionUserId(request.sessionTokenHash))?.userId).toBe(userId);
   });
@@ -421,9 +427,9 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
     const second = await createTestUser();
     const guest = await newGuest();
     const essay = await createEssay(guest, 'Ein Aufsatz, den nur das erste Konto übernehmen darf.');
-    await signInUser(signIn(first, { guest }));
+    await signInAs(signIn(first, { guest }));
 
-    const result = await signInUser(signIn(second, { guest }));
+    const result = await signInAs(signIn(second, { guest }));
 
     expect(result.guestConversion).toBe('nothingToConvert');
     expect((await rawEssay(essay.id)).userId).toBe(first);
@@ -438,7 +444,7 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
     const two = await createEssay(guest, 'Der zweite Aufsatz derselben Gast-Sitzung.');
     const other = await createEssay(bystander, 'Der Aufsatz einer fremden Gast-Sitzung.');
 
-    await signInUser(signIn(userId, { guest }));
+    await signInAs(signIn(userId, { guest }));
 
     expect((await rawEssay(one.id)).userId).toBe(userId);
     expect((await rawEssay(two.id)).userId).toBe(userId);
@@ -451,10 +457,10 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
     const userId = await createTestUser();
     const previousUser: UserActor = { kind: 'user', userId: await createTestUser() };
     const previous = hashRegisteredSessionToken(generateRegisteredSessionToken());
-    await createSession(previousUser, previous);
+    await createTestSession(previousUser, previous);
     const request = signIn(userId, { replacing: { actor: previousUser, tokenHash: previous } });
 
-    await signInUser(request);
+    await signInAs(request);
 
     expect(await findLiveSessionUserId(previous)).toBeNull();
     expect((await findLiveSessionUserId(request.sessionTokenHash))?.userId).toBe(userId);
@@ -469,10 +475,10 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
       // insert: the INSERT (the LAST statement) fails on its primary key, AFTER
       // the adoption has already executed.
       const collidingHash = hashRegisteredSessionToken(generateRegisteredSessionToken());
-      await createSession({ kind: 'user', userId: await createTestUser() }, collidingHash);
+      await createTestSession({ kind: 'user', userId: await createTestUser() }, collidingHash);
       const sessionsBefore = await count(sessions);
 
-      await expect(signInUser(signIn(userId, { guest, sessionTokenHash: collidingHash }))).rejects.toThrow();
+      await expect(signInAs(signIn(userId, { guest, sessionTokenHash: collidingHash }))).rejects.toThrow();
 
       expect(await count(sessions)).toBe(sessionsBefore);
       // The dangerous half: the adoption did NOT commit. Nothing is stranded
@@ -499,7 +505,7 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
       await db.execute(sql`CREATE OR REPLACE FUNCTION fluentina.refuse_essay_update() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'adoption refused'; END; $$ LANGUAGE plpgsql`);
       await db.execute(sql`CREATE TRIGGER refuse_essay_update BEFORE UPDATE ON fluentina.essays FOR EACH ROW EXECUTE FUNCTION fluentina.refuse_essay_update()`);
       try {
-        await expect(signInUser(request)).rejects.toThrow();
+        await expect(signInAs(request)).rejects.toThrow();
       } finally {
         await db.execute(sql`DROP TRIGGER refuse_essay_update ON fluentina.essays`);
         await db.execute(sql`DROP FUNCTION fluentina.refuse_essay_update()`);
@@ -513,12 +519,12 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
     it('also rolls back the deletion of the replaced session when the insert fails', async () => {
       const previousUser: UserActor = { kind: 'user', userId: await createTestUser() };
       const previous = hashRegisteredSessionToken(generateRegisteredSessionToken());
-      await createSession(previousUser, previous);
+      await createTestSession(previousUser, previous);
       const colliding = hashRegisteredSessionToken(generateRegisteredSessionToken());
-      await createSession(previousUser, colliding);
+      await createTestSession(previousUser, colliding);
 
       await expect(
-        signInUser(signIn(await createTestUser(), { sessionTokenHash: colliding, replacing: { actor: previousUser, tokenHash: previous } })),
+        signInAs(signIn(await createTestUser(), { sessionTokenHash: colliding, replacing: { actor: previousUser, tokenHash: previous } })),
       ).rejects.toThrow();
 
       expect(await findLiveSessionUserId(previous)).not.toBeNull();
@@ -529,10 +535,10 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
     it('sweeps expired sessions on a successful sign-in', async () => {
       const userId = await createTestUser();
       const stale = hashRegisteredSessionToken(generateRegisteredSessionToken());
-      await createSession({ kind: 'user', userId }, stale);
+      await createTestSession({ kind: 'user', userId }, stale);
       await db.execute(sql`UPDATE fluentina.sessions SET expires_at = now() - interval '1 day' WHERE id = ${stale}`);
 
-      await signInUser(signIn(userId));
+      await signInAs(signIn(userId));
 
       expect(await db.select().from(sessions).where(eq(sessions.id, stale))).toHaveLength(0);
     });
@@ -548,7 +554,7 @@ describe('signInUser — KAN-52: sign-in adopts the guest essay the browser is h
       await db.execute(sql`CREATE OR REPLACE FUNCTION fluentina.refuse_session_delete() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'sweep refused'; END; $$ LANGUAGE plpgsql`);
       await db.execute(sql`CREATE TRIGGER refuse_session_delete BEFORE DELETE ON fluentina.sessions FOR EACH STATEMENT EXECUTE FUNCTION fluentina.refuse_session_delete()`);
       try {
-        await expect(signInUser(request)).resolves.toEqual({ guestConversion: 'converted' });
+        await expect(signInAs(request)).resolves.toEqual({ guestConversion: 'converted' });
       } finally {
         await db.execute(sql`DROP TRIGGER refuse_session_delete ON fluentina.sessions`);
         await db.execute(sql`DROP FUNCTION fluentina.refuse_session_delete()`);

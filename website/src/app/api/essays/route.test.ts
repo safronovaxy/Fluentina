@@ -20,7 +20,7 @@ import { ESSAY_SUBMISSION_SESSION_LIMIT, ESSAY_SUBMISSION_IP_LIMIT } from '@/lib
 import { REGISTERED_SESSION_COOKIE_NAME } from '@/lib/registered-session-cookie';
 import { guestSessions } from '@/lib/db/schema';
 import { generateRegisteredSessionToken } from '@/lib/domain/registered-session-token';
-import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import { resetDatabase, countGuestSessions, createTestUser, closePool } from '@/test/db-fixtures';
 import { registerTestAccount } from '@/test/auth-fixtures';
 import { wordsContent, validLengthContent, contentOfExactLength } from '@/test/essay-content-fixtures';
 
@@ -1624,9 +1624,7 @@ describe('POST /api/essays — KAN-52: a registered user\'s submission belongs t
     const [row] = await db.select().from(essays).where(eq(essays.id, id));
     return row;
   }
-  async function guestSessionCount(): Promise<number> {
-    return (await db.select().from(guestSessions)).length;
-  }
+  const guestSessionCount = countGuestSessions;
 
   it('AC: a registered user with NO guest session at all can submit — 201, owned by their account, visible to it, and no guest session is created', async () => {
     const account = await registerTestAccount();

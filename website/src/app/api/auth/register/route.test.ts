@@ -17,7 +17,7 @@ import { REGISTERED_SESSION_COOKIE_NAME } from '@/lib/registered-session-cookie'
 import { MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
 import { registeredSessionTokenSchema, type GuestActor } from '@/lib/contracts/actor';
 import { CONSENT_KINDS, CURRENT_CONSENT_VERSIONS } from '@/lib/contracts/consent';
-import { resetDatabase, closePool } from '@/test/db-fixtures';
+import { resetDatabase, countGuestSessions, closePool } from '@/test/db-fixtures';
 import { TEST_PASSWORD, registerTestAccount, registrationBody, uniqueEmail } from '@/test/auth-fixtures';
 import { attributeValue, cookieAttributes, jsonPost, setCookieLine, setCookieValue, xff } from '@/test/auth-requests';
 
@@ -164,6 +164,32 @@ describe('POST /api/auth/register — the guest becomes the user (KAN-20)', () =
 
   it('a registration with no guest cookie still succeeds', async () => {
     expect((await POST(jsonPost(PATH, registrationBody()))).status).toBe(201);
+  });
+
+  // The guest cookie is parsed and offered to conversion, never RESOLVED:
+  // `resolveGuestSession` mints a row for a missing or unusable cookie, which
+  // would make this route an unauthenticated guest-session issuer. Only a row
+  // count sees it (the login route pins the same property).
+  describe('registration never mints a guest session — the cookie is parsed, not resolved', () => {
+    it('a SUCCESSFUL registration presenting no guest cookie leaves guest_sessions unchanged', async () => {
+      const before = await countGuestSessions();
+
+      const response = await POST(jsonPost(PATH, registrationBody()));
+
+      expect(response.status).toBe(201);
+      expect(await countGuestSessions()).toBe(before);
+    });
+
+    it('a REJECTED registration presenting a malformed guest cookie leaves guest_sessions unchanged', async () => {
+      const before = await countGuestSessions();
+
+      const response = await POST(
+        jsonPost(PATH, registrationBody({ email: 'not-an-email' }), { cookies: { [GUEST_SESSION_COOKIE_NAME]: 'not-a-session-id' } }),
+      );
+
+      expect(response.status).toBe(400);
+      expect(await countGuestSessions()).toBe(before);
+    });
   });
 
   it('a guest cookie naming a session that already converted still registers (two tabs) and takes nothing from the first user', async () => {

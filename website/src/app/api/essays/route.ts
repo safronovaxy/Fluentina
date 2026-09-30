@@ -41,10 +41,22 @@ import { readBoundedJsonBody } from '@/lib/request-body';
  *      resolved, nothing minted.
  *
  * The order is not a preference. A converted user's stale guest cookie still
- * names a real (converted) session row, and building a `GuestActor` from it
- * first would create the very orphan this story exists to remove. A test pins
- * "the registered session wins even when the request also carries a valid guest
- * cookie" — do not resolve a guest session ahead of, or as well as, the account.
+ * names a real (converted) session row. `createEssay`'s post-conversion branch
+ * means a `GuestActor` built from it would still INSERT a correctly-owned essay
+ * (that is no longer the hazard), but everything downstream of the insert would
+ * treat the submitter as the guest they no longer are:
+ *
+ *   - `startGrading(guestActor, …)` applies `ownedBy(guestActor)` to a row whose
+ *     `session_id` is NULL: zero rows, so it logs and returns WITHOUT enqueuing.
+ *     The submitter gets a 201 for an essay that is never graded;
+ *   - `reportAccessFor(guestActor)` is `'locked'`, so a registered owner sees
+ *     only the teaser of their own grade;
+ *   - the BR-1.8 bucket would key on `essaySubmission:session:<id>`, so keeping
+ *     a stale guest cookie would dodge the per-user cap.
+ *
+ * A test pins "the registered session wins even when the request also carries a
+ * valid guest cookie" — do not resolve a guest session ahead of, or as well as,
+ * the account.
  *
  * KAN-31: every rejection below carries a `reason` code alongside its status and
  * message — drawn from the single union in `lib/contracts/rejection-reason.ts`,
@@ -149,9 +161,11 @@ import { readBoundedJsonBody } from '@/lib/request-body';
  * last, after the raw body was already buffered and parsed. An anonymous
  * caller presenting no cookie at all costs this route nothing beyond the two
  * cheap header checks: no bytes read off the wire, no JSON parse. A caller
- * presenting a well-formed registered-session cookie costs one indexed
- * `sessions` read before that (KAN-52) — a malformed or absent one never
- * reaches the database. This also matters for KAN-25, which wants the actor in
+ * presenting a well-formed 64-hex cookie costs one indexed `sessions` read
+ * (and, for a live session past its refresh window, one `touchSession` write)
+ * before any cap applies (KAN-52) — a malformed or absent one never reaches the
+ * database. That cost is unavoidable (a per-owner bucket cannot be keyed before
+ * the owner is known) and is bounded by Cloud Armor's per-IP ban. This also matters for KAN-25, which wants the actor in
  * hand before the route does any work on an anonymous caller's behalf.
  *
  * KAN-25: the rate-limit check runs immediately after that actor guard, ahead

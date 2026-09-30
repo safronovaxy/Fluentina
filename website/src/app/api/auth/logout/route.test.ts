@@ -2,12 +2,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { POST } from './route';
 import { db } from '@/lib/db/client';
-import { createSession } from '@/lib/db/sessions';
 import { sessions } from '@/lib/db/schema';
 import { resolveRegisteredSession } from '@/lib/domain/registered-session';
 import { generateRegisteredSessionToken, hashRegisteredSessionToken } from '@/lib/domain/registered-session-token';
 import { REGISTERED_SESSION_COOKIE_NAME } from '@/lib/registered-session-cookie';
-import { resetDatabase, closePool } from '@/test/db-fixtures';
+import { resetDatabase, createTestSession, closePool } from '@/test/db-fixtures';
 import { registerTestAccount } from '@/test/auth-fixtures';
 import { attributeValue, bodilessPost, cookieAttributes, setCookieLine, setCookieValue } from '@/test/auth-requests';
 
@@ -72,7 +71,7 @@ describe('POST /api/auth/logout', () => {
     // A real second session for the SAME account, minted the way a second
     // sign-in would: a fresh token, a fresh row, one `user_id`.
     const secondDevice = generateRegisteredSessionToken();
-    await createSession({ kind: 'user', userId: account.userId }, hashRegisteredSessionToken(secondDevice));
+    await createTestSession({ kind: 'user', userId: account.userId }, hashRegisteredSessionToken(secondDevice));
 
     await POST(bodilessPost(PATH, withSession(account.token)));
 

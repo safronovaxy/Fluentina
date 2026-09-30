@@ -8,13 +8,12 @@ import { createEssay, getEssayById } from '@/lib/db/essays';
 import { createGuestSession, getGuestSessionById } from '@/lib/db/guest-sessions';
 import { generateGuestSessionId } from './session-id';
 import { findUserForLogin } from '@/lib/db/users';
-import { createSession } from '@/lib/db/sessions';
 import { login, type LoginContext } from './login';
 import { verifyPassword } from './password';
 import { generateRegisteredSessionToken, hashRegisteredSessionToken } from './registered-session-token';
 import { loginRequestSchema } from '@/lib/contracts/auth';
 import type { GuestActor, RegisteredSessionToken } from '@/lib/contracts/actor';
-import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import { resetDatabase, createTestSession, createTestUser, closePool } from '@/test/db-fixtures';
 import { TEST_PASSWORD, registerTestAccount, uniqueEmail } from '@/test/auth-fixtures';
 
 // Counts real scrypt derivations while still running them: this file's whole
@@ -283,7 +282,7 @@ describe('sessions the sweep leaves alone', () => {
   it('sweeping on sign-in removes an expired session but never a live one', async () => {
     const account = await registerTestAccount();
     const expired = hashRegisteredSessionToken(generateRegisteredSessionToken());
-    await createSession({ kind: 'user', userId: account.userId }, expired);
+    await createTestSession({ kind: 'user', userId: account.userId }, expired);
     await db.execute(sql`UPDATE fluentina.sessions SET expires_at = now() - interval '1 day' WHERE id = ${expired}`);
 
     await login(request(account.email, account.password), ANONYMOUS);

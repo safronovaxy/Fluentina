@@ -18,7 +18,7 @@ import { MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
 import { emailSchema } from '@/lib/contracts/auth';
 import { registeredSessionTokenSchema, type GuestActor } from '@/lib/contracts/actor';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
-import { resetDatabase, closePool } from '@/test/db-fixtures';
+import { resetDatabase, countGuestSessions, closePool } from '@/test/db-fixtures';
 import { TEST_PASSWORD, registerTestAccount } from '@/test/auth-fixtures';
 import { attributeValue, cookieAttributes, jsonPost, setCookieLine, setCookieValue, xff } from '@/test/auth-requests';
 
@@ -198,8 +198,9 @@ describe('POST /api/auth/login — sign-in adopts the guest essay the browser ho
     });
   });
 
-  it('treats a MALFORMED guest cookie as absent: signs in normally, adopts nothing, and still clears it', async () => {
+  it('treats a MALFORMED guest cookie as absent: signs in normally, adopts nothing (the guest keeps their essay), and still clears it', async () => {
     const account = await registerTestAccount();
+    const { guest, essay } = await guestWithEssay();
 
     const response = await POST(
       jsonPost(PATH, { email: account.email, password: account.password }, { cookies: { [GUEST_SESSION_COOKIE_NAME]: 'not-a-session-id' } }),
@@ -207,6 +208,40 @@ describe('POST /api/auth/login — sign-in adopts the guest essay the browser ho
 
     expect(response.status).toBe(200);
     expect(attributeValue(setCookieLine(response, GUEST_SESSION_COOKIE_NAME)!, 'Max-Age')).toBe('0');
+    // The essay exists under a real guest session the cookie did not name: nothing was adopted.
+    expect(await getEssayById({ kind: 'user', userId: account.userId }, essay.id)).toBeNull();
+    expect((await getEssayById(guest, essay.id))?.id).toBe(essay.id);
+  });
+
+  // "Read here and offered to adoption, never RESOLVED": `resolveGuestSession`
+  // mints a `guest_sessions` row for a missing or unusable cookie, so a route
+  // that resolved instead of parsing would be a second unauthenticated
+  // guest-session issuer, one row per attempt — 401s and 429s included, because
+  // the cookie is read before the rate limit. Only a row count sees it: the
+  // response looks identical either way. (The same property the essays route
+  // pins, and `/api/guest-session` took three review rounds to arrive at.)
+  describe('a sign-in never mints a guest session — the cookie is parsed, not resolved', () => {
+    it('a SUCCESSFUL sign-in presenting no guest cookie leaves guest_sessions unchanged', async () => {
+      const account = await registerTestAccount();
+      const before = await countGuestSessions();
+
+      const response = await POST(jsonPost(PATH, { email: account.email, password: account.password }));
+
+      expect(response.status).toBe(200);
+      expect(await countGuestSessions()).toBe(before);
+    });
+
+    it('a FAILED sign-in presenting a malformed guest cookie leaves guest_sessions unchanged', async () => {
+      const account = await registerTestAccount();
+      const before = await countGuestSessions();
+
+      const response = await POST(
+        jsonPost(PATH, { email: account.email, password: 'not the password' }, { cookies: { [GUEST_SESSION_COOKIE_NAME]: 'not-a-session-id' } }),
+      );
+
+      expect(response.status).toBe(401);
+      expect(await countGuestSessions()).toBe(before);
+    });
   });
 
   it('a guest cookie naming a session that does not exist signs in normally', async () => {

@@ -86,8 +86,7 @@ export async function login(request: LoginRequest, context: LoginContext): Promi
   const presented = context.presentedSessionToken ? await findPresentedSession(context.presentedSessionToken) : null;
 
   const token = generateRegisteredSessionToken();
-  await signInUser({
-    userId: candidate.id,
+  await signInUser(actor, {
     guest: context.guestSessionId ? { kind: 'guest', sessionId: context.guestSessionId } : null,
     sessionTokenHash: hashRegisteredSessionToken(token),
     replacing: presented ? { actor: presented.actor, tokenHash: presented.tokenHash } : null,

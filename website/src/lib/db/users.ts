@@ -118,8 +118,6 @@ export async function registerUser(input: RegisterUserInput): Promise<RegisterUs
 }
 
 export interface SignInUserInput {
-  /** The verified account — the caller has already checked the password. */
-  readonly userId: string;
   /** The guest whose session and essays the account adopts, if the request carried a well-formed guest cookie. */
   readonly guest: GuestActor | null;
   /** Hash of the freshly generated token for this sign-in's session. */
@@ -159,20 +157,25 @@ export interface SignInUserResult {
  * gives: an error inside a transaction aborts it, so best-effort housekeeping
  * cannot live in here.
  *
+ * `actor` is the verified account — the caller has already checked the
+ * password — and is the mandatory first parameter like every other function
+ * here that acts on one user's rows (sessions.ts's header lists the closed set
+ * of exceptions; this is not one of them).
+ *
  * `nothingToConvert` is returned but must never be counted as a conversion
  * metric — retention deletion produces it too (see `GuestConversionOutcome`).
  */
-export async function signInUser(input: SignInUserInput): Promise<SignInUserResult> {
+export async function signInUser(actor: UserActor, input: SignInUserInput): Promise<SignInUserResult> {
   const result = await db.transaction(async (tx) => {
     if (input.replacing) {
       await deleteSessionWithin(tx, input.replacing.actor, input.replacing.tokenHash);
     }
 
     const guestConversion = input.guest
-      ? await convertGuestSessionToUserWithin(tx, input.guest, input.userId)
+      ? await convertGuestSessionToUserWithin(tx, input.guest, actor.userId)
       : 'nothingToConvert';
 
-    await insertSessionWithin(tx, { kind: 'user', userId: input.userId }, input.sessionTokenHash);
+    await insertSessionWithin(tx, actor, input.sessionTokenHash);
 
     return { guestConversion } as const;
   });

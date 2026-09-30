@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { eq } from 'drizzle-orm';
@@ -198,6 +198,29 @@ describe('createEssay — a registered user (KAN-52)', () => {
     await createEssay(user, 'No guest_sessions row exists anywhere in this database.');
 
     expect(await db.select().from(guestSessions)).toHaveLength(0);
+  });
+
+  // The account IS the owner: there is no session row whose conversion state
+  // could race this write, so there is nothing to lock and no reason to open a
+  // transaction (which would hold a pooled connection and, were it to lock the
+  // users row, contend with the essays->users foreign key's own row lock). A
+  // spy, not a lock probe: a guest write opens exactly one transaction, so this
+  // fails if the user branch ever starts taking the guest branch's shape.
+  it('opens no transaction and takes no lock: a single insert, unlike the guest branch', async () => {
+    const user = await newUserActor();
+    const spy = vi.spyOn(db, 'transaction');
+
+    try {
+      await createEssay(user, 'An account-owned write has no session row to serialise against.');
+      expect(spy).not.toHaveBeenCalled();
+
+      const guest = newGuestActor();
+      await createGuestSession(guest);
+      await createEssay(guest, 'Control: a guest write does open a transaction.');
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('is invisible to a guest — including one whose own session has essays — and to another user', async () => {

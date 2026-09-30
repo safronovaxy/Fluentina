@@ -123,11 +123,13 @@ export const essays = fluentinaSchema.table(
     // — i.e. its unconverted essays. Nulling this at conversion is also what
     // takes a registered user's essays out of that cascade altogether, so the
     // sweep guard is no longer the only thing between a retention sweep and
-    // an account's history. It is still required, not redundant: a retention
-    // sweep that deletes guest_sessions rows older than N days (KAN-10's own
-    // scope stops short of writing that sweep) must exclude converted
-    // sessions (`converted_at IS NULL`), or it deletes a session row that an
-    // account's `guest_sessions.user_id` still points at.
+    // an account's history. The guard is still required, but what it now
+    // protects is the conversion record, not the account's essays (those left
+    // the cascade when this column started being nulled): a retention sweep
+    // that deletes guest_sessions rows older than N days (KAN-10's own scope
+    // stops short of writing that sweep) must exclude converted sessions
+    // (`converted_at IS NULL`), or it deletes a session row that an account's
+    // `guest_sessions.user_id` still points at.
     sessionId: text('session_id').references(() => guestSessions.id, { onDelete: 'cascade' }),
     // Null while a guest owns the row. Set at conversion, or at creation for
     // an essay a registered user submits directly. Cascades on account

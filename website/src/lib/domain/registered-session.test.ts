@@ -3,12 +3,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { eq, sql } from 'drizzle-orm';
 import { db } from '@/lib/db/client';
 import { sessions } from '@/lib/db/schema';
-import { createSession } from '@/lib/db/sessions';
 import { endRegisteredSession, resolveRegisteredSession } from './registered-session';
 import { generateRegisteredSessionToken, hashRegisteredSessionToken } from './registered-session-token';
 import { REGISTERED_SESSION_COOKIE_NAME } from '@/lib/registered-session-cookie';
 import { generateGuestSessionId } from './session-id';
-import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import { resetDatabase, createTestSession, createTestUser, closePool } from '@/test/db-fixtures';
 import type { RegisteredSessionToken } from '@/lib/contracts/actor';
 
 /**
@@ -19,7 +18,7 @@ import type { RegisteredSessionToken } from '@/lib/contracts/actor';
 async function signedIn(): Promise<{ userId: string; token: RegisteredSessionToken }> {
   const userId = await createTestUser();
   const token = generateRegisteredSessionToken();
-  await createSession({ kind: 'user', userId }, hashRegisteredSessionToken(token));
+  await createTestSession({ kind: 'user', userId }, hashRegisteredSessionToken(token));
   return { userId, token };
 }
 
@@ -142,7 +141,7 @@ describe('endRegisteredSession — logout deletes the row', () => {
   it('deletes only the session presented, leaving the same user\'s other sessions signed in', async () => {
     const { userId, token } = await signedIn();
     const other = generateRegisteredSessionToken();
-    await createSession({ kind: 'user', userId }, hashRegisteredSessionToken(other));
+    await createTestSession({ kind: 'user', userId }, hashRegisteredSessionToken(other));
 
     await endRegisteredSession(token);
 
