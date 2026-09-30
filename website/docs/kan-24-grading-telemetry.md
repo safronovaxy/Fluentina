@@ -10,7 +10,7 @@ carries:
 | field | meaning |
 | --- | --- |
 | `submissionId` | the essay id — join key to the Postgres ADR-5 persistence (raw prompt/response, structured result) in `grading_jobs` |
-| `sessionIdHash` | a one-way, truncated hash of the guest session id — a correlation key across a guest's own jobs, never the raw bearer credential |
+| `sessionIdHash` | a one-way, truncated hash of the guest session id — a correlation key across a guest's own jobs, never the raw bearer credential. Null for every essay an ACCOUNT owns (since KAN-52, `essays.session_id` is NULL there, so `submissionId` is the only join key for a registered user's job) |
 | `provider` | `mistral` / `fake`, or `null` if the job never reached a provider call (e.g. `wordCountOutOfBounds`) |
 | `latencyMs` | submission (`grading_jobs.created_at`) -> grading complete — BR-5.2's own metric |
 | `success` | boolean |

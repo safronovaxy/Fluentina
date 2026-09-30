@@ -4,17 +4,21 @@ import { createHash } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { POST } from './route';
 import { db } from '@/lib/db/client';
-import { rateLimitCounters, sessions } from '@/lib/db/schema';
+import { essays, rateLimitCounters, sessions } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
 import { resolveRegisteredSession } from '@/lib/domain/registered-session';
+import { resolveOwnerActor } from '@/lib/domain/owner-actor';
+import { createEssay, getEssayById } from '@/lib/db/essays';
+import { createGuestSession } from '@/lib/db/guest-sessions';
 import { hashRegisteredSessionToken } from '@/lib/domain/registered-session-token';
 import { LOGIN_EMAIL_LIMIT, LOGIN_IP_LIMIT, checkLoginRateLimit } from '@/lib/domain/rate-limit';
 import { GUEST_SESSION_COOKIE_NAME } from '@/lib/guest-session-cookie';
 import { REGISTERED_SESSION_COOKIE_NAME } from '@/lib/registered-session-cookie';
 import { MAX_REQUEST_BODY_BYTES } from '@/lib/contracts/essay-submission';
 import { emailSchema } from '@/lib/contracts/auth';
-import { registeredSessionTokenSchema } from '@/lib/contracts/actor';
+import { registeredSessionTokenSchema, type GuestActor } from '@/lib/contracts/actor';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
-import { resetDatabase, closePool } from '@/test/db-fixtures';
+import { resetDatabase, countGuestSessions, closePool } from '@/test/db-fixtures';
 import { TEST_PASSWORD, registerTestAccount } from '@/test/auth-fixtures';
 import { attributeValue, cookieAttributes, jsonPost, setCookieLine, setCookieValue, xff } from '@/test/auth-requests';
 
@@ -81,16 +85,6 @@ describe('POST /api/auth/login — success', () => {
     expect(response.status).toBe(200);
   });
 
-  it('does not touch the guest cookie', async () => {
-    const account = await registerTestAccount();
-
-    const response = await POST(
-      jsonPost(PATH, { email: account.email, password: account.password }, { cookies: { [GUEST_SESSION_COOKIE_NAME]: generateGuestSessionId() } }),
-    );
-
-    expect(setCookieLine(response, GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
-  });
-
   it('ROTATES the session: the presented token\'s row is deleted and a different token is issued', async () => {
     const account = await registerTestAccount();
     const [oldRow] = await db.select().from(sessions);
@@ -106,6 +100,171 @@ describe('POST /api/auth/login — success', () => {
     expect(ids).toEqual([hashRegisteredSessionToken(registeredSessionTokenSchema.parse(fresh))]);
     // The old cookie no longer authenticates anyone.
     expect(await resolveRegisteredSession((name) => (name === REGISTERED_SESSION_COOKIE_NAME ? account.token : undefined))).toBeNull();
+  });
+});
+
+describe('POST /api/auth/login — sign-in adopts the guest essay the browser holds (KAN-52)', () => {
+  async function guestWithEssay() {
+    const guest: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
+    await createGuestSession(guest);
+    const essay = await createEssay(guest, 'Ein Aufsatz, geschrieben als Gast, bevor man sich anmeldet.');
+    return { guest, essay };
+  }
+  const guestCookie = (guest: GuestActor) => ({ [GUEST_SESSION_COOKIE_NAME]: guest.sessionId });
+
+  it('the account signed into can read the guest essay afterwards, and the old guest cookie cannot', async () => {
+    const account = await registerTestAccount();
+    const { guest, essay } = await guestWithEssay();
+    expect(await getEssayById({ kind: 'user', userId: account.userId }, essay.id)).toBeNull();
+
+    const response = await POST(jsonPost(PATH, { email: account.email, password: account.password }, { cookies: guestCookie(guest) }));
+
+    expect(response.status).toBe(200);
+    const token = setCookieValue(setCookieLine(response, REGISTERED_SESSION_COOKIE_NAME)!);
+    // The same resolution every read route uses, from the cookies this response set.
+    const actor = await resolveOwnerActor((name) => ({ [REGISTERED_SESSION_COOKIE_NAME]: token })[name]);
+    expect(actor).toEqual({ kind: 'user', userId: account.userId });
+    expect((await getEssayById(actor!, essay.id))?.id).toBe(essay.id);
+    expect(await getEssayById(guest, essay.id)).toBeNull();
+    const [row] = await db.select().from(essays).where(eq(essays.id, essay.id));
+    expect(row.userId).toBe(account.userId);
+    expect(row.sessionId).toBeNull();
+  });
+
+  describe('the guest cookie is DELETED on success', () => {
+    it('sends it back with an empty value, Max-Age=0 and EXACTLY the attributes it was set with — a __Host- cookie is not cleared by a delete that omits Secure or Path=/', async () => {
+      const account = await registerTestAccount();
+      const { guest } = await guestWithEssay();
+
+      const response = await POST(jsonPost(PATH, { email: account.email, password: account.password }, { cookies: guestCookie(guest) }));
+
+      const line = setCookieLine(response, GUEST_SESSION_COOKIE_NAME);
+      expect(line).toBeDefined();
+      expect(setCookieValue(line!)).toBe('');
+      expect(attributeValue(line!, 'Max-Age')).toBe('0');
+      // No `Domain`, which __Host- forbids; Secure, Path=/ and the rest, which it requires.
+      expect(cookieAttributes(line!).sort()).toEqual(['httponly', 'max-age', 'path', 'samesite', 'secure']);
+      expect(attributeValue(line!, 'Path')).toBe('/');
+      expect(attributeValue(line!, 'SameSite')?.toLowerCase()).toBe('lax');
+    });
+
+    it('clears it whether or not a guest cookie was presented, and whether or not it named a session', async () => {
+      const account = await registerTestAccount();
+
+      const withNone = await POST(jsonPost(PATH, { email: account.email, password: account.password }));
+      const withOrphan = await POST(
+        jsonPost(PATH, { email: account.email, password: account.password }, { cookies: { [GUEST_SESSION_COOKIE_NAME]: generateGuestSessionId() } }),
+      );
+
+      for (const response of [withNone, withOrphan]) {
+        expect(attributeValue(setCookieLine(response, GUEST_SESSION_COOKIE_NAME)!, 'Max-Age')).toBe('0');
+      }
+    });
+
+    it('does NOT clear it, and does not adopt, when the credentials are wrong — a mistyped password must not cost a guest their essay', async () => {
+      const account = await registerTestAccount();
+      const { guest, essay } = await guestWithEssay();
+
+      const response = await POST(jsonPost(PATH, { email: account.email, password: 'not the password' }, { cookies: guestCookie(guest) }));
+
+      expect(response.status).toBe(401);
+      expect(setCookieLine(response, GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
+      expect((await getEssayById(guest, essay.id))?.id).toBe(essay.id);
+    });
+
+    it('does NOT clear it on a 429 — only a committed sign-in clears it', async () => {
+      const account = await registerTestAccount();
+      const { guest } = await guestWithEssay();
+      for (let i = 0; i < LOGIN_EMAIL_LIMIT; i++) await checkLoginRateLimit(emailSchema.parse(account.email), null);
+
+      const limited = await POST(jsonPost(PATH, { email: account.email, password: account.password }, { cookies: guestCookie(guest) }));
+
+      expect(limited.status).toBe(429);
+      expect(setCookieLine(limited, GUEST_SESSION_COOKIE_NAME)).toBeUndefined();
+    });
+
+    it('does NOT clear it on a 500 from the sign-in transaction, and the guest can still read their essay (nothing was adopted)', async () => {
+      const account = await registerTestAccount();
+      const { guest, essay } = await guestWithEssay();
+      vi.spyOn(db, 'transaction').mockRejectedValue(new Error('down'));
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const response = await POST(jsonPost(PATH, { email: account.email, password: account.password }, { cookies: guestCookie(guest) }));
+
+      expect(response.status).toBe(500);
+      expect(response.headers.getSetCookie()).toEqual([]);
+      vi.restoreAllMocks();
+      expect((await getEssayById(guest, essay.id))?.id).toBe(essay.id);
+    });
+  });
+
+  it('treats a MALFORMED guest cookie as absent: signs in normally, adopts nothing (the guest keeps their essay), and still clears it', async () => {
+    const account = await registerTestAccount();
+    const { guest, essay } = await guestWithEssay();
+
+    const response = await POST(
+      jsonPost(PATH, { email: account.email, password: account.password }, { cookies: { [GUEST_SESSION_COOKIE_NAME]: 'not-a-session-id' } }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(attributeValue(setCookieLine(response, GUEST_SESSION_COOKIE_NAME)!, 'Max-Age')).toBe('0');
+    // The essay exists under a real guest session the cookie did not name: nothing was adopted.
+    expect(await getEssayById({ kind: 'user', userId: account.userId }, essay.id)).toBeNull();
+    expect((await getEssayById(guest, essay.id))?.id).toBe(essay.id);
+  });
+
+  // "Read here and offered to adoption, never RESOLVED": `resolveGuestSession`
+  // mints a `guest_sessions` row for a missing or unusable cookie, so a route
+  // that resolved instead of parsing would be a second unauthenticated
+  // guest-session issuer, one row per attempt — 401s and 429s included, because
+  // the cookie is read before the rate limit. Only a row count sees it: the
+  // response looks identical either way. (The same property the essays route
+  // pins, and `/api/guest-session` took three review rounds to arrive at.)
+  describe('a sign-in never mints a guest session — the cookie is parsed, not resolved', () => {
+    it('a SUCCESSFUL sign-in presenting no guest cookie leaves guest_sessions unchanged', async () => {
+      const account = await registerTestAccount();
+      const before = await countGuestSessions();
+
+      const response = await POST(jsonPost(PATH, { email: account.email, password: account.password }));
+
+      expect(response.status).toBe(200);
+      expect(await countGuestSessions()).toBe(before);
+    });
+
+    it('a FAILED sign-in presenting a malformed guest cookie leaves guest_sessions unchanged', async () => {
+      const account = await registerTestAccount();
+      const before = await countGuestSessions();
+
+      const response = await POST(
+        jsonPost(PATH, { email: account.email, password: 'not the password' }, { cookies: { [GUEST_SESSION_COOKIE_NAME]: 'not-a-session-id' } }),
+      );
+
+      expect(response.status).toBe(401);
+      expect(await countGuestSessions()).toBe(before);
+    });
+  });
+
+  it('a guest cookie naming a session that does not exist signs in normally', async () => {
+    const account = await registerTestAccount();
+
+    const response = await POST(
+      jsonPost(PATH, { email: account.email, password: account.password }, { cookies: { [GUEST_SESSION_COOKIE_NAME]: generateGuestSessionId() } }),
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it('the guest cookie plays no part in the rate-limit key: rotating guest cookies gets no fresh bucket', async () => {
+    const account = await registerTestAccount();
+    for (let i = 0; i < LOGIN_EMAIL_LIMIT; i++) {
+      await POST(jsonPost(PATH, { email: account.email, password: 'not the password' }, { cookies: { [GUEST_SESSION_COOKIE_NAME]: generateGuestSessionId() } }));
+    }
+
+    const response = await POST(
+      jsonPost(PATH, { email: account.email, password: account.password }, { cookies: { [GUEST_SESSION_COOKIE_NAME]: generateGuestSessionId() } }),
+    );
+
+    expect(response.status).toBe(429);
   });
 });
 

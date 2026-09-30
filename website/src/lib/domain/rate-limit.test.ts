@@ -1,9 +1,12 @@
 /** @vitest-environment node */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import {
-  checkEssaySubmissionRateLimit,
+  checkEssaySubmissionRateLimit as checkEssaySubmissionRateLimitForOwner,
   checkGuestSessionResolveRateLimit,
   ESSAY_SUBMISSION_SESSION_LIMIT,
+  ESSAY_SUBMISSION_USER_LIMIT,
+  ESSAY_SUBMISSION_USER_WINDOW_MS,
   ESSAY_SUBMISSION_SESSION_WINDOW_MS,
   ESSAY_SUBMISSION_IP_LIMIT,
   ESSAY_SUBMISSION_IP_WINDOW_MS,
@@ -14,7 +17,17 @@ import {
   positiveIntEnv,
 } from './rate-limit';
 import { generateGuestSessionId } from './session-id';
-import { resetDatabase, closePool } from '@/test/db-fixtures';
+import { db } from '@/lib/db/client';
+import { rateLimitCounters } from '@/lib/db/schema';
+import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import type { GuestSessionId, UserActor } from '@/lib/contracts/actor';
+
+// KAN-52: `checkEssaySubmissionRateLimit` now takes an `OwnerActor`. Every test
+// from the KAN-25 suite below is about the GUEST session bucket and keeps its
+// original shape through this shorthand; the registered-user tests call the real
+// function with a `UserActor` directly, further down.
+const checkEssaySubmissionRateLimit = (sessionId: GuestSessionId, ip: string | null, now?: Date) =>
+  checkEssaySubmissionRateLimitForOwner({ kind: 'guest', sessionId }, ip, now);
 
 beforeAll(async () => {
   await resetDatabase();
@@ -591,6 +604,102 @@ describe('positiveIntEnv — warns exactly when a PRESENT value is rejected, nev
     } finally {
       warnSpy.mockRestore();
       vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('checkEssaySubmissionRateLimit — a REGISTERED user is capped at five per hour too (KAN-52, BR-1.8)', () => {
+  async function newUser(): Promise<UserActor> {
+    return { kind: 'user', userId: await createTestUser() };
+  }
+  const submit = (actor: UserActor, ip: string | null, now: Date = FIXED_NOW) =>
+    checkEssaySubmissionRateLimitForOwner(actor, ip, now);
+
+  it('the user cap is exactly five per hour — the same number as the guest cap, pinned against the ticket, not the module', () => {
+    expect(ESSAY_SUBMISSION_USER_LIMIT).toBe(5);
+    expect(ESSAY_SUBMISSION_USER_WINDOW_MS).toBe(60 * 60 * 1000);
+  });
+
+  it('allows five and refuses the sixth — from six DIFFERENT addresses, so only the per-user bucket can be the thing that refused', async () => {
+    // A distinct IP per call keeps every per-IP counter at 1, far under 120. If
+    // the limiter keyed a `UserActor` on the IP alone (the bug this story closes:
+    // a registered user has no guest cookie to key on), the sixth call would pass.
+    const user = await newUser();
+
+    const results: boolean[] = [];
+    for (let i = 0; i < ESSAY_SUBMISSION_USER_LIMIT + 1; i++) {
+      results.push(await submit(user, `192.0.2.${i + 1}`));
+    }
+
+    expect(results).toEqual([true, true, true, true, true, false]);
+  });
+
+  it('the same five-per-hour holds for a user with NO ip (clientIp null) — the per-user bucket is never skipped', async () => {
+    const user = await newUser();
+
+    const results: boolean[] = [];
+    for (let i = 0; i < 6; i++) results.push(await submit(user, null));
+
+    expect(results).toEqual([true, true, true, true, true, false]);
+  });
+
+  it('is per user: one user exhausting their five does not refuse another user on the very same address', async () => {
+    const heavy = await newUser();
+    const other = await newUser();
+    for (let i = 0; i < 6; i++) await submit(heavy, '198.51.100.7');
+
+    expect(await submit(heavy, '198.51.100.7')).toBe(false);
+    expect(await submit(other, '198.51.100.7')).toBe(true);
+  });
+
+  it('counts in its own bucket, keyed on the user id — a user and a guest session never share a counter', async () => {
+    const user = await newUser();
+    await submit(user, null);
+
+    const rows = await db.select().from(rateLimitCounters).where(eq(rateLimitCounters.bucketKey, `essaySubmission:user:${user.userId}`));
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].count).toBe(1);
+    // and nothing under a session key was written for this actor
+    const all = await db.select().from(rateLimitCounters);
+    expect(all.some((r) => r.bucketKey.startsWith('essaySubmission:session:'))).toBe(false);
+  });
+
+  it('always increments BOTH counters, win or lose: a refused user request still counts against the address', async () => {
+    const user = await newUser();
+    const ip = '192.0.2.77';
+    for (let i = 0; i < 8; i++) await submit(user, ip); // 5 pass, 3 refused by the user bucket
+
+    const [ipRow] = await db.select().from(rateLimitCounters).where(eq(rateLimitCounters.bucketKey, `essaySubmission:ip:${ip}`));
+    const [userRow] = await db.select().from(rateLimitCounters).where(eq(rateLimitCounters.bucketKey, `essaySubmission:user:${user.userId}`));
+    expect(ipRow.count).toBe(8);
+    expect(userRow.count).toBe(8);
+  });
+
+  it('opens a fresh window each hour, like the guest bucket', async () => {
+    const user = await newUser();
+    const topOfHour = new Date('2026-01-01T13:00:00.000Z');
+    const oneMsBeforeHourEnds = new Date(topOfHour.getTime() - 1);
+    for (let i = 0; i < 6; i++) await submit(user, null, oneMsBeforeHourEnds);
+
+    expect(await submit(user, null, oneMsBeforeHourEnds)).toBe(false);
+    expect(await submit(user, null, topOfHour)).toBe(true);
+  });
+
+  it('logs the refusal with scope "user" and a hashed identity — never the raw user id', async () => {
+    const user = await newUser();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 6; i++) await submit(user, null);
+
+      const lines = logSpy.mock.calls.map((call) => String(call[0])).filter((l) => l.includes('rate_limit_refused'));
+      expect(lines).toHaveLength(1);
+      const line = JSON.parse(lines[0]);
+      expect(line).toMatchObject({ action: 'essaySubmission', scope: 'user', limit: 5, count: 6 });
+      expect(line.identityHash).toMatch(/^[0-9a-f]{12}$/);
+      expect(lines[0]).not.toContain(user.userId);
+    } finally {
+      logSpy.mockRestore();
     }
   });
 });

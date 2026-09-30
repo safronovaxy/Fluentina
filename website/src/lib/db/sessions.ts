@@ -94,9 +94,13 @@ export async function findLiveSessionUserId(tokenHash: RegisteredSessionTokenHas
  * before authentication is never the one that carries the authenticated
  * session.
  *
- * Takes the caller's `Executor` so registration can include it in the one
- * transaction with the user, the consent rows and the guest conversion. Does
- * NOT sweep: an error inside a transaction aborts it, so a best-effort sweep
+ * Takes the caller's `Executor` so registration and `signInUser` can include
+ * it in the one transaction with the user, the consent rows and the guest
+ * conversion. There is deliberately no standalone insert-then-sweep
+ * `createSession`: sign-in used to be exactly that (two writes, not atomic with
+ * the adoption), and `signInUser` (users.ts) is now the ONLY sign-in path. A
+ * story that mints a session some other way composes this into its own
+ * transaction instead. Does NOT sweep: an error inside a transaction aborts it, so a best-effort sweep
  * cannot live in here — see `sweepExpiredSessions`.
  *
  * `expires_at` is computed by Postgres (`now() + 30 days`), the same clock
@@ -189,14 +193,4 @@ export async function sweepExpiredSessionsBestEffort(): Promise<void> {
   } catch {
     console.warn(JSON.stringify({ severity: 'WARNING', event: 'session_sweep_failed' }));
   }
-}
-
-/**
- * Standalone session creation for the sign-in path (registration inserts
- * through `insertSessionWithin` inside its own transaction instead): insert,
- * then sweep.
- */
-export async function createSession(actor: UserActor, tokenHash: RegisteredSessionTokenHash): Promise<void> {
-  await insertSessionWithin(db, actor, tokenHash);
-  await sweepExpiredSessionsBestEffort();
 }

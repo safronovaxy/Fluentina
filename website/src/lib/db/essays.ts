@@ -13,14 +13,15 @@ import { essays, guestSessions } from './schema';
 import { ownedBy } from './ownership';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import type { Essay } from '@/lib/contracts/essay';
-import type { GuestActor, OwnerActor, SystemActor } from '@/lib/contracts/actor';
+import type { OwnerActor, SystemActor } from '@/lib/contracts/actor';
 
 function toEssay(row: typeof essays.$inferSelect): Essay {
   return {
     id: row.id,
     // The one explicit conversion from a raw database string to the branded
     // `GuestSessionId` — see the brand comment on `guestSessionIdSchema`.
-    sessionId: guestSessionIdSchema.parse(row.sessionId),
+    // NULL for every account-owned essay (KAN-52): `parse(null)` would throw.
+    sessionId: row.sessionId === null ? null : guestSessionIdSchema.parse(row.sessionId),
     userId: row.userId,
     content: row.content,
     createdAt: row.createdAt,
@@ -28,31 +29,46 @@ function toEssay(row: typeof essays.$inferSelect): Essay {
 }
 
 /**
- * Creates an essay under a guest session. Every essay originates under a
- * session (KAN-10 scope: "guest sessions, and essays associated with a
- * session") — `actor` is a `GuestActor` specifically, not the wider
- * `OwnerActor`, because an essay's `user_id` is only ever populated later,
- * in bulk, by `convertGuestSessionToUser` — never set directly at creation.
- * A registered user has no separate "create an essay as myself" path here;
- * their essays are ones whose originating session was later converted.
+ * Creates an essay owned by `actor`. Exactly one owner column is written —
+ * the `essays_exactly_one_owner` CHECK refuses a row with both or neither.
  *
- * Runs inside a transaction that locks the session row (`FOR UPDATE`) before
- * inserting, and copies whatever `user_id` is on that row onto the new essay.
- * Without this, a request still carrying a stale (but not-yet-deleted)
- * session id could write an essay after its session had already converted:
- * the FK to `guest_sessions` is still satisfied, so the insert would succeed
- * with `user_id` left null — a row the account that wrote it can never read
- * again, but the stale guest session still can (the exact leak this story
- * exists to close), and one the retention sweep eventually deletes as
- * abandoned. Locking the session row serialises this against
- * `convertGuestSessionToUser`, which takes the same row lock, so a write
- * racing a concurrent conversion either sees the pre-conversion (still null)
- * or post-conversion (already attached) `user_id`, never an unattached row
- * for an already-converted session. A session id that names no row at all —
- * forged, or its session was somehow deleted — throws rather than inserting
- * an essay with a dangling `session_id`.
+ * REGISTERED USER: a plain insert with `user_id` set and `session_id` NULL. No
+ * `guest_sessions` row is read, locked or created — there is none to lock, and
+ * so the conversion race described below cannot occur for this actor. (Before
+ * KAN-52 there was no user branch: `createEssay` took a `GuestActor`, so a
+ * registered user's submission created a guest-owned essay their account could
+ * not read, and a registered user with no guest cookie could not submit at
+ * all, because `session_id` was NOT NULL.)
+ *
+ * GUEST: runs inside a transaction that locks the session row (`FOR UPDATE`)
+ * before inserting, and reads whatever `user_id` is on that row. Without the
+ * lock, a request still carrying a stale (but not-yet-deleted) session id
+ * could write an essay after its session had already converted: the FK to
+ * `guest_sessions` is still satisfied, so the insert would succeed with
+ * `user_id` left null — a row the account that wrote it can never read again,
+ * but the stale guest session still can (the exact leak this story exists to
+ * close), and one the retention sweep eventually deletes as abandoned. Locking
+ * the session row serialises this against `convertGuestSessionToUser`, which
+ * takes the same row lock, so a write racing a concurrent conversion either
+ * sees the pre-conversion (still null) or post-conversion (already attached)
+ * `user_id`, never an unattached row for an already-converted session. A
+ * session id that names no row at all — forged, or its session was somehow
+ * deleted — throws rather than inserting an essay with a dangling
+ * `session_id`.
+ *
+ * THE POST-CONVERSION BRANCH WRITES ONLY `user_id`. When the locked session
+ * has already converted, the essay belongs to that account, so `session_id`
+ * is written NULL, exactly as conversion itself nulls it on the essays it
+ * moves. Copying `session.userId` while ALSO writing `actor.sessionId` (what
+ * this function did before KAN-52) would set both columns and fire the CHECK
+ * — in production, from a stale-but-valid guest cookie, the documented race.
  */
-export async function createEssay(actor: GuestActor, content: string): Promise<Essay> {
+export async function createEssay(actor: OwnerActor, content: string): Promise<Essay> {
+  if (actor.kind === 'user') {
+    const [row] = await db.insert(essays).values({ sessionId: null, userId: actor.userId, content }).returning();
+    return toEssay(row);
+  }
+
   return db.transaction(async (tx) => {
     const [session] = await tx
       .select({ userId: guestSessions.userId })
@@ -81,7 +97,9 @@ export async function createEssay(actor: GuestActor, content: string): Promise<E
     const [row] = await tx
       .insert(essays)
       .values({
-        sessionId: actor.sessionId,
+        // Exactly one owner column (see this function's own comment): the
+        // session while it is unconverted, the account once it has converted.
+        sessionId: session.userId === null ? actor.sessionId : null,
         userId: session.userId,
         content,
       })

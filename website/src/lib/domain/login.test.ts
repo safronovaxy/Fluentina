@@ -3,14 +3,17 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '@/lib/db/client';
-import { sessions, users } from '@/lib/db/schema';
+import { essays, sessions, users } from '@/lib/db/schema';
+import { createEssay, getEssayById } from '@/lib/db/essays';
+import { createGuestSession, getGuestSessionById } from '@/lib/db/guest-sessions';
+import { generateGuestSessionId } from './session-id';
 import { findUserForLogin } from '@/lib/db/users';
-import { createSession } from '@/lib/db/sessions';
-import { login } from './login';
+import { login, type LoginContext } from './login';
 import { verifyPassword } from './password';
 import { generateRegisteredSessionToken, hashRegisteredSessionToken } from './registered-session-token';
 import { loginRequestSchema } from '@/lib/contracts/auth';
-import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import type { GuestActor, RegisteredSessionToken } from '@/lib/contracts/actor';
+import { resetDatabase, createTestSession, createTestUser, closePool } from '@/test/db-fixtures';
 import { TEST_PASSWORD, registerTestAccount, uniqueEmail } from '@/test/auth-fixtures';
 
 // Counts real scrypt derivations while still running them: this file's whole
@@ -24,6 +27,11 @@ const scryptCalls = () => vi.mocked(scrypt).mock.calls.length;
 const comparisons = () => vi.mocked(timingSafeEqual).mock.calls.length;
 
 const request = (email: string, password: string) => loginRequestSchema.parse({ email, password });
+
+// KAN-52: `login` takes a `LoginContext` (the guest cookie and the presented
+// registered session) instead of a bare token.
+const ANONYMOUS: LoginContext = { guestSessionId: null, presentedSessionToken: null };
+const withSession = (presentedSessionToken: RegisteredSessionToken): LoginContext => ({ guestSessionId: null, presentedSessionToken });
 
 async function sessionRows() {
   return db.select().from(sessions);
@@ -49,7 +57,7 @@ afterAll(async () => {
 
 describe('login performs exactly ONE scrypt verification on every path', () => {
   it('unknown email: verifies against the dummy hash — one derivation, not zero', async () => {
-    const outcome = await login(request('nobody@example.test', TEST_PASSWORD), null);
+    const outcome = await login(request('nobody@example.test', TEST_PASSWORD), ANONYMOUS);
 
     expect(outcome).toEqual({ status: 'invalidCredentials' });
     expect(scryptCalls()).toBe(1);
@@ -59,7 +67,7 @@ describe('login performs exactly ONE scrypt verification on every path', () => {
     const account = await registerTestAccount();
     vi.mocked(scrypt).mockClear();
 
-    const outcome = await login(request(account.email, 'not the password'), null);
+    const outcome = await login(request(account.email, 'not the password'), ANONYMOUS);
 
     expect(outcome).toEqual({ status: 'invalidCredentials' });
     expect(scryptCalls()).toBe(1);
@@ -69,7 +77,7 @@ describe('login performs exactly ONE scrypt verification on every path', () => {
     const account = await registerTestAccount();
     vi.mocked(scrypt).mockClear();
 
-    const outcome = await login(request(account.email, account.password), null);
+    const outcome = await login(request(account.email, account.password), ANONYMOUS);
 
     expect(outcome.status).toBe('signedIn');
     expect(scryptCalls()).toBe(1);
@@ -78,8 +86,8 @@ describe('login performs exactly ONE scrypt verification on every path', () => {
   it('unknown email and wrong password are indistinguishable in outcome: same status, same shape, no token', async () => {
     const account = await registerTestAccount();
 
-    const unknown = await login(request('nobody@example.test', 'not the password'), null);
-    const wrong = await login(request(account.email, 'not the password'), null);
+    const unknown = await login(request('nobody@example.test', 'not the password'), ANONYMOUS);
+    const wrong = await login(request(account.email, 'not the password'), ANONYMOUS);
 
     expect(unknown).toEqual(wrong);
     expect(Object.keys(unknown)).toEqual(['status']);
@@ -89,16 +97,16 @@ describe('login performs exactly ONE scrypt verification on every path', () => {
     const account = await registerTestAccount();
     vi.mocked(timingSafeEqual).mockClear();
 
-    await login(request('nobody@example.test', TEST_PASSWORD), null);
+    await login(request('nobody@example.test', TEST_PASSWORD), ANONYMOUS);
     expect(comparisons()).toBe(1);
-    await login(request(account.email, 'not the password'), null);
+    await login(request(account.email, 'not the password'), ANONYMOUS);
     expect(comparisons()).toBe(2);
-    await login(request(account.email, account.password), null);
+    await login(request(account.email, account.password), ANONYMOUS);
     expect(comparisons()).toBe(3);
   });
 
   it('an unknown email creates no session and no user', async () => {
-    await login(request('nobody@example.test', TEST_PASSWORD), null);
+    await login(request('nobody@example.test', TEST_PASSWORD), ANONYMOUS);
 
     expect(await sessionRows()).toEqual([]);
     expect(await db.select().from(users)).toEqual([]);
@@ -108,7 +116,7 @@ describe('login performs exactly ONE scrypt verification on every path', () => {
     const account = await registerTestAccount();
     const before = (await sessionRows()).length;
 
-    await login(request(account.email, 'not the password'), null);
+    await login(request(account.email, 'not the password'), ANONYMOUS);
 
     expect(await sessionRows()).toHaveLength(before);
   });
@@ -119,7 +127,7 @@ describe('a successful login', () => {
     const account = await registerTestAccount();
     await db.delete(sessions);
 
-    const outcome = await login(request(account.email, account.password), null);
+    const outcome = await login(request(account.email, account.password), ANONYMOUS);
     if (outcome.status !== 'signedIn') throw new Error('expected sign-in');
 
     const rows = await sessionRows();
@@ -132,7 +140,7 @@ describe('a successful login', () => {
   it('finds the account whatever the case or padding of the address typed', async () => {
     const account = await registerTestAccount({ email: 'Mixed.Case@Example.test' });
 
-    const outcome = await login(request('  MIXED.CASE@EXAMPLE.TEST ', account.password), null);
+    const outcome = await login(request('  MIXED.CASE@EXAMPLE.TEST ', account.password), ANONYMOUS);
 
     expect(outcome.status).toBe('signedIn');
   });
@@ -144,7 +152,7 @@ describe('a successful login', () => {
       expect(before).toHaveLength(1);
       const oldHash = before[0].id;
 
-      const outcome = await login(request(account.email, account.password), account.token);
+      const outcome = await login(request(account.email, account.password), withSession(account.token));
       if (outcome.status !== 'signedIn') throw new Error('expected sign-in');
 
       const after = await sessionRows();
@@ -160,7 +168,7 @@ describe('a successful login', () => {
       const account = await registerTestAccount();
       const [old] = await sessionRows();
 
-      const outcome = await login(request(account.email, account.password), account.token);
+      const outcome = await login(request(account.email, account.password), withSession(account.token));
       if (outcome.status !== 'signedIn') throw new Error('expected sign-in');
 
       const [fresh] = await sessionRows();
@@ -172,7 +180,7 @@ describe('a successful login', () => {
       const previous = await registerTestAccount();
       const account = await registerTestAccount();
 
-      await login(request(account.email, account.password), previous.token);
+      await login(request(account.email, account.password), withSession(previous.token));
 
       const owners = (await sessionRows()).map((row) => row.userId);
       expect(owners).toContain(account.userId);
@@ -183,7 +191,7 @@ describe('a successful login', () => {
     it('does not delete the presented session when the credentials are wrong', async () => {
       const account = await registerTestAccount();
 
-      await login(request(account.email, 'not the password'), account.token);
+      await login(request(account.email, 'not the password'), withSession(account.token));
 
       expect(await sessionRows()).toHaveLength(1);
     });
@@ -191,7 +199,7 @@ describe('a successful login', () => {
     it('a presented token that names no live session is simply ignored', async () => {
       const account = await registerTestAccount();
 
-      const outcome = await login(request(account.email, account.password), generateRegisteredSessionToken());
+      const outcome = await login(request(account.email, account.password), withSession(generateRegisteredSessionToken()));
 
       expect(outcome.status).toBe('signedIn');
     });
@@ -213,7 +221,7 @@ describe('rehash on successful login with stale parameters', () => {
     const user = await userWithStaleHash(TEST_PASSWORD);
     vi.mocked(scrypt).mockClear();
 
-    const outcome = await login(request(user.email, TEST_PASSWORD), null);
+    const outcome = await login(request(user.email, TEST_PASSWORD), ANONYMOUS);
 
     expect(outcome.status).toBe('signedIn');
     // Verify with the stored (old) parameters, then hash again with the current ones.
@@ -228,10 +236,10 @@ describe('rehash on successful login with stale parameters', () => {
 
   it('is a one-off: the next login on the upgraded hash does one derivation', async () => {
     const user = await userWithStaleHash(TEST_PASSWORD);
-    await login(request(user.email, TEST_PASSWORD), null);
+    await login(request(user.email, TEST_PASSWORD), ANONYMOUS);
     vi.mocked(scrypt).mockClear();
 
-    await login(request(user.email, TEST_PASSWORD), null);
+    await login(request(user.email, TEST_PASSWORD), ANONYMOUS);
 
     expect(scryptCalls()).toBe(1);
   });
@@ -240,7 +248,7 @@ describe('rehash on successful login with stale parameters', () => {
     const user = await userWithStaleHash(TEST_PASSWORD);
     vi.mocked(scrypt).mockClear();
 
-    const outcome = await login(request(user.email, 'not the password'), null);
+    const outcome = await login(request(user.email, 'not the password'), ANONYMOUS);
 
     expect(outcome).toEqual({ status: 'invalidCredentials' });
     expect(scryptCalls()).toBe(1);
@@ -254,7 +262,7 @@ describe('rehash on successful login with stale parameters', () => {
     });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const outcome = await login(request(user.email, TEST_PASSWORD), null);
+    const outcome = await login(request(user.email, TEST_PASSWORD), ANONYMOUS);
 
     expect(outcome.status).toBe('signedIn');
     expect(update).toHaveBeenCalled();
@@ -266,7 +274,7 @@ describe('a fixture user with an unparseable hash', () => {
     const userId = await createTestUser();
     const [row] = await db.select().from(users).where(eq(users.id, userId));
 
-    await expect(login(request(row.email, TEST_PASSWORD), null)).rejects.toThrow();
+    await expect(login(request(row.email, TEST_PASSWORD), ANONYMOUS)).rejects.toThrow();
   });
 });
 
@@ -274,13 +282,149 @@ describe('sessions the sweep leaves alone', () => {
   it('sweeping on sign-in removes an expired session but never a live one', async () => {
     const account = await registerTestAccount();
     const expired = hashRegisteredSessionToken(generateRegisteredSessionToken());
-    await createSession({ kind: 'user', userId: account.userId }, expired);
+    await createTestSession({ kind: 'user', userId: account.userId }, expired);
     await db.execute(sql`UPDATE fluentina.sessions SET expires_at = now() - interval '1 day' WHERE id = ${expired}`);
 
-    await login(request(account.email, account.password), null);
+    await login(request(account.email, account.password), ANONYMOUS);
 
     const ids = (await sessionRows()).map((row) => row.id);
     expect(ids).not.toContain(expired);
     expect(ids).toHaveLength(2); // registration's session + this login's
+  });
+});
+
+describe('login adopts the guest essay the browser is holding (KAN-52; Irina, 2026-09-29)', () => {
+  async function guestWithEssay(content = 'Ein Aufsatz, geschrieben als Gast, bevor man sich anmeldet.') {
+    const guest: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
+    await createGuestSession(guest);
+    const essay = await createEssay(guest, content);
+    return { guest, essay };
+  }
+  const withGuest = (guest: GuestActor): LoginContext => ({ guestSessionId: guest.sessionId, presentedSessionToken: null });
+  async function rawEssay(id: string) {
+    const [row] = await db.select().from(essays).where(eq(essays.id, id));
+    return row;
+  }
+
+  it('the account signed into can read the essay, and the guest cookie no longer can', async () => {
+    const account = await registerTestAccount();
+    const { guest, essay } = await guestWithEssay();
+    // Before: only the guest can see it — so "the account can read it after" is a change.
+    expect(await getEssayById({ kind: 'user', userId: account.userId }, essay.id)).toBeNull();
+
+    const outcome = await login(request(account.email, account.password), withGuest(guest));
+
+    expect(outcome.status).toBe('signedIn');
+    expect((await getEssayById({ kind: 'user', userId: account.userId }, essay.id))?.id).toBe(essay.id);
+    expect(await getEssayById(guest, essay.id)).toBeNull();
+    const row = await rawEssay(essay.id);
+    expect(row.userId).toBe(account.userId);
+    expect(row.sessionId).toBeNull();
+    expect((await getGuestSessionById({ kind: 'user', userId: account.userId }, guest.sessionId))?.convertedAt).not.toBeNull();
+  });
+
+  it('signs in and issues a working session in the same call — adoption does not replace the session', async () => {
+    const account = await registerTestAccount();
+    const { guest } = await guestWithEssay();
+
+    const outcome = await login(request(account.email, account.password), withGuest(guest));
+    if (outcome.status !== 'signedIn') throw new Error('expected sign-in');
+
+    const owners = (await sessionRows()).map((row) => row.id);
+    expect(owners).toContain(hashRegisteredSessionToken(outcome.token));
+  });
+
+  it('does NOT adopt on a wrong password — a mistyped password must not cost a guest their essay, nor hand it to anyone', async () => {
+    const account = await registerTestAccount();
+    const { guest, essay } = await guestWithEssay();
+
+    const outcome = await login(request(account.email, 'not the password'), withGuest(guest));
+
+    expect(outcome).toEqual({ status: 'invalidCredentials' });
+    expect((await getEssayById(guest, essay.id))?.id).toBe(essay.id);
+    expect((await rawEssay(essay.id)).userId).toBeNull();
+  });
+
+  it('does NOT adopt for an unknown email', async () => {
+    const { guest, essay } = await guestWithEssay();
+
+    const outcome = await login(request('nobody@example.test', TEST_PASSWORD), withGuest(guest));
+
+    expect(outcome).toEqual({ status: 'invalidCredentials' });
+    expect((await rawEssay(essay.id)).userId).toBeNull();
+  });
+
+  it('signs in normally when the guest cookie names a session that no longer exists (retention deleted it)', async () => {
+    const account = await registerTestAccount();
+    const neverCreated: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
+
+    const outcome = await login(request(account.email, account.password), withGuest(neverCreated));
+
+    expect(outcome.status).toBe('signedIn');
+  });
+
+  it('cannot take an essay already adopted by another account — a stale cookie is not a way in', async () => {
+    const first = await registerTestAccount();
+    const second = await registerTestAccount();
+    const { guest, essay } = await guestWithEssay();
+    await login(request(first.email, first.password), withGuest(guest));
+
+    await login(request(second.email, second.password), withGuest(guest));
+
+    expect((await rawEssay(essay.id)).userId).toBe(first.userId);
+    expect(await getEssayById({ kind: 'user', userId: second.userId }, essay.id)).toBeNull();
+  });
+
+  it('adopts when the request ALSO carried a live registered session, and rotates that session', async () => {
+    const account = await registerTestAccount();
+    const { guest, essay } = await guestWithEssay();
+
+    const outcome = await login(request(account.email, account.password), {
+      guestSessionId: guest.sessionId,
+      presentedSessionToken: account.token,
+    });
+    if (outcome.status !== 'signedIn') throw new Error('expected sign-in');
+
+    expect((await rawEssay(essay.id)).userId).toBe(account.userId);
+    const hashes = (await sessionRows()).map((row) => row.id);
+    expect(hashes).toEqual([hashRegisteredSessionToken(outcome.token)]);
+  });
+
+  it('does not surface the conversion outcome: nothingToConvert is also what retention deletion produces, so LoginOutcome carries only the token', async () => {
+    const account = await registerTestAccount();
+    const { guest } = await guestWithEssay();
+
+    const adopted = await login(request(account.email, account.password), withGuest(guest));
+    const nothing = await login(request(account.email, account.password), ANONYMOUS);
+
+    expect(Object.keys(adopted).sort()).toEqual(['status', 'token']);
+    expect(Object.keys(nothing).sort()).toEqual(['status', 'token']);
+  });
+
+  it('holds no pooled connection across the ~90 ms of scrypt: verification has finished before the sign-in transaction opens', async () => {
+    const account = await registerTestAccount();
+    const { guest } = await guestWithEssay();
+    const real = db.transaction.bind(db);
+    // EVERY transaction opened during the login, not just the last: a login that
+    // opened an early transaction (around the lookup, say) and then the real one
+    // would overwrite a single variable with the late, innocent-looking value.
+    const derivationsWhenTransactionsOpened: number[] = [];
+    const spy = vi.spyOn(db, 'transaction').mockImplementation(((...args: Parameters<typeof real>) => {
+      derivationsWhenTransactionsOpened.push(scryptCalls());
+      return real(...args);
+    }) as typeof db.transaction);
+    vi.mocked(scrypt).mockClear();
+
+    try {
+      await login(request(account.email, account.password), withGuest(guest));
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Exactly one transaction, opened after the single verification derivation had
+    // already finished. Were the lookup or verification inside a transaction, a
+    // transaction would open at 0 derivations.
+    expect(derivationsWhenTransactionsOpened).toEqual([1]);
+    expect(scryptCalls()).toBe(1);
   });
 });
