@@ -36,6 +36,20 @@
       "when": 1790578242981,
       "tag": "0004_kan16_grading_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790696582122,
+      "tag": "0005_kan20_registration",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790747910297,
+      "tag": "0006_kan52_essay_owner_actor",
+      "breakpoints": true
     }
   ]
 }

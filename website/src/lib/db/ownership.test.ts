@@ -13,10 +13,11 @@
  * invisible to a mocked query builder that never actually runs SQL.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { and } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
+import { Client } from 'pg';
 import { db } from './client';
 import { essays as essaysTable } from './schema';
-import { buildOwnershipCondition } from './ownership';
+import { buildOwnershipCondition, ownedBy } from './ownership';
 import { createEssay, getEssayById } from './essays';
 import { createGuestSession, convertGuestSessionToUser } from './guest-sessions';
 import { generateGuestSessionId } from '@/lib/domain/session-id';
@@ -150,17 +151,96 @@ describe('user ownership after conversion', () => {
 });
 
 describe('conversion cannot be replayed', () => {
-  it('converting an already-converted session throws instead of silently re-attaching', async () => {
+  it('converting an already-converted session reports nothingToConvert and re-attaches nothing', async () => {
     const actor = newGuestActor();
     await createGuestSession(actor);
-    await createEssay(actor, 'An essay under a session that will be converted exactly once.');
+    const essay = await createEssay(actor, 'An essay under a session that will be converted exactly once.');
     const firstUser = await newUserActor();
     const secondUser = await newUserActor();
 
-    await convertGuestSessionToUser(actor, firstUser.userId);
+    await expect(convertGuestSessionToUser(actor, firstUser.userId)).resolves.toBe('converted');
 
-    await expect(convertGuestSessionToUser(actor, secondUser.userId)).rejects.toThrow(
-      /no unconverted session found/,
-    );
+    // KAN-20: this used to throw. "Registered twice in two tabs" is an expected
+    // event, not a failure — but it must still be a no-op, never a re-attach.
+    await expect(convertGuestSessionToUser(actor, secondUser.userId)).resolves.toBe('nothingToConvert');
+
+    expect((await getEssayById(firstUser, essay.id))?.id).toBe(essay.id);
+    expect(await getEssayById(secondUser, essay.id)).toBeNull();
+  });
+});
+
+describe('KAN-52: an account-owned essay has a NULL session_id, and ownedBy() needed no change for it', () => {
+  it('matches no guest — `NULL = <id>` is NULL, and WHERE keeps only TRUE — while the owner still matches', async () => {
+    // Several guests, each with a session and an essay of their own, so the
+    // guest branch is a query that could match something. The account-owned row
+    // is inserted directly (session_id NULL, user_id set): the shape conversion
+    // and a registered submission both produce.
+    const owner = await newUserActor();
+    const guests = [newGuestActor(), newGuestActor(), newGuestActor()];
+    for (const guest of guests) {
+      await createGuestSession(guest);
+      await createEssay(guest, 'A guest essay, so no guest reads over an empty table.');
+    }
+    const [accountRow] = await db
+      .insert(essaysTable)
+      .values({ sessionId: null, userId: owner.userId, content: 'Owned by an account, no session at all.' })
+      .returning();
+    expect(accountRow.sessionId).toBeNull();
+
+    for (const guest of guests) {
+      expect(await getEssayById(guest, accountRow.id)).toBeNull();
+    }
+    expect((await getEssayById(owner, accountRow.id))?.id).toBe(accountRow.id);
+  });
+
+  it('a guest-owned row (session_id set, user_id NULL) is matched by its guest and by no user — the mirror case', async () => {
+    const guest = newGuestActor();
+    await createGuestSession(guest);
+    const essay = await createEssay(guest, 'A guest-owned essay: session set, user NULL.');
+    const someUser = await newUserActor();
+
+    expect((await getEssayById(guest, essay.id))?.id).toBe(essay.id);
+    expect(await getEssayById(someUser, essay.id)).toBeNull();
+  });
+
+  it('the `user_id IS NULL` conjunct is independently load-bearing: a row with BOTH columns set is refused to its guest', async () => {
+    // The both-set state is forbidden by the CHECK, so it cannot be built
+    // through any repository function — and without it, every cutover test
+    // above passes by the NULL session_id alone, and would still pass if
+    // `isNull(userId)` were deleted from ownedBy(). This builds the state
+    // inside a transaction that drops the constraint and is ROLLED BACK (DDL is
+    // transactional in Postgres), and runs ownedBy()'s own compiled SQL on that
+    // same connection, so the predicate is the one under test, not a copy.
+    const guest = newGuestActor();
+    await createGuestSession(guest);
+    const user = await newUserActor();
+    const client = new Client({ connectionString: process.env.DATABASE_URL });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('ALTER TABLE fluentina.essays DROP CONSTRAINT essays_exactly_one_owner');
+      const { rows } = await client.query<{ id: string }>(
+        'INSERT INTO fluentina.essays (session_id, user_id, content) VALUES ($1, $2, $3) RETURNING id',
+        [guest.sessionId, user.userId, 'Both owner columns set, in a transaction that will be rolled back.'],
+      );
+      const essayId = rows[0].id;
+
+      const readAs = async (actor: GuestActor | UserActor) => {
+        const compiled = db
+          .select({ id: essaysTable.id })
+          .from(essaysTable)
+          .where(and(eq(essaysTable.id, essayId), ownedBy(actor, { sessionId: essaysTable.sessionId, userId: essaysTable.userId })))
+          .toSQL();
+        return (await client.query(compiled.sql, compiled.params as unknown[])).rows;
+      };
+
+      // The guest's session_id equality is TRUE for this row; only `user_id IS
+      // NULL` refuses it. The owner is served by user_id alone.
+      expect(await readAs(guest)).toEqual([]);
+      expect(await readAs(user)).toEqual([{ id: essayId }]);
+    } finally {
+      await client.query('ROLLBACK').catch(() => {});
+      await client.end();
+    }
   });
 });

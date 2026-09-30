@@ -314,6 +314,17 @@ export function EssayEntryForm({ strings }: EssayEntryFormProps) {
     // above: "try again" is at least directionally sound advice for a
     // transient database error, unlike for that one.
     internalError: strings.errorGeneric,
+    // KAN-20: `invalidCredentials` and `emailAlreadyRegistered` belong to
+    // `POST /api/auth/login` / `POST /api/auth/register`; this form's only
+    // endpoint (`POST /api/essays`) never produces either. Present only so
+    // this map stays exhaustive over the whole `RejectionReason` union.
+    // Their guest-facing copy belongs with the registration and sign-in forms,
+    // which are not part of this story.
+    invalidCredentials: strings.errorGeneric,
+    emailAlreadyRegistered: strings.errorGeneric,
+    // KAN-20 review: `staleConsentVersion` is `POST /api/auth/register`'s too,
+    // and unreachable from this form for the same reason as the two above.
+    staleConsentVersion: strings.errorGeneric,
   };
   const submissionError = mutation.error instanceof EssaySubmissionError ? mutation.error : undefined;
   const submissionErrorMessage = submissionError?.reason

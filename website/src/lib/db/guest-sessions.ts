@@ -9,7 +9,7 @@ import 'server-only';
  * exercises to prove the cutover rule actually holds against real rows.
  */
 import { eq, and } from 'drizzle-orm';
-import { db } from './client';
+import { db, type Executor } from './client';
 import { essays, guestSessions } from './schema';
 import { ownedBy } from './ownership';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
@@ -73,12 +73,35 @@ export async function getGuestSessionById(
 }
 
 /**
+ * The outcome of a conversion attempt. `nothingToConvert` is the EXPECTED
+ * non-event, not a failure: no guest session row for this actor, or one that
+ * has already converted (a second tab registering, a replayed request), or
+ * one retention has since deleted. In all three there is no essay to strand,
+ * so registering must still succeed — a 500 on "registered twice in two tabs"
+ * would be a terrible first experience.
+ *
+ * `nothingToConvert` must NEVER be counted as a conversion metric: retention
+ * deletion produces it too, so counting it would mislabel a deleted session
+ * as a conversion (the same caveat `SessionIdUnavailableError` carries in
+ * lib/domain/guest-session.ts).
+ */
+export type GuestConversionOutcome = 'converted' | 'nothingToConvert';
+
+/**
  * Attaches a guest session — and every essay currently owned under it — to
  * a registered account. This is the acceptance criterion "after a guest
  * converts, the old session id must stop authorising reads" made concrete:
- * once this commits, `userId` is set on both the session row and its
- * essays, so `ownedBy()`'s `isNull(userId)` conjunct fails for the old
- * `GuestActor` on every one of them from then on.
+ * once this commits, `userId` is set on both the session row and its essays,
+ * so `ownedBy()`'s `isNull(userId)` conjunct fails for the old `GuestActor`
+ * on the session row, and — since KAN-52 — every essay it moved has its
+ * `session_id` set to NULL in the same UPDATE, so the old id matches no essay
+ * at all.
+ *
+ * `session_id` is nulled on the essays, not left as provenance. That is what
+ * the `essays_exactly_one_owner` CHECK requires (an account-owned essay has
+ * one owner column, not two), and it takes the essay out of the
+ * `guest_sessions` ON DELETE CASCADE: an account's history no longer hangs
+ * off a session row a retention sweep could delete.
  *
  * Takes a `GuestActor` specifically (only a guest can convert their own
  * session — a registered user has nothing to convert). Uses the exact same
@@ -86,27 +109,48 @@ export async function getGuestSessionById(
  * update, rather than a hand-rolled `sessionId` match, so a session that
  * has already been converted (`userId` no longer null) cannot be
  * re-converted or have its essays re-attached by a second call: `ownedBy`
- * would find zero rows for the stale `GuestActor`, and the function throws
- * rather than silently no-op'ing.
+ * would find zero rows for the stale `GuestActor`, and this returns
+ * `'nothingToConvert'` without touching anything.
+ *
+ * This is the body of the conversion, taking the caller's transaction (see
+ * `Executor`). Registration (lib/db/users.ts) calls it from inside the one
+ * transaction that also inserts the user, the consent rows and the login
+ * session: conversion committing while the session insert failed would leave
+ * a person with an account they are not signed into, `essays.user_id` set so
+ * the guest branch of `ownedBy` no longer matches their cookie, and their
+ * essay unreachable as either identity, permanently, with no error saying why.
+ *
+ * A genuine driver error still throws — and rolls the caller's transaction
+ * back.
  */
-export async function convertGuestSessionToUser(actor: GuestActor, userId: string): Promise<void> {
-  await db.transaction(async (tx) => {
-    const [convertedSession] = await tx
-      .update(guestSessions)
-      .set({ userId, convertedAt: new Date() })
-      .where(ownedBy(actor, { sessionId: guestSessions.id, userId: guestSessions.userId }))
-      .returning();
+export async function convertGuestSessionToUserWithin(
+  tx: Executor,
+  actor: GuestActor,
+  userId: string,
+): Promise<GuestConversionOutcome> {
+  const [convertedSession] = await tx
+    .update(guestSessions)
+    .set({ userId, convertedAt: new Date() })
+    .where(ownedBy(actor, { sessionId: guestSessions.id, userId: guestSessions.userId }))
+    .returning();
 
-    if (!convertedSession) {
-      throw new Error(
-        'cannot convert guest session: no unconverted session found for this actor ' +
-          '(already converted, or the session id does not exist)',
-      );
-    }
+  if (!convertedSession) return 'nothingToConvert';
 
-    await tx
-      .update(essays)
-      .set({ userId })
-      .where(ownedBy(actor, { sessionId: essays.sessionId, userId: essays.userId }));
-  });
+  // `sessionId: null` is not tidiness: the CHECK on `essays` forbids both
+  // columns being set, and this write is what makes that true after
+  // conversion. Do not drop it.
+  await tx
+    .update(essays)
+    .set({ userId, sessionId: null })
+    .where(ownedBy(actor, { sessionId: essays.sessionId, userId: essays.userId }));
+  return 'converted';
+}
+
+/**
+ * Standalone conversion in its own transaction. Not for composing into a
+ * larger unit — `db.transaction` does not nest; use
+ * `convertGuestSessionToUserWithin` for that.
+ */
+export async function convertGuestSessionToUser(actor: GuestActor, userId: string): Promise<GuestConversionOutcome> {
+  return db.transaction((tx) => convertGuestSessionToUserWithin(tx, actor, userId));
 }

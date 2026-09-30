@@ -14,6 +14,7 @@
 import { ownedBy, type OwnedColumns } from './ownership';
 import { getEssayById } from './essays';
 import { getGuestSessionById } from './guest-sessions';
+import { createEssay } from './essays';
 import type { SystemActor, GuestActor } from '@/lib/contracts/actor';
 
 declare const systemActor: SystemActor;
@@ -30,6 +31,15 @@ getEssayById(systemActor, 'some-essay-id');
 
 // @ts-expect-error — getGuestSessionById is scoped and must reject a SystemActor.
 getGuestSessionById(systemActor, 'some-session-id');
+
+// KAN-52: `createEssay` now takes an `OwnerActor` (it used to take a
+// `GuestActor`), so the widening that lets a registered user submit must not
+// also let the system actor create an owned row. The domain-layer functions
+// widened by the same story are asserted in
+// `lib/domain/ownership.typecheck.ts`, because a file under `lib/db` must not
+// import `lib/domain` (eslint.config.js's layering boundary).
+// @ts-expect-error — createEssay writes an owner column; a SystemActor has no owner to write.
+createEssay(systemActor, 'content');
 
 // Sanity check the assertions above are testing the right thing: a real
 // OwnerActor must type-check fine in the same positions.

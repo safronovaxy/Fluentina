@@ -30,25 +30,50 @@
  * review: this used to say KAN-14 — KAN-14 only left the seam that rule
  * fills, per that schema's own comment; the bound itself is KAN-15.)
  *
- * Every owned table (guest_sessions, essays) carries the same two columns
- * the ownership predicate in `ownership.ts` needs: a `session_id`-shaped
- * column and a nullable `user_id` column. That symmetry is what lets
- * `ownedBy()` work generically across tables instead of special-casing each
- * one, and it's why conversion (see `guest-sessions.ts`) writes `user_id`
- * onto every essay row directly rather than requiring a join back to
- * guest_sessions to determine ownership.
+ * Every owned table (guest_sessions, essays) carries the two columns the
+ * ownership predicate in `ownership.ts` needs: a `session_id`-shaped column
+ * and a nullable `user_id` column, so `ownedBy()` works generically across
+ * tables instead of special-casing each one, and conversion (see
+ * `guest-sessions.ts`) writes `user_id` onto every essay row directly rather
+ * than requiring a join back to guest_sessions to determine ownership.
+ *
+ * The two tables do NOT hold those columns in the same states, and the old
+ * wording of this paragraph ("the same two columns... that symmetry") is what
+ * KAN-52 found to be a trap. On `guest_sessions` the `id` column is the
+ * primary key and is never null: a converted session has BOTH its id and a
+ * `user_id`. On `essays`, `session_id` is nullable and the pair is an
+ * either/or — see the `essays` comment below and its CHECK. `ownedBy()` does
+ * not care, and needs no change for it: see that function's own comment.
  */
 import { sql } from 'drizzle-orm';
-import { boolean, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const fluentinaSchema = pgSchema('fluentina');
 
-// Deliberately minimal: this story only needs a stable FK target for
-// cascading account erasure (essays.user_id, guest_sessions.user_id). Auth,
-// email, and everything else about a registered account belongs to whatever
-// story builds registration — not re-scoped in here.
+// KAN-10 created this as a bare FK target for cascading account erasure.
+// KAN-20 (registration) fills it in: an email, a self-describing password
+// hash, and when (not just whether) the email was verified.
 export const users = fluentinaSchema.table('users', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  // Stored normalised (trimmed, lower-cased — `emailSchema` in
+  // lib/contracts/auth.ts), so this plain unique constraint is the
+  // case-insensitive uniqueness rule. Drizzle names it `users_email_unique`;
+  // lib/db/users.ts detects a duplicate registration by that constraint name,
+  // so renaming it is a behaviour change, not a tidy-up.
+  //
+  // NOT NULL: every user is a registered user. Adding this to a `users`
+  // table that already holds rows fails — none exist outside test fixtures
+  // (nothing could create one before this story).
+  email: text('email').notNull().unique(),
+  // `scrypt$N=32768,r=8,p=1$<salt-b64>$<hash-b64>` — self-describing, so the
+  // work factor can be raised, or the algorithm changed, without making
+  // existing rows unverifiable. See lib/domain/password.ts. Never selected
+  // outside `findUserForLogin` and the rehash-on-login update.
+  passwordHash: text('password_hash').notNull(),
+  // Null until verified. A timestamp, not a boolean: KAN-51's "resend if
+  // older than X" needs the WHEN, and it is the same has-this-happened-and-
+  // when shape as `guest_sessions.converted_at`.
+  emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -79,22 +104,36 @@ export const essays = fluentinaSchema.table(
   'essays',
   {
     id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
-    // Kept for the row's whole lifetime, even after conversion — it records
-    // provenance and lets the ownership predicate work without a join.
-    // Cascades: deleting the originating guest session deletes its essays.
+    // The guest session that owns this essay WHILE IT IS A GUEST'S — and
+    // NULL for every essay that belongs to an account. KAN-52 changed this:
+    // it used to be NOT NULL and "kept for the row's whole lifetime, even
+    // after conversion", and that sentence is now false. Conversion sets it
+    // to NULL in the same UPDATE that sets `user_id`
+    // (`convertGuestSessionToUserWithin`), and a registered user's own
+    // submission is inserted with it NULL.
     //
-    // That cascade is on the session row, not on whether it converted — the
-    // FK can express "delete essays when their session is deleted", not
-    // "...unless that session has since been attached to an account". A
-    // retention sweep that deletes guest_sessions rows older than N days
-    // (KAN-10's own scope stops short of writing that sweep) must exclude
-    // converted sessions explicitly (`converted_at IS NULL`) or it will
-    // cascade-delete a registered user's essays through the session row
-    // they originated from, days or months after that user signed up.
-    sessionId: text('session_id')
-      .notNull()
-      .references(() => guestSessions.id, { onDelete: 'cascade' }),
-    // Null until the owning session converts. Cascades on account erasure.
+    // Why nullable rather than a synthetic `guest_sessions` row per account
+    // (the alternative, rejected): under sign-in adoption an account
+    // accumulates converted sessions, so an anchor row would need a partial
+    // unique index (a migration anyway), and every account's whole essay
+    // history would hang off a `guest_sessions` row by ON DELETE CASCADE,
+    // outside the one retention-sweep guard documented below.
+    //
+    // Cascades: deleting a guest session deletes the essays STILL OWNED BY IT
+    // — i.e. its unconverted essays. Nulling this at conversion is also what
+    // takes a registered user's essays out of that cascade altogether, so the
+    // sweep guard is no longer the only thing between a retention sweep and
+    // an account's history. The guard is still required, but what it now
+    // protects is the conversion record, not the account's essays (those left
+    // the cascade when this column started being nulled): a retention sweep
+    // that deletes guest_sessions rows older than N days (KAN-10's own scope
+    // stops short of writing that sweep) must exclude converted sessions
+    // (`converted_at IS NULL`), or it deletes a session row that an account's
+    // `guest_sessions.user_id` still points at.
+    sessionId: text('session_id').references(() => guestSessions.id, { onDelete: 'cascade' }),
+    // Null while a guest owns the row. Set at conversion, or at creation for
+    // an essay a registered user submits directly. Cascades on account
+    // erasure.
     userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
     content: text('content').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -102,9 +141,28 @@ export const essays = fluentinaSchema.table(
   (table) => [
     // Same reasoning as guest_sessions.user_id above: both FK columns are
     // read on every ownership-scoped query and every cascade, and neither
-    // gets an index automatically.
-    index('essays_session_id_idx').on(table.sessionId),
+    // gets an index automatically. Partial on this one: every account-owned
+    // essay has a NULL session_id, and NULLs are never looked up through an
+    // equality predicate, so indexing them is dead weight that grows with
+    // every registered submission.
+    index('essays_session_id_idx').on(table.sessionId).where(sql`session_id IS NOT NULL`),
     index('essays_user_id_idx').on(table.userId),
+    // Exactly one owner, always. The legal states are:
+    //   guest, unconverted   session_id set,  user_id NULL
+    //   guest, converted     session_id NULL, user_id set   (nulled at conversion)
+    //   registered, native   session_id NULL, user_id set
+    // and both-NULL (unreadable by anyone, never swept) and both-set are
+    // forbidden. `num_nonnulls(...) = 1`, NOT `user_id IS NOT NULL OR
+    // session_id IS NOT NULL`: that reads as the same rule and is not — it
+    // permits both-set, which is exactly the state a conversion that forgot
+    // to null `session_id` (or the stale-cookie race in `createEssay`) would
+    // write. This CHECK is only true because conversion nulls `session_id`;
+    // it is what turns a future write path that forgets into a loud
+    // failure rather than a silent second owner.
+    //
+    // Bare column names in the SQL, not interpolated Drizzle columns: those
+    // can be emitted table-qualified, which a CHECK constraint rejects.
+    check('essays_exactly_one_owner', sql`num_nonnulls(user_id, session_id) = 1`),
   ],
 );
 
@@ -274,11 +332,12 @@ export const rateLimitCounters = fluentinaSchema.table(
   'rate_limit_counters',
   {
     // Encodes both the action and the identity being counted, e.g.
-    // "essaySubmission:session:<id>" or "essaySubmission:ip:<ip>" — see
+    // "essaySubmission:session:<id>", "essaySubmission:user:<id>" (KAN-52) or
+    // "essaySubmission:ip:<ip>" — see
     // lib/domain/rate-limit.ts for the exact strings. Free-form on purpose:
     // this table has no idea what a "session" or an "IP" is, only that two
     // requests with the same key in the same window count against each
-    // other. Personal data (a session id, a client address) for as long as
+    // other. Personal data (a session id, a user id, a client address) for as long as
     // its row lives — see this table's own comment above for why that's now
     // bounded to roughly two hours after the next write to this table
     // (not forever, and not a hard "two hours from now" either — see that
@@ -296,5 +355,95 @@ export const rateLimitCounters = fluentinaSchema.table(
     // scan of the whole table — the same unbounded-growth problem this
     // index exists to close, just moved from row count to query cost.
     index('rate_limit_counters_window_start_idx').on(table.windowStart),
+  ],
+);
+
+/**
+ * KAN-20 — a registered user's login session (database sessions, not JWTs:
+ * a row can be deleted, which is what makes logout real).
+ *
+ * `id` is SHA-256 of the session token, 64 hex characters — NEVER the token
+ * itself. Unlike `guest_sessions.id`, nothing has a foreign key to this
+ * column, so there is no reason to keep the raw value. Without the hash, any
+ * read of this table that does not execute code — a backup, an export, a
+ * SQL-injection read — yields every live session token. With it, that same
+ * read yields digests that authenticate nothing.
+ *
+ * Expiry is two independent conditions, both evaluated in SQL in the same
+ * WHERE as the lookup (lib/db/sessions.ts), never filtered in JS after the
+ * read: an absolute `expires_at` (30 days, matching ADR-17) and an idle
+ * timeout on `last_used_at` (14 days).
+ *
+ * Expired rows are swept on session CREATION (`DELETE ... WHERE expires_at <
+ * now()`), not on read: creation is rare, reads are hot, and correctness
+ * never depends on the sweep because the lookup filters anyway. The same
+ * honest caveat as `rate_limit_counters` above applies verbatim: on a
+ * scale-to-zero service this bounds growth, it does not bound it to a fixed
+ * interval — expired rows sit until the next sign-in or registration lands
+ * on an instance. A Cloud Scheduler job would close that gap; it is not built
+ * here, because standing one up is not this story's call to make.
+ */
+export const sessions = fluentinaSchema.table(
+  'sessions',
+  {
+    id: text('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    // The FK side is not indexed for you (same reasoning as
+    // guest_sessions.user_id): every account-erasure cascade and every
+    // per-user session operation filters on it.
+    index('sessions_user_id_idx').on(table.userId),
+    // Keeps the sweep an indexed range scan rather than a sequential one.
+    index('sessions_expires_at_idx').on(table.expiresAt),
+  ],
+);
+
+/**
+ * KAN-20 / KAN-21 / KAN-22 — who agreed to what, in which version, and when.
+ * A versioned, timestamped ROW per decision, never a boolean column on
+ * `users`.
+ *
+ * APPEND-ONLY. A withdrawal is a new row with `granted = false`; nothing in
+ * this codebase UPDATEs a row here, and the current state of a `kind` is its
+ * most recent row (`lib/db/consent-records.ts`). That is what makes this an
+ * audit trail rather than a settings table: "what had this person agreed to
+ * on the 3rd of March" stays answerable after they change their mind.
+ *
+ * Registration writes one row per kind (lib/contracts/consent.ts), INCLUDING
+ * marketing when it is unticked, with `granted = false`: affirmative evidence
+ * the choice was presented and declined, which a missing row is not.
+ *
+ * `kind` and `document_version` are plain text, like every other
+ * status-shaped column in this schema: the app layer (lib/contracts/
+ * consent.ts) is the single source of truth for the valid set, not a
+ * Postgres enum a migration must chase. `document_version` is what the client
+ * actually rendered, threaded through the request, not a constant stamped on
+ * at insert time.
+ *
+ * Cascades on `user_id`: erasing an account erases its consent trail with it
+ * — the one deletion path this table has.
+ */
+export const consentRecords = fluentinaSchema.table(
+  'consent_records',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    documentVersion: text('document_version').notNull(),
+    granted: boolean('granted').notNull(),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Serves "the latest row per kind for this user" — the only read shape —
+    // and doubles as the FK-side index for the erasure cascade.
+    index('consent_records_user_kind_recorded_idx').on(table.userId, table.kind, table.recordedAt),
   ],
 );

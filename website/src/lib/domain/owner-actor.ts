@@ -11,9 +11,9 @@ import 'server-only';
  * (`request.cookies`) and the Server Component (`await cookies()`) share one
  * implementation without the domain layer importing `next/server`.
  *
- * `async` today with nothing awaited — deliberately, not by accident.
- * KAN-20's Auth.js database session is a `sessions` row lookup, so the
- * signature is fixed now to keep that story from churning both call sites.
+ * `async` because the registered-session lookup is a `sessions` row read
+ * (KAN-20). The signature was fixed before that story landed, to keep it from
+ * churning both call sites.
  *
  * ORDER MATTERS: a registered session is tried first, the guest cookie only
  * as a fallback. After a guest converts, `ownedBy` for a `GuestActor` requires

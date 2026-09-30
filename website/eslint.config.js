@@ -303,7 +303,20 @@ export default [
     // way the original two routes did — added here on purpose, per this
     // block's own comment above ("a future route is free to use
     // NextResponse.json directly until it, too, adopts rejectionResponse").
-    files: ["src/app/api/essays/route.ts", "src/app/api/guest-session/route.ts", "src/app/api/essays/\\[id\\]/grading/route.ts"],
+    files: [
+      "src/app/api/essays/route.ts",
+      "src/app/api/guest-session/route.ts",
+      "src/app/api/essays/\\[id\\]/grading/route.ts",
+      // KAN-20: the three auth routes adopt rejectionResponse() on purpose too.
+      "src/app/api/auth/register/route.ts",
+      "src/app/api/auth/login/route.ts",
+      "src/app/api/auth/logout/route.ts",
+      // KAN-52: the shared body guard builds two of every route's rejections
+      // (`bodyTooLarge`, `invalidJson`) for all of the routes above, so a
+      // branch that skipped the helper THERE would be invisible to every
+      // per-route rule in this list.
+      "src/lib/request-body.ts",
+    ],
     rules: {
       "no-restricted-syntax": [
         "error",

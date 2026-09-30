@@ -7,7 +7,12 @@ import { getGuestSessionById, createGuestSession, convertGuestSessionToUser } fr
 import { generateGuestSessionId } from '@/lib/domain/session-id';
 import { GUEST_SESSION_RESOLVE_SESSION_LIMIT, GUEST_SESSION_RESOLVE_IP_LIMIT } from '@/lib/domain/rate-limit';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
+import { db } from '@/lib/db/client';
+import { guestSessions } from '@/lib/db/schema';
+import { REGISTERED_SESSION_COOKIE_NAME } from '@/lib/registered-session-cookie';
+import { generateRegisteredSessionToken } from '@/lib/domain/registered-session-token';
 import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import { registerTestAccount } from '@/test/auth-fixtures';
 import type { GuestSessionId } from '@/lib/contracts/actor';
 
 function postWithCookie(
@@ -429,5 +434,83 @@ describe('POST /api/guest-session — KAN-31: guard rejections never leak the se
     expect(response.status).toBe(429);
     expect(body.reason).toBe('rateLimited');
     expect(rawBody).not.toContain(staleSessionId);
+  });
+});
+
+/**
+ * KAN-52 — `GuestSessionBootstrap` renders on the landing and essay-entry pages
+ * for everyone, so without this a signed-in user wrote a `guest_sessions` row
+ * nothing would ever read or sweep. The gate is in the route (see its comment for
+ * why not the page); these prove it against the real database.
+ */
+describe('POST /api/guest-session — KAN-52: a signed-in user mints no guest session', () => {
+  function postAs(cookies: Record<string, string>): NextRequest {
+    const cookie = Object.entries(cookies)
+      .map(([name, value]) => `${name}=${value}`)
+      .join('; ');
+    return new NextRequest(new URL('http://localhost:3000/api/guest-session'), {
+      method: 'POST',
+      headers: cookie ? { cookie } : {},
+    });
+  }
+  const count = async () => (await db.select().from(guestSessions)).length;
+
+  it('answers 200 and creates NO guest_sessions row for a live registered session carrying a fresh, well-formed guest cookie', async () => {
+    const account = await registerTestAccount();
+    const fresh = generateGuestSessionId();
+
+    const response = await POST(postAs({ [REGISTERED_SESSION_COOKIE_NAME]: account.token, [GUEST_SESSION_COOKIE_NAME]: fresh }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(await count()).toBe(0);
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('the control: the SAME request without the registered session DOES create the row — so the zero above is the gate, not an inert route', async () => {
+    const fresh = generateGuestSessionId();
+
+    const response = await POST(postAs({ [GUEST_SESSION_COOKIE_NAME]: fresh }));
+
+    expect(response.status).toBe(200);
+    expect(await count()).toBe(1);
+  });
+
+  it('answers 200, not 400, for a signed-in user whose browser holds no usable guest cookie', async () => {
+    const account = await registerTestAccount();
+
+    const response = await POST(postAs({ [REGISTERED_SESSION_COOKIE_NAME]: account.token }));
+
+    expect(response.status).toBe(200);
+    expect(await count()).toBe(0);
+  });
+
+  it('does not reissue a cookie for a signed-in user whose guest cookie names a converted session', async () => {
+    const stale = generateGuestSessionId();
+    await createGuestSession({ kind: 'guest', sessionId: stale });
+    const account = await registerTestAccount({ guestSessionId: stale });
+    const before = await count();
+
+    const response = await POST(postAs({ [REGISTERED_SESSION_COOKIE_NAME]: account.token, [GUEST_SESSION_COOKIE_NAME]: stale }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(await count()).toBe(before);
+  });
+
+  it('a registered token that names no live session is not signed in: the guest path runs as it always did', async () => {
+    const fresh = generateGuestSessionId();
+
+    const response = await POST(postAs({ [REGISTERED_SESSION_COOKIE_NAME]: generateRegisteredSessionToken(), [GUEST_SESSION_COOKIE_NAME]: fresh }));
+
+    expect(response.status).toBe(200);
+    expect(await count()).toBe(1);
+  });
+
+  it('still rejects no-cookie-at-all with 400 invalidSessionCookie — the gate does not loosen the guest guard', async () => {
+    const response = await POST(postAs({}));
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { reason?: string }).reason).toBe('invalidSessionCookie');
   });
 });
