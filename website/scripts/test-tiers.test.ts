@@ -219,6 +219,9 @@ describe('the real map: paths the first version of it dropped on the floor', () 
     for (const t of tests) expect(s.unitTests).toContain(rel(t));
   });
 
+  // Asserts the REASON, not just `all`: a path no area claims would select
+  // everything anyway, via the catch-all, so `mode` alone cannot tell whether
+  // the run-everything entry is still there.
   it.each([
     `${S}/test/setup.ts`,
     `${S}/test/db-fixtures.ts`,
@@ -230,8 +233,11 @@ describe('the real map: paths the first version of it dropped on the floor', () 
     'website/package.json',
     '.github/workflows/ci.yml',
     '.github/workflows/deploy-website.yml',
-  ])('%s selects everything', (file) => {
-    expect(select([file]).mode).toBe('all');
+    'website/scripts/test-tiers.ts',
+  ])('%s selects everything, as a shared file', (file) => {
+    const s = select([file]);
+    expect(s.mode).toBe('all');
+    expect(s.reasons.join('\n')).toContain('shared:');
   });
 
   it('IntlProvider, sitemap.ts and robots.ts land in an area, with their specs', () => {
@@ -333,6 +339,23 @@ describe('the real map: each area selects its own unit tests and its own specs',
     for (const t of unitTestsOnDisk.filter((f) => res.some((re) => re.test(f)))) {
       expect(s.unitTests).toContain(rel(t));
     }
+  });
+
+  it('deleting a module and its tests selects the area\'s surviving tests, and hands the runner no deleted file', () => {
+    const deleted = [`${S}/lib/domain/rate-limit.ts`, `${S}/lib/domain/rate-limit.test.ts`, `${S}/lib/domain/rate-limit-auth.test.ts`];
+    const surviving = tracked.filter((f) => !deleted.includes(f));
+    const s = selectTests(deleted, surviving);
+    expect(s.mode).toBe('subset');
+    expect(s.areas).toContain('api-edge');
+    // A deleted test is gone from the tree; `vitest run <gone>` would exit 1
+    // with "No test files found".
+    for (const d of deleted) expect(s.unitTests).not.toContain(rel(d));
+    expect(s.unitTests).toContain(rel(`${S}/lib/same-origin.test.ts`));
+  });
+
+  it('a diff of only deleted files that no area claims still selects everything', () => {
+    const s = selectTests(['website/src/lib/long-gone.ts'], tracked);
+    expect(s.mode).toBe('all');
   });
 
   it('a change to a spec does not drag in unrelated unit tests', () => {
