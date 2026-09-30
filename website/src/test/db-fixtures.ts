@@ -14,6 +14,7 @@
  * contracts, domain and adapters (see eslint.config.js), closes that: no
  * production module graph can reach this file at all, from any layer.
  */
+import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { db, closePool } from '@/lib/db/client';
 import { users } from '@/lib/db/schema';
@@ -48,6 +49,10 @@ function assertLocalDatabase(): void {
  * ordering for the first three; `rate_limit_counters` has no FK to anything,
  * so it's just listed alongside them.
  *
+ * `sessions` and `consent_records` (KAN-20) are named explicitly for the same
+ * reason `grading_jobs` is below — both cascade from `users`, but a future edit
+ * to either FK must not silently start leaking rows between tests.
+ *
  * `grading_jobs` (KAN-16) is named explicitly too, not left to the
  * `essays` -> `grading_jobs` FK's own `ON DELETE CASCADE` — round-1 review,
  * finding 18: it worked either way today (a truncated `essays` row cascades
@@ -58,22 +63,28 @@ function assertLocalDatabase(): void {
 export async function resetDatabase(): Promise<void> {
   assertLocalDatabase();
   await db.execute(
-    sql`TRUNCATE TABLE fluentina.essays, fluentina.grading_jobs, fluentina.guest_sessions, fluentina.users, fluentina.rate_limit_counters RESTART IDENTITY CASCADE`,
+    sql`TRUNCATE TABLE fluentina.essays, fluentina.grading_jobs, fluentina.guest_sessions, fluentina.sessions, fluentina.consent_records, fluentina.users, fluentina.rate_limit_counters RESTART IDENTITY CASCADE`,
   );
 }
 
 /**
- * Inserts a bare row into `users` and returns its id, so a test's
- * `UserActor` fixture points at a real FK target — `essays.user_id` and
- * `guest_sessions.user_id` both reference `users.id`, so a `UserActor`
- * built from a bare `randomUUID()` fails conversion with a foreign-key
- * violation, correctly: a registered-account id has to actually exist.
- * Registration itself (email, auth, etc.) is a separate story; this is
- * fixture-only plumbing for a column this story's FKs require, not a
- * repository export real code calls.
+ * Inserts a minimal row into `users` and returns its id, so a test's
+ * `UserActor` fixture points at a real FK target — `essays.user_id`,
+ * `guest_sessions.user_id`, `sessions.user_id` and `consent_records.user_id`
+ * all reference `users.id`, so a `UserActor` built from a bare `randomUUID()`
+ * fails with a foreign-key violation, correctly: a registered-account id has
+ * to actually exist.
+ *
+ * Since KAN-20 `users` has NOT NULL `email` and `password_hash`, so this
+ * writes a unique throwaway email and a placeholder that is NOT a parseable
+ * password hash — a fixture user cannot be logged in as. Tests that need a
+ * real, loginable account register one through `registerAccount`.
  */
 export async function createTestUser(): Promise<string> {
-  const [row] = await db.insert(users).values({}).returning({ id: users.id });
+  const [row] = await db
+    .insert(users)
+    .values({ email: `fixture-${randomUUID()}@example.test`, passwordHash: 'fixture-not-a-real-hash' })
+    .returning({ id: users.id });
   return row.id;
 }
 

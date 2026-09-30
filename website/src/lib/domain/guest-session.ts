@@ -117,8 +117,23 @@ export async function resolveGuestSession(rawCookieValue: string | undefined): P
 
 async function mintFreshGuestSession(): Promise<ResolvedGuestSession> {
   const actor: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
-  const session = await createSessionTolerably(actor);
-  return { actor, session, isNew: true, reissued: true };
+  try {
+    const session = await createSessionTolerably(actor);
+    return { actor, session, isNew: true, reissued: true };
+  } catch (err) {
+    if (!(err instanceof SessionIdUnavailableError)) throw err;
+    // There is no further fallback here — recovering is what brought us to
+    // this function, and a freshly generated 128-bit id colliding with a
+    // committed-but-unavailable row is not something a second attempt is
+    // owed. It is a 500 for this request either way; the point of catching
+    // it is that it is now an explicit failure with its own message rather
+    // than `SessionIdUnavailableError` escaping to the framework's default
+    // handling (stderr, so Cloud Logging) from a path whose caller was
+    // written on the assumption that error is always caught above it.
+    // `cause` keeps the chain for whoever debugs it; nothing in either
+    // message carries the id (see the error's own comment below).
+    throw new Error('could not create a guest session under a freshly generated id', { cause: err });
+  }
 }
 
 /**
@@ -153,7 +168,7 @@ async function createSessionTolerably(actor: GuestActor): Promise<GuestSession> 
     // session that is no longer available as a guest session — most likely
     // converted to a registered account before this call ever ran, but see
     // the error's own comment for the other case this covers.
-    throw new SessionIdUnavailableError(actor.sessionId);
+    throw new SessionIdUnavailableError();
   }
 }
 
@@ -185,8 +200,20 @@ async function createSessionTolerably(actor: GuestActor): Promise<GuestSession> 
  * there a moment ago.
  */
 class SessionIdUnavailableError extends Error {
-  constructor(sessionId: string) {
-    super(`guest session id "${sessionId}" is no longer available for a guest session`);
+  // Takes no id, deliberately (KAN-41): a guest session id is a bearer
+  // credential — whoever holds it IS that guest (ADR-17) — and an exception
+  // message is the thing every error boundary, APM hook and stray
+  // `console.error` serialises. `resolveGuestSession` distinguishes this
+  // error by `instanceof`, never by its text, so the id carries no
+  // information any consumer uses. KAN-36's query-error sanitiser does not
+  // cover this: it only sees what the Postgres driver throws, and this error
+  // is constructed here, by our own code. Being caught and discarded on the
+  // ordinary path is not a substitute for not building the credential into
+  // the object in the first place. No diagnostic handle (a hash prefix) is
+  // carried either: nothing reads one, and the only place this can surface
+  // uncaught (`mintFreshGuestSession`) wraps it with a message of its own.
+  constructor() {
+    super('guest session id is no longer available for a guest session');
     this.name = 'SessionIdUnavailableError';
   }
 }
