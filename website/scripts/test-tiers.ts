@@ -109,6 +109,7 @@ export const AREAS: Area[] = [
       `${T}/guest-flow.spec.ts`,
       `${T}/guest-flow-i18n.spec.ts`,
       `${T}/guest-session.spec.ts`,
+      `${T}/registration.spec.ts`,
     ],
   },
   {
@@ -137,7 +138,7 @@ export const AREAS: Area[] = [
       `${S}/components/guest/GuestSessionBootstrap*`,
       `${S}/middleware.test.ts`,
     ],
-    specs: [`${T}/guest-session.spec.ts`],
+    specs: [`${T}/guest-session.spec.ts`, `${T}/registration.spec.ts`],
   },
   {
     name: 'api-edge',
@@ -151,7 +152,7 @@ export const AREAS: Area[] = [
       `${S}/lib/domain/rate-limit*`,
       `${S}/lib/db/rate-limit*`,
     ],
-    specs: [`${T}/essay-entry.spec.ts`, `${T}/guest-session.spec.ts`],
+    specs: [`${T}/essay-entry.spec.ts`, `${T}/guest-session.spec.ts`, `${T}/registration.spec.ts`],
   },
   {
     name: 'data',
@@ -165,7 +166,7 @@ export const AREAS: Area[] = [
     note: 'Locale routing, message catalogues, the intl provider.',
     paths: [`${S}/messages/**`, `${S}/i18n/**`, `${S}/components/IntlProvider.tsx`],
     // Every guest component renders from the catalogues.
-    specs: [`${T}/guest-flow-i18n.spec.ts`, `${T}/guest-flow.spec.ts`, `${T}/essay-entry.spec.ts`],
+    specs: [`${T}/guest-flow-i18n.spec.ts`, `${T}/guest-flow.spec.ts`, `${T}/essay-entry.spec.ts`, `${T}/registration.spec.ts`],
   },
   {
     name: 'marketing',
