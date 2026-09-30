@@ -406,9 +406,12 @@ describe('login adopts the guest essay the browser is holding (KAN-52; Irina, 20
     const account = await registerTestAccount();
     const { guest } = await guestWithEssay();
     const real = db.transaction.bind(db);
-    let derivationsWhenTransactionOpened = -1;
+    // EVERY transaction opened during the login, not just the last: a login that
+    // opened an early transaction (around the lookup, say) and then the real one
+    // would overwrite a single variable with the late, innocent-looking value.
+    const derivationsWhenTransactionsOpened: number[] = [];
     const spy = vi.spyOn(db, 'transaction').mockImplementation(((...args: Parameters<typeof real>) => {
-      derivationsWhenTransactionOpened = scryptCalls();
+      derivationsWhenTransactionsOpened.push(scryptCalls());
       return real(...args);
     }) as typeof db.transaction);
     vi.mocked(scrypt).mockClear();
@@ -419,10 +422,10 @@ describe('login adopts the guest essay the browser is holding (KAN-52; Irina, 20
       spy.mockRestore();
     }
 
-    // The single verification derivation was already done when the transaction
-    // opened. Were the lookup and verification moved inside `signInUser`'s
-    // transaction, this would be 0.
-    expect(derivationsWhenTransactionOpened).toBe(1);
+    // Exactly one transaction, opened after the single verification derivation had
+    // already finished. Were the lookup or verification inside a transaction, a
+    // transaction would open at 0 derivations.
+    expect(derivationsWhenTransactionsOpened).toEqual([1]);
     expect(scryptCalls()).toBe(1);
   });
 });
