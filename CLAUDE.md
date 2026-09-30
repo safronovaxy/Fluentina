@@ -32,40 +32,115 @@ cd website && npm run test:e2e   # Playwright e2e
 
 ### Test tiers — smoke and full
 
-The suite is large enough (1100+ unit tests, 500+ Playwright instances across
-four projects) that running everything on every push is the wrong default.
-Two tiers, by **area**:
+Running everything on every push is slow, so there are two tiers. **Only stage 1
+exists today** — read "What is live" before relying on anything below.
 
-| Tier | When | What |
-|------|------|------|
-| **Smoke** | Every push to a PR | `lint` + `typecheck` always, plus the unit tests and e2e specs for the areas the diff touches, chromium-desktop only |
-| **Full** | Daily on a schedule, and before merge | Everything: all unit tests, all four Playwright projects, both locales |
+Sizes, measured at `aa58e70`: Playwright 526 tests (`--list --grep-invert "@cms"`:
+202 in `chromium-desktop`, 108 in each of the other three projects); Vitest 1,111
+literal `it()`/`test()` calls across 77 files under `website/src/` (a static count —
+the suite needs Postgres, so it was not run-counted — plus 42 `.each` tables that
+expand to more). `ci.yml` and `CONTRIBUTING.md` still say 470 Playwright tests; that
+is their KAN-33-era snapshot, before the later specs. A `website` run measured
+**8m13s**, of which ~160s is prologue any tier pays (setup, containers, `npm ci`,
+lint, typecheck, migrate, drift check, build, Playwright install, TLS, app start).
 
-**Areas** are derived from the changed paths, not from tags — a path map cannot
-drift out of date the way 1100 hand-applied tags would:
+**What is live (stage 1):**
 
-| Area | Paths |
-|------|-------|
-| `guest-funnel` | `components/guest/**`, `app/[locale]/(guest)/**`, `app/api/essays/**` |
-| `grading` | `lib/domain/grading/**`, `lib/contracts/grading*` |
-| `auth` | `lib/domain/{owner-actor,registered-session,guest-session,login,registration,password}*`, `app/api/auth/**`, `lib/*session-cookie*` |
-| `data` | `lib/db/**`, `drizzle/**`, `scripts/migrate.ts` |
-| `marketing` | `app/(marketing)/**`, `lib/strapi*`, `page-components/**` |
-| `placement-test` | `components/placement-test/**`, `app/(placement-test)/**` |
-| `chrome` | `components/layout/**`, `messages/**`, `middleware.ts`, `i18n/**` |
+| Tier | `ci.yml` job | Runs | What | Gates merge? |
+|------|--------------|------|------|--------------|
+| **Full** | `Website — lint, typecheck, test, build, e2e` | every PR push, every push to `main`, daily schedule, manual dispatch | everything: all unit tests, all four Playwright projects, both locales | **Yes** — the required check |
+| **Smoke** | `Website smoke — selected tests, chromium-desktop only` | PR pushes only | lint, typecheck, migrations always; plus the unit tests and e2e specs the diff selects, `chromium-desktop` only | **No** |
 
-A change to `lib/contracts/**`, `lib/db/schema.ts`, `middleware.ts` or anything
-in `.github/` runs **everything** — those are shared by construction.
+Smoke is an *additional*, faster signal. It does not replace the full job on
+PRs, so there is no wall-clock saving on the merge gate yet — stage 1 costs
+extra runner minutes and buys earlier feedback.
 
-> ⚠️ **Smoke is for speed while iterating, not a merge gate.** "CI green" in
-> Ways of Working §5 means a **full** run, on the PR's current head. A smoke
-> run is not a substitute, and a green smoke run on a head whose full run has
-> not completed is not a merge signal.
+**Not live (stage 2):** making the full job conditional on PRs, so the minutes
+are actually saved. It needs a branch-protection change that needs repo
+Administration, and cannot be done by flipping an `if:`: GitHub reports a job
+skipped by `if:` as *success* to a required check, so skipping the full job
+without first changing what is required would silently delete the merge gate.
+Until that change is made and a follow-up PR lands, the full job runs on every PR.
 
-**The Test Lead nominates the smoke set for each story**, as part of review —
-the path map gives a default, and the Test Lead says what that default misses
-for this particular diff. See `.claude/agents/test-lead.md`. A story that
-introduces a new area adds its path-map entry in the same PR.
+> ⚠️ **Smoke is not a merge gate.** "CI green" in Ways of Working §5 means the
+> **full** job, on the PR's current head. A green smoke run is not a substitute,
+> and it is not a merge signal even when it finishes first.
+
+**Pushes to `main` always run full**, and the deploy gate checks for it. `verify-ci`
+in `deploy-website.yml` and `deploy-cms.yml` no longer accepts "some successful
+`ci.yml` run": it requires the full job, by name, to have succeeded in a `push` or
+`workflow_dispatch` run on `main` for that SHA. A smoke run cannot satisfy it, and
+neither can the daily scheduled run (its event is neither). The job name is a
+three-way contract — branch protection, `verify-ci`, `ci.yml` — and
+`website/scripts/ci-workflows.test.ts` fails if they disagree.
+
+**How smoke chooses tests.** The selection is a script, not inline shell:
+`website/scripts/test-tiers.ts` (the map and the rules, pure),
+`website/scripts/select-tests.ts` (the CLI the job calls), tests in
+`website/scripts/test-tiers.test.ts`. It happens *inside* a job that always starts;
+`ci.yml` has no `paths:` filter and must not get one (see its own comments for the
+two incidents). The rules, in order:
+
+1. **The run-everything set is checked first and is absolute.** If any changed
+   path matches it, everything runs — even when an area also claims that path.
+2. **Any changed path that matches no area runs everything.** The map is
+   hand-maintained and will have gaps; a gap must cost minutes, never coverage.
+   There is deliberately no "ignore" list.
+3. **An empty diff, or a diff the script cannot compute, runs everything.**
+4. Otherwise, the union of the matched areas' unit tests and e2e specs.
+
+All paths in the map are full repo-relative paths (`website/src/...`), because
+that is what `git diff --name-only` emits.
+
+The run-everything set: `.github/**`, `docker-compose.yml`, `website/drizzle/**`,
+`website/drizzle.config.ts`, `website/src/lib/db/schema.ts`,
+`website/src/lib/contracts/**`, `website/src/middleware.ts`,
+`website/src/test/**` and `website/tests/helpers/**` (loaded by every test),
+`website/vitest.config.ts`, `website/playwright.config.ts`, `website/package.json`,
+`website/package-lock.json`, `website/tsconfig.json`, `website/eslint.config.js`,
+`website/next.config.ts`, `website/tailwind.config.ts`, `website/postcss.config.js`,
+`website/src/components/ui/**`, `website/scripts/**`.
+
+**Areas** are named in `test-tiers.ts`, which is the source of truth for their
+globs — not repeated here, because a second copy in prose is how the first
+version of this section came to describe paths that do not exist. Each area's
+unit tests are the test files its globs match (unit tests sit next to their
+source); its e2e specs are listed by name, because Playwright's `testDir` is
+`website/tests/` and no path glob can find them.
+
+| Area | Covers | e2e specs |
+|------|--------|-----------|
+| `guest-funnel` | guest components, `[locale]` pages, essays API, status/elapsed hooks | essay-entry, word-count, grading-preview, guest-flow, guest-flow-i18n, guest-session |
+| `grading` | `lib/domain/grading`, grading routes and jobs | grading-preview, essay-entry |
+| `auth` | sessions, login, registration, ownership, session cookies | guest-session |
+| `api-edge` | every route handler; same-origin, client-ip, rate-limit, request-body, rejection-response | essay-entry, guest-session |
+| `data` | `lib/db/**` (not `schema.ts`) | essay-entry, guest-session |
+| `i18n` | messages, `i18n/**`, `IntlProvider` | guest-flow-i18n, guest-flow, essay-entry |
+| `marketing` | `(marketing)` pages, `page-components`, Strapi, SEO, sitemap | blog, contact-form, navigation, no-console-errors, redirects, routing, seo, sitemap |
+| `placement-test` | placement-test components and pages | placement-test, no-console-errors |
+| `shell` | layout, providers, global CSS, shared `lib` helpers | navigation, no-console-errors, guest-flow |
+| `cms` | `cms/**` | none — on purpose |
+
+`cms/**` selects no website test because no `@cms` spec runs in CI (there is no
+CMS in the job), so nothing in the website suite can observe a change there; the
+separate `cms` job builds it on every event, tiered or not.
+
+**What the map does not know:** the import graph. `lib/db/**` is used by most of
+the domain layer and the map does not follow that; nor does it see a change whose
+blast radius is wider than its path. That is the Test Lead's per-story nomination
+(below). And smoke runs neither WebKit nor the mobile projects, by design.
+
+**Keeping the map honest.** `test-tiers.test.ts` runs against the real tree and
+fails if a spec under `website/tests/` is named by no area, a unit test is
+reachable from no area, a glob matches no tracked file, or editing a module
+would not select its own co-located test. A story that adds a new area or a new
+spec adds its map entry in the same PR — the test will say so.
+
+**The Test Lead nominates for smoke, as advice.** On each story, the Test Lead
+notes in the review anything the default selection misses for that diff. The
+nomination is **advisory**: it is recorded in the review, and a human acts on it
+by editing the map when they next touch it. No file the workflow reads carries
+per-PR nominations. See `.claude/agents/test-lead.md`.
 
 ### CMS
 ```bash
@@ -249,12 +324,14 @@ in parallel, every PR. Address all findings in ONE consolidated revision, not
 a round trip per reviewer. Disagreeing with a finding is fine — say why rather
 than silently complying or silently ignoring it.
 
-**The Test Lead nominates the smoke set.** On every story, as part of its
-review, the Test Lead states which tests must run on each push for that story
-— starting from the path map in the Test tiers section and saying what that
-default misses for this diff. It is a nomination, not a veto: the full suite
-still gates merge. A story introducing a new area adds its path-map entry in
-the same PR.
+**The Test Lead flags what smoke would miss, as advice.** Once the smoke tier is
+on `main` (it is, from the PR that introduced `website/scripts/test-tiers.ts`),
+the Test Lead notes in its review anything the default selection would miss for
+that diff — or says in one line that the default is adequate. It is advisory: it
+is recorded in the review, it is not a veto, and the full job still gates merge.
+The one nomination with a consequence is a map gap — a story that adds an area or
+a spec adds its entry in `test-tiers.ts` in the same PR. See Test tiers above and
+`.claude/agents/test-lead.md`.
 
 **Escalate to Irina only when a 5th review round is triggered** by either the
 Solution Architect or the Test Lead. Four rounds of back-and-forth is the
@@ -326,5 +403,5 @@ contains a decision.
 - Deploy a change whose secrets or cloud resources do not exist yet — report it as a blocker instead
 - Monitor a GitHub Actions run after triggering a deploy (see Deployment section)
 - Merge on a green CI run from an earlier commit, on local checks standing in for CI, or on an approval that was conditional on a change not yet pushed
-- Merge on a green **smoke** run — smoke is for iteration speed; the merge gate is a full run on the PR's current head (see Test tiers)
+- Merge on a green **smoke** run — smoke is for iteration speed; the merge gate is the full job on the PR's current head (see Test tiers)
 - Fold an unrelated chore into a story's branch — it belongs on its own branch, so the story's PR stays reviewable

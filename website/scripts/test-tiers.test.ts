@@ -15,6 +15,7 @@
  *     fail when the map rots (a renamed directory, a new spec no area names).
  */
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -451,6 +452,28 @@ describe('the runners select exactly what the map says', () => {
     // The pairs that share a prefix are the ones a loose regex would confuse.
     const s = select(['website/tests/guest-flow.spec.ts']);
     expect(specsOnDisk.filter((t) => s.e2eSpecs.some((f) => new RegExp(f).test(abs(t)))).map(rel)).toEqual(['tests/guest-flow.spec.ts']);
+  });
+});
+
+// --- The docs describe what the code does ----------------------------------------
+
+describe('CLAUDE.md agrees with the map', () => {
+  // The first version of this section described a pipeline that did not exist.
+  // The prose is allowed to be shorter than the map, not to contradict it.
+  const doc = readFileSync(path.join(repoRoot, 'CLAUDE.md'), 'utf8');
+
+  it('lists every run-everything glob, in full repo-relative form', () => {
+    expect(RUN_EVERYTHING.filter((g) => !doc.includes(`\`${g}\``))).toEqual([]);
+  });
+
+  it('has a row for every area, naming every spec that area runs', () => {
+    for (const a of AREAS) {
+      const row = doc.split('\n').find((l) => l.startsWith(`| \`${a.name}\` |`));
+      expect(row, `no row for area ${a.name}`).toBeDefined();
+      for (const spec of a.specs) {
+        expect(row, `${a.name} row is missing ${spec}`).toContain(path.basename(spec, '.spec.ts'));
+      }
+    }
   });
 });
 

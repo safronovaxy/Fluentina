@@ -70,6 +70,13 @@ always releasable but does not itself deploy to production.
   migrations → confirm migrations match the schema → Vitest → build →
   Playwright against the locally built app, served through a self-signed
   TLS proxy (`website/scripts/tls-proxy.mjs`) as of KAN-30 — see below.
+  That is the **full** job, and it still runs **everything** on every PR push
+  and every push to `main`; it is the check that gates merge. Alongside it, PRs
+  also get a **smoke** job that runs only the tests the diff selects (chromium
+  only). Smoke is an earlier signal, not a gate: a green smoke run is not "CI
+  is green" for the merge criteria above. Anything the selection does not
+  recognise runs everything. See CLAUDE.md's "Test tiers" section, and note that
+  only stage 1 of it exists — the full job is not yet conditional on PRs.
 - **What that covers today is narrower than it sounds, but less narrow than
   it used to be.** The Playwright suite used to be the marketing regression
   suite only, with no funnel specs — KAN-14 added the first one

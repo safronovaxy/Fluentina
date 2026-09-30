@@ -45,34 +45,54 @@ Judged against the story's acceptance criteria, not a coverage percentage.
 - Tests arrived **with** the code in the same unit of work. Flag a PR that
   adds behaviour with no tests, and say which behaviour.
 
-## Nominate the smoke set
+## Flag what smoke would miss
 
-The suite is too large to run whole on every push, so it runs in two tiers —
-a per-push **smoke** run scoped by area, and a **full** run daily and before
-merge. See CLAUDE.md's Test tiers section for the path map and the areas.
+CI has two tiers (CLAUDE.md, "Test tiers"). The **full** job runs everything and
+gates merge. The **smoke** job runs only what the diff selects, on PR pushes,
+and gates nothing. The selection is `website/scripts/test-tiers.ts`: it keys off
+paths, it fails open (a path no area claims runs everything), and it does not
+follow the import graph.
 
-On every story you review, say which tests must run on each push for it:
+The path map cannot know what you know, so on each story you review, say what
+the default selection would **miss for this diff**:
 
-- Start from the path map. State which areas this diff touches, and therefore
-  what the default selection is.
-- Then say **what that default misses for this diff** — that is the part only
-  you can do. The map keys off paths; you have read the change. A diff
-  confined to `lib/domain/grading/**` that alters a contract shape other
-  areas consume is the obvious case, and the map cannot see it.
-- Name anything that should run on every push regardless of area, and why.
-  Keep that list short; a smoke tier that grows into the full suite has no
+- State which areas the diff touches (the smoke job's summary lists them), then
+  say what that default leaves out. The map keys off paths; you have read the
+  change. A change to `lib/db/essays.ts` that alters what it returns selects
+  the `data` area, but the domain and route tests that consume it are in other
+  areas and the map cannot see that. That is the case to call out.
+- If something should run on every push regardless of area, name it and say
+  why. Keep that short; a smoke tier that grows into the full suite has no
   reason to exist.
-- If the story introduces an area the map does not cover, say so — the
-  path-map entry is part of that PR.
+- If the default is adequate, say so in one line. Do not manufacture a finding.
+- If the story adds an area or a spec the map does not name, say so — the map
+  entry is part of that PR, and `test-tiers.test.ts` will already be failing.
 
-Two things this is not. It is **not a veto**: the full suite still gates
-merge, so a narrow smoke set costs feedback latency, never correctness. And
-it is **not a substitute for the coverage review above** — a test you exclude
-from smoke still has to exist and still has to bite.
+**This is advisory, and that is deliberate.** It is recorded in your review and
+nothing reads it automatically: no file in the repo carries per-PR smoke
+nominations, and the workflow does not consume one. A human acts on it by
+editing the map when they next touch it. The exception is a real map gap, which
+is an ordinary change to `test-tiers.ts`, made in the story's own PR.
 
-The failure mode to guard against is a smoke set chosen to be fast rather
-than chosen to catch this story's regressions. If the honest answer is "most
-of it, this change is broad", say that.
+Why not a committed file the workflow reads. Smoke gates nothing while the full
+job still runs on every PR, so a missed nomination costs feedback latency and
+never correctness; that does not justify a schema, a parser and its tests. And
+a per-PR input the PR author controls would let a PR narrow its own smoke
+selection, which is the wrong direction for a check whose point is to fail
+open. The durable record is the map itself, and it is tested. If smoke ever
+becomes the thing merge leans on (stage 2), revisit this.
+
+Only nominate once the tiering exists on `main`; before then there is no map to
+measure a diff against.
+
+Two things this is not. It is **not a veto**: the full suite still gates merge,
+so a narrow smoke set costs feedback latency, never correctness. And it is
+**not a substitute for the coverage review above** — a test you exclude from
+smoke still has to exist and still has to bite.
+
+The failure mode to guard against is a smoke set chosen to be fast rather than
+chosen to catch this story's regressions. If the honest answer is "most of it,
+this change is broad", say that.
 
 ## AI grading — the approach is fixed
 
