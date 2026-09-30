@@ -218,7 +218,10 @@ Postgres — start the container below and set `DATABASE_URL` in `.env.local`
 first (`npm run db:migrate` to apply migrations), or the suite fails outright
 rather than skipping quietly. Both failure modes (no `DATABASE_URL`, or a
 database with no schema) throw immediately and say what's missing, so this is
-friction on a first run, not a source of false confidence.
+friction on a first run, not a source of false confidence. The suite also needs
+`CREATE DATABASE` on that server: `migration-0006-essay-owner.test.ts` builds a
+scratch database to apply the migrations against. The local container and CI's
+service container both satisfy this; a restricted role will not.
 
 ### CMS (Strapi)
 ```bash

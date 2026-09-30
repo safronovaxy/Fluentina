@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveGuestSession } from '@/lib/domain/guest-session';
+import { resolveRegisteredSession } from '@/lib/domain/registered-session';
 import { checkGuestSessionResolveRateLimit } from '@/lib/domain/rate-limit';
 import { guestSessionIdSchema } from '@/lib/contracts/actor';
 import { GUEST_SESSION_COOKIE_NAME, GUEST_SESSION_COOKIE_OPTIONS } from '@/lib/guest-session-cookie';
@@ -145,6 +146,21 @@ import { logGuestSessionRejection } from '@/lib/guest-session-rejection-log';
  * `logGuestSessionRejection` — see that module's own comment for why this
  * exists (a rejection nothing counts is indistinguishable from one that
  * never fires) and exactly what it does and doesn't log.
+ *
+ * KAN-52: a request carrying a LIVE REGISTERED SESSION is answered 200 and
+ * does nothing else — no guest session is resolved, created or reissued. A
+ * signed-in user has no use for a guest session (their essays are owned by the
+ * account — `POST /api/essays`), and `GuestSessionBootstrap` renders on the
+ * landing and essay-entry pages for everyone, so without this every signed-in
+ * visit that arrived with a middleware-minted cookie wrote a `guest_sessions`
+ * row nothing would ever read or sweep. It is gated HERE rather than by the page
+ * reading the session: those two pages are statically prerendered on purpose
+ * (see the landing page's comment), and reading `cookies()` in a Server
+ * Component would make both fully dynamic for every guest too. The check
+ * precedes the guest-cookie guard deliberately — a signed-in user whose browser
+ * holds no usable guest cookie must not get a 400 for lacking one. It is the same
+ * 200 body a guest gets, so the response does not reveal whether a session was
+ * live.
  */
 export async function POST(request: NextRequest) {
   if (isCrossOriginRequest(request)) {
@@ -156,6 +172,11 @@ export async function POST(request: NextRequest) {
     logGuestSessionRejection(400, 'crossOrigin');
     return rejectionResponse('crossOrigin', 400, 'cross-origin request rejected');
   }
+
+  // KAN-52 — see this file's own top comment. A live registered session means
+  // there is nothing to bootstrap: answer, and mint nothing.
+  const signedIn = await resolveRegisteredSession((name) => request.cookies.get(name)?.value);
+  if (signedIn) return NextResponse.json({ ok: true });
 
   const raw = request.cookies.get(GUEST_SESSION_COOKIE_NAME)?.value;
   const cookieParse = guestSessionIdSchema.safeParse(raw);

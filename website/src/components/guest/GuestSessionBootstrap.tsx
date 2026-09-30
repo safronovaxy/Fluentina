@@ -47,6 +47,14 @@ import { useEffect, useRef } from 'react';
  * no retry, no UI, per the rest of this comment. Status code only, never
  * the cookie value or the session id: logging either would put a guest
  * identifier somewhere outside the HttpOnly cookie it's meant to stay in.
+ *
+ * KAN-52: this still fires for a signed-in user — it cannot know they are one
+ * (the session cookie is HttpOnly), and the pages that render it are statically
+ * prerendered on purpose, so reading the session to decide whether to render it
+ * would make them dynamic for everyone. The gate is on the other side of the
+ * request instead: `POST /api/guest-session` answers 200 and creates nothing for
+ * a request carrying a live registered session. A signed-in user owns their
+ * essays by account; a guest session row for them would never be read or swept.
  */
 export function GuestSessionBootstrap() {
   const firedRef = useRef(false);

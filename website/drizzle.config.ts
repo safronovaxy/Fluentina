@@ -24,8 +24,13 @@ export default defineConfig({
   dbCredentials: {
     url: process.env.DATABASE_URL,
   },
-  // Migrations are generated as SQL and checked in — never hand-edited —
-  // per the architecture decision to use Drizzle with drizzle-kit.
+  // Migrations are generated as SQL and checked in, per the architecture
+  // decision to use Drizzle with drizzle-kit. The rule is: never hand-edit a
+  // SCHEMA statement. A generated file may carry a hand-written DATA statement
+  // (drizzle-kit does not generate data changes) provided it is marked inline
+  // and a test covers it — the one instance is the backfill in
+  // `0006_kan52_essay_owner_actor.sql`, covered by
+  // `migration-0006-essay-owner.test.ts`.
   strict: true,
   verbose: true,
 });

@@ -4,7 +4,9 @@ import 'server-only';
  * KAN-16 / ADR-2 — starts grading for a just-created essay: writes the
  * `pending` job row, then enqueues it. Called once, from
  * `POST /api/essays`'s route handler, immediately after `submitEssay`
- * commits.
+ * commits. Takes an `OwnerActor` (KAN-52): a registered user's submission
+ * starts grading the same as a guest's, and `createGradingJob`'s ownership
+ * check reads the account-owned essay through `ownedBy`'s user branch.
  *
  * Deliberately two separate steps, not one atomic operation: the row write
  * is what a status poll (`GET /api/essays/[id]/grading`) needs to exist
@@ -32,11 +34,11 @@ import 'server-only';
  * catching an unexpected throw here would otherwise turn it into a raw 500
  * with no record of which case it was.
  */
-import type { GuestActor } from '@/lib/contracts/actor';
+import type { OwnerActor } from '@/lib/contracts/actor';
 import { createGradingJob } from '@/lib/db/grading-jobs';
 import { enqueueGradingJob } from './queue';
 
-export async function startGrading(actor: GuestActor, essayId: string): Promise<void> {
+export async function startGrading(actor: OwnerActor, essayId: string): Promise<void> {
   const job = await createGradingJob(actor, essayId);
   if (!job) {
     console.error(JSON.stringify({ severity: 'ERROR', event: 'start_grading_ownership_check_failed' }));

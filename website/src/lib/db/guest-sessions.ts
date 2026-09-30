@@ -91,9 +91,17 @@ export type GuestConversionOutcome = 'converted' | 'nothingToConvert';
  * Attaches a guest session — and every essay currently owned under it — to
  * a registered account. This is the acceptance criterion "after a guest
  * converts, the old session id must stop authorising reads" made concrete:
- * once this commits, `userId` is set on both the session row and its
- * essays, so `ownedBy()`'s `isNull(userId)` conjunct fails for the old
- * `GuestActor` on every one of them from then on.
+ * once this commits, `userId` is set on both the session row and its essays,
+ * so `ownedBy()`'s `isNull(userId)` conjunct fails for the old `GuestActor`
+ * on the session row, and — since KAN-52 — every essay it moved has its
+ * `session_id` set to NULL in the same UPDATE, so the old id matches no essay
+ * at all.
+ *
+ * `session_id` is nulled on the essays, not left as provenance. That is what
+ * the `essays_exactly_one_owner` CHECK requires (an account-owned essay has
+ * one owner column, not two), and it takes the essay out of the
+ * `guest_sessions` ON DELETE CASCADE: an account's history no longer hangs
+ * off a session row a retention sweep could delete.
  *
  * Takes a `GuestActor` specifically (only a guest can convert their own
  * session — a registered user has nothing to convert). Uses the exact same
@@ -128,9 +136,12 @@ export async function convertGuestSessionToUserWithin(
 
   if (!convertedSession) return 'nothingToConvert';
 
+  // `sessionId: null` is not tidiness: the CHECK on `essays` forbids both
+  // columns being set, and this write is what makes that true after
+  // conversion. Do not drop it.
   await tx
     .update(essays)
-    .set({ userId })
+    .set({ userId, sessionId: null })
     .where(ownedBy(actor, { sessionId: essays.sessionId, userId: essays.userId }));
   return 'converted';
 }

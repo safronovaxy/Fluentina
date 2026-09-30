@@ -4,8 +4,8 @@ import { submitEssay } from './essay-submission';
 import { generateGuestSessionId } from './session-id';
 import { createGuestSession } from '@/lib/db/guest-sessions';
 import { getEssayById } from '@/lib/db/essays';
-import { resetDatabase, closePool } from '@/test/db-fixtures';
-import type { GuestActor } from '@/lib/contracts/actor';
+import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import type { GuestActor, UserActor } from '@/lib/contracts/actor';
 
 // Round-1 review (blocking): `submitEssay` used to take the raw, possibly
 // absent cookie value and resolve it itself (via `resolveGuestSession`),
@@ -67,5 +67,27 @@ describe('submitEssay', () => {
     await expect(submitEssay(neverPersistedActor, 'Should never be persisted.')).rejects.toThrow(
       /guest session no longer exists/,
     );
+  });
+});
+
+describe('submitEssay — KAN-52: a registered user is an owner like any other', () => {
+  it('persists content owned by the account — user_id set, no session — and readable back through that user, with no guest session existing anywhere', async () => {
+    const user: UserActor = { kind: 'user', userId: await createTestUser() };
+
+    const essay = await submitEssay(user, 'An essay persisted under a registered account.');
+
+    expect(essay.userId).toBe(user.userId);
+    expect(essay.sessionId).toBeNull();
+    expect((await getEssayById(user, essay.id))?.content).toBe('An essay persisted under a registered account.');
+  });
+
+  it('is not readable by a guest, including one whose session exists', async () => {
+    const user: UserActor = { kind: 'user', userId: await createTestUser() };
+    const guest: GuestActor = { kind: 'guest', sessionId: generateGuestSessionId() };
+    await createGuestSession(guest);
+
+    const essay = await submitEssay(user, 'An account-owned essay.');
+
+    expect(await getEssayById(guest, essay.id)).toBeNull();
   });
 });

@@ -2,9 +2,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { db } from './client';
+import { signInUser } from './users';
 import { sessions, users } from './schema';
 import {
-  createSession,
   deleteSession,
   findLiveSessionUserId,
   insertSessionWithin,
@@ -12,7 +12,7 @@ import {
   touchSession,
 } from './sessions';
 import { generateRegisteredSessionToken, hashRegisteredSessionToken } from '@/lib/domain/registered-session-token';
-import { resetDatabase, createTestUser, closePool } from '@/test/db-fixtures';
+import { resetDatabase, createTestSession, createTestUser, closePool } from '@/test/db-fixtures';
 import type { UserActor } from '@/lib/contracts/actor';
 
 async function newUserActor(): Promise<UserActor> {
@@ -50,7 +50,7 @@ describe('sessions.id stores the SHA-256 of the token, never the token', () => {
     const actor = await newUserActor();
     const { token, hash } = freshHash();
 
-    await createSession(actor, hash);
+    await createTestSession(actor, hash);
 
     expect(await allSessionIds()).toEqual([hash]);
     // Belt and braces: search every column of every row, as text, for the token.
@@ -61,7 +61,7 @@ describe('sessions.id stores the SHA-256 of the token, never the token', () => {
   it('a lookup by the raw token finds nothing: only the hash authenticates', async () => {
     const actor = await newUserActor();
     const { token, hash } = freshHash();
-    await createSession(actor, hash);
+    await createTestSession(actor, hash);
 
     // Deliberately defeating the brand: this is what a caller that forgot to hash would do.
     expect(await findLiveSessionUserId(token as never)).toBeNull();
@@ -73,7 +73,7 @@ describe('findLiveSessionUserId — expiry and idle timeout are enforced in SQL'
   it('finds a fresh session and reports the user and when it was last used', async () => {
     const actor = await newUserActor();
     const { hash } = freshHash();
-    await createSession(actor, hash);
+    await createTestSession(actor, hash);
 
     const live = await findLiveSessionUserId(hash);
     expect(live?.userId).toBe(actor.userId);
@@ -87,7 +87,7 @@ describe('findLiveSessionUserId — expiry and idle timeout are enforced in SQL'
   it('sets absolute expiry 30 days out, on the database clock', async () => {
     const actor = await newUserActor();
     const { hash } = freshHash();
-    await createSession(actor, hash);
+    await createTestSession(actor, hash);
 
     const [row] = await db
       .select({ days: sql<number>`extract(epoch from (${sessions.expiresAt} - ${sessions.createdAt})) / 86400` })
@@ -99,7 +99,7 @@ describe('findLiveSessionUserId — expiry and idle timeout are enforced in SQL'
   it('refuses a session past its absolute expiry, even though it was used a moment ago', async () => {
     const actor = await newUserActor();
     const { hash } = freshHash();
-    await createSession(actor, hash);
+    await createTestSession(actor, hash);
     await setAge(hash, 'expires_at', '-1 second');
 
     expect(await findLiveSessionUserId(hash)).toBeNull();
@@ -109,8 +109,8 @@ describe('findLiveSessionUserId — expiry and idle timeout are enforced in SQL'
     const actor = await newUserActor();
     const inside = freshHash();
     const outside = freshHash();
-    await createSession(actor, inside.hash);
-    await createSession(actor, outside.hash);
+    await createTestSession(actor, inside.hash);
+    await createTestSession(actor, outside.hash);
     await setAge(inside.hash, 'last_used_at', '-13 days');
     await setAge(outside.hash, 'last_used_at', '-15 days');
 
@@ -122,7 +122,7 @@ describe('findLiveSessionUserId — expiry and idle timeout are enforced in SQL'
   it('a session idle-expired stays refused even if its absolute expiry is far in the future', async () => {
     const actor = await newUserActor();
     const { hash } = freshHash();
-    await createSession(actor, hash);
+    await createTestSession(actor, hash);
     await setAge(hash, 'last_used_at', '-14 days -1 minute');
     await setAge(hash, 'expires_at', '+29 days');
 
@@ -139,7 +139,7 @@ describe('touchSession — refresh last_used_at only when more than an hour stal
   it('does not write when the session was used within the hour', async () => {
     const actor = await newUserActor();
     const { hash } = freshHash();
-    await createSession(actor, hash);
+    await createTestSession(actor, hash);
     await setAge(hash, 'last_used_at', '-30 minutes');
     const before = await lastUsed(hash);
 
@@ -151,7 +151,7 @@ describe('touchSession — refresh last_used_at only when more than an hour stal
   it('refreshes to now when the session is more than an hour stale', async () => {
     const actor = await newUserActor();
     const { hash } = freshHash();
-    await createSession(actor, hash);
+    await createTestSession(actor, hash);
     await setAge(hash, 'last_used_at', '-2 hours');
     const before = await lastUsed(hash);
 
@@ -166,7 +166,7 @@ describe('touchSession — refresh last_used_at only when more than an hour stal
     const owner = await newUserActor();
     const other = await newUserActor();
     const { hash } = freshHash();
-    await createSession(owner, hash);
+    await createTestSession(owner, hash);
     await setAge(hash, 'last_used_at', '-2 hours');
     const before = await lastUsed(hash);
 
@@ -180,7 +180,7 @@ describe('deleteSession — scoped to the actor', () => {
   it('deletes the actor\'s own session and reports it', async () => {
     const actor = await newUserActor();
     const { hash } = freshHash();
-    await createSession(actor, hash);
+    await createTestSession(actor, hash);
 
     expect(await deleteSession(actor, hash)).toBe(true);
     expect(await findLiveSessionUserId(hash)).toBeNull();
@@ -191,7 +191,7 @@ describe('deleteSession — scoped to the actor', () => {
     const owner = await newUserActor();
     const attacker = await newUserActor();
     const { hash } = freshHash();
-    await createSession(owner, hash);
+    await createTestSession(owner, hash);
 
     expect(await deleteSession(attacker, hash)).toBe(false);
     expect((await findLiveSessionUserId(hash))?.userId).toBe(owner.userId);
@@ -215,14 +215,14 @@ describe('sweepExpiredSessions — hung off creation, and never the thing correc
     expect(await allSessionIds()).toEqual([live.hash]);
   });
 
-  it('runs on session creation: creating a session removes an already-expired one', async () => {
+  it('runs on session creation: signing in (the only sign-in path) removes an already-expired session', async () => {
     const actor = await newUserActor();
     const stale = freshHash();
     await insertSessionWithin(db, actor, stale.hash);
     await setAge(stale.hash, 'expires_at', '-1 day');
 
     const fresh = freshHash();
-    await createSession(actor, fresh.hash);
+    await signInUser(actor, { guest: null, sessionTokenHash: fresh.hash, replacing: null });
 
     expect(await allSessionIds()).toEqual([fresh.hash]);
   });
@@ -269,7 +269,7 @@ describe('sweepExpiredSessions — hung off creation, and never the thing correc
 describe('schema', () => {
   it('cascades: erasing the user erases their sessions', async () => {
     const actor = await newUserActor();
-    await createSession(actor, freshHash().hash);
+    await createTestSession(actor, freshHash().hash);
 
     await db.delete(users).where(eq(users.id, actor.userId));
 
