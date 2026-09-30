@@ -169,9 +169,19 @@ async function fetchGradingStatus(essayId: string): Promise<GradingStatus> {
   };
 }
 
+/**
+ * The key every grading-status query is stored under, less the essay id.
+ * Exported (KAN-55) so a change of identity can evict them: the answer this
+ * poll stores is per CALLER — a guest's `locked` report, a registered owner's
+ * `full` one — so the one in the shared client's cache is wrong the moment
+ * someone registers or signs in, and must not be shown again while the
+ * refetch for the new caller is in flight.
+ */
+export const GRADING_STATUS_QUERY_KEY = ['grading-status'] as const;
+
 export function useGradingStatus(essayId: string) {
   return useQuery<GradingStatus, Error>({
-    queryKey: ['grading-status', essayId],
+    queryKey: [...GRADING_STATUS_QUERY_KEY, essayId],
     queryFn: () => fetchGradingStatus(essayId),
     // The shared client's 5-minute staleTime is right for CMS content and
     // wrong here: a `pending` answer is stale the instant it arrives.

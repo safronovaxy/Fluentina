@@ -98,6 +98,20 @@ export default async function GuestPreviewPage({
                 <Link href="/practice/write">{t('tryAgainCta')}</Link>
               </Button>
             }
+            // Carries this essay's id, so registering lands the guest back on
+            // this report (KAN-55). `essay.id` is the id `getOwnedEssay` just
+            // returned for this actor, not the raw query parameter.
+            //
+            // `size="cta"` so the label wraps: Button's default is a fixed-height,
+            // no-wrap pill, and the German label is long enough to run past a
+            // phone's edge — cropped, and its centre (where a tap lands) off the
+            // card. Found by tests/registration.spec.ts on chromium-mobile; English
+            // fits, which is why it took a real browser.
+            registerAction={
+              <Button asChild size="cta">
+                <Link href={{ pathname: '/register', query: { essay: essay.id } }}>{t('registerCta')}</Link>
+              </Button>
+            }
             strings={{
               pendingTitle: t('pendingTitle'),
               pendingBody: t('pendingBody'),
@@ -140,7 +154,7 @@ export default async function GuestPreviewPage({
               lockedItemSummary: t('lockedItemSummary'),
               lockedItemDimensions: t('lockedItemDimensions'),
               lockedItemAnnotations: t('lockedItemAnnotations'),
-              // Unreviewed wording, no CTA until KAN-20 (see `GradingPreview.tsx`).
+              // Unreviewed wording (see `GradingPreview.tsx`); the CTA is `registerAction` above.
               lockedNote: t('lockedNote'),
               flaggedTitle: t('flaggedTitle'),
               flaggedBody: t('flaggedBody'),

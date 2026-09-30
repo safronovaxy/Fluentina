@@ -108,5 +108,24 @@ export const config = {
     '/en/practice/preview/:path*',
     '/de/practice/preview',
     '/de/practice/preview/:path*',
+    // KAN-55: registration and sign-in. Top-level routes rather than children
+    // of `/practice`, since an account is not a step of the essay flow — which
+    // is exactly why the `/practice/:path*` entries above do not cover them.
+    // Adding them changes which requests this middleware SEES, and nothing
+    // about what it does with them: a valid guest cookie is still left
+    // untouched here (no write, no re-issuance), and only a missing or
+    // malformed one is minted.
+    '/register',
+    '/register/:path*',
+    '/en/register',
+    '/en/register/:path*',
+    '/de/register',
+    '/de/register/:path*',
+    '/sign-in',
+    '/sign-in/:path*',
+    '/en/sign-in',
+    '/en/sign-in/:path*',
+    '/de/sign-in',
+    '/de/sign-in/:path*',
   ],
 };

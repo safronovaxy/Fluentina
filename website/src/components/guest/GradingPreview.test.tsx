@@ -154,6 +154,10 @@ function stubFetchForJobAgeSequence(agesMs: number[], reply: Reply) {
 }
 
 const TRY_AGAIN = <a href="/practice/write">try again slot</a>;
+// Stands in for the page's pre-rendered, locale-aware link to registration
+// (KAN-55). The real one is built by the Server Component; this component only
+// decides WHERE it shows.
+const REGISTER = <a href={`/register?essay=${ESSAY_ID}`}>register slot</a>;
 
 function renderPreview(strings: GradingPreviewStrings = EN) {
   // retryDelay 0: the hook decides WHETHER to retry; how long to wait is
@@ -161,7 +165,7 @@ function renderPreview(strings: GradingPreviewStrings = EN) {
   const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
   return render(
     <QueryClientProvider client={client}>
-      <GradingPreview essayId={ESSAY_ID} strings={strings} tryAgainAction={TRY_AGAIN} />
+      <GradingPreview essayId={ESSAY_ID} strings={strings} tryAgainAction={TRY_AGAIN} registerAction={REGISTER} />
     </QueryClientProvider>,
   );
 }
@@ -244,7 +248,7 @@ describe('GradingPreview — polling (ADR-2: every 2-3 seconds until the job is 
     const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0, staleTime: 5 * 60 * 1000 } } });
     const ui = (
       <QueryClientProvider client={client}>
-        <GradingPreview essayId={ESSAY_ID} strings={EN} tryAgainAction={TRY_AGAIN} />
+        <GradingPreview essayId={ESSAY_ID} strings={EN} tryAgainAction={TRY_AGAIN} registerAction={REGISTER} />
       </QueryClientProvider>
     );
     const first = render(ui);
@@ -465,10 +469,74 @@ describe('GradingPreview — the locked report (KAN-19 BR-4.2: a guest sees a te
     expect(includes).toHaveTextContent(EN.lockedItemDimensions);
     expect(includes).toHaveTextContent(EN.lockedItemAnnotations);
     // Presence of the copy, not a claim that the wording is settled: the
-    // `lockedNote` text is unreviewed, BR-4.2 did not specify it, and there is
-    // no CTA because no registration route exists until KAN-20.
+    // `lockedNote` text is unreviewed and BR-4.2 did not specify it.
     expect(screen.getByTestId('locked-report')).toHaveTextContent(EN.lockedNote);
     expect(screen.getByRole('group', { name: EN.lockedTitle })).toBe(screen.getByTestId('locked-report'));
+  });
+
+  // KAN-55: the funnel. A guest is told the report needs an account and, until
+  // this, had nowhere to go.
+  it('offers registration from inside the locked panel, as a link that carries this essay\'s id', async () => {
+    stubFetch(succeeded(lockedReport()));
+    renderPreview();
+
+    const panel = await screen.findByTestId('locked-report');
+    const cta = within(within(panel).getByTestId('locked-register-cta')).getByRole('link', { name: 'register slot' });
+    expect(cta).toHaveAttribute('href', `/register?essay=${ESSAY_ID}`);
+  });
+
+  it('places the call to action after the sentence that says the report needs an account, not before it', async () => {
+    stubFetch(succeeded(lockedReport()));
+    renderPreview();
+
+    const note = (await screen.findByTestId('locked-report')).querySelector('p.font-medium') as HTMLElement;
+    expect(note).toHaveTextContent(EN.lockedNote);
+    const cta = screen.getByTestId('locked-register-cta');
+    expect(note.compareDocumentPosition(cta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shows no registration call to action for a `full` report — there is nothing left to unlock', async () => {
+    stubFetch(succeeded(fullReport()));
+    renderPreview();
+
+    await screen.findByTestId('overall-score');
+    expect(screen.queryByTestId('locked-register-cta')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'register slot' })).toBeNull();
+  });
+
+  it('shows none while pending — a guest with no result yet is not told to register for one', async () => {
+    stubFetch(pending);
+    renderPreview();
+
+    await screen.findByRole('heading', { name: EN.pendingTitle });
+    expect(screen.queryByRole('link', { name: 'register slot' })).toBeNull();
+  });
+
+  it('an essay with nothing marked still offers registration — the panel is the same, only its count differs', async () => {
+    stubFetch(
+      succeeded(
+        lockedReport({
+          annotationCount: 0,
+          annotationCountByDimension: {
+            textStructureCohesion: 0,
+            vocabularyLexicalDensity: 0,
+            grammarSyntax: 0,
+            topicRelevanceContentCoverage: 0,
+          },
+          workedExample: null,
+        }),
+      ),
+    );
+    renderPreview();
+
+    expect(within(await screen.findByTestId('locked-report')).getByRole('link', { name: 'register slot' })).toBeInTheDocument();
+  });
+
+  it('the call-to-action wording exists, and is translated, in both catalogues', () => {
+    const cta = (messages: typeof enMessages) => messages.chrome.guest.preview.registerCta;
+    expect(cta(enMessages)).toBeTruthy();
+    expect(cta(deMessages as typeof enMessages)).toBeTruthy();
+    expect(cta(deMessages as typeof enMessages)).not.toBe(cta(enMessages));
   });
 
   it('an essay with nothing marked says so, and shows no empty per-area table', async () => {
@@ -656,7 +724,7 @@ describe('GradingPreview — accessibility of the result (a result arriving afte
       <>
         <button type="button">language switcher</button>
         <QueryClientProvider client={new QueryClient()}>
-          <GradingPreview essayId={ESSAY_ID} strings={EN} tryAgainAction={TRY_AGAIN} />
+          <GradingPreview essayId={ESSAY_ID} strings={EN} tryAgainAction={TRY_AGAIN} registerAction={REGISTER} />
         </QueryClientProvider>
       </>,
     );
@@ -1225,7 +1293,7 @@ describe('GradingPreview — past the target: the state says so, without a stati
       <>
         <button type="button">language switcher</button>
         <QueryClientProvider client={new QueryClient()}>
-          <GradingPreview essayId={ESSAY_ID} strings={EN} tryAgainAction={TRY_AGAIN} />
+          <GradingPreview essayId={ESSAY_ID} strings={EN} tryAgainAction={TRY_AGAIN} registerAction={REGISTER} />
         </QueryClientProvider>
       </>,
     );

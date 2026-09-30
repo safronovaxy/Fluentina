@@ -20,6 +20,11 @@ const TabsList = React.forwardRef<
 ));
 TabsList.displayName = TabsPrimitive.List.displayName;
 
+// `whitespace-nowrap` here carries the same assumption as Button's base string
+// (see its `cta` size): a label that fits. A long or localised one is cropped,
+// not wrapped, and TabsList sizes to its triggers. No localised call site
+// exists today, so nothing is changed here; the first one should check its
+// German label at a phone width in a real browser before relying on this.
 const TabsTrigger = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>
