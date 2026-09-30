@@ -27,7 +27,12 @@ function arg(name: string): string | undefined {
 
 function describe(s: Selection): string {
   if (s.mode === 'all') {
-    return ['Selection: EVERYTHING', ...s.reasons.slice(0, 20).map((r) => `  - ${r}`)].join('\n');
+    // "Everything" is per tier: in the smoke job this is every unit test and
+    // every spec, but e2e still runs chromium-desktop only.
+    return [
+      'Selection: EVERYTHING (every unit test and e2e spec; smoke runs e2e in chromium-desktop only)',
+      ...s.reasons.slice(0, 20).map((r) => `  - ${r}`),
+    ].join('\n');
   }
   return [
     `Selection: subset — areas: ${s.areas.join(', ') || '(none)'}`,

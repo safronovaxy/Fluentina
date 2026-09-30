@@ -178,7 +178,10 @@ always releasable but does not itself deploy to production.
   `chromium-mobile`, `webkit-desktop` and `webkit-mobile` — 470 total, down
   from 561 (187 x 3) while adding a whole engine, because real in-browser
   executions went UP (93 x 3 = 279 to 94 x 4 = 376) and the drop is entirely
-  the 188 engine-less duplicates. Treat these as a snapshot, not a contract:
+  the 188 engine-less duplicates. **Current figure:** 526 (`--list --grep-invert
+  "@cms"`, as of `aa58e70`): 202 in `chromium-desktop` and 108 in each of the other
+  three projects; the 470 above is the KAN-33 snapshot, before the later specs.
+  Treat these as a snapshot, not a contract:
   nothing enforces them, and the first spec anyone adds makes them stale.
   `REQUEST_ONLY_SPECS`'s patterns are anchored to a path separator so a future
   `blog-seo.spec.ts` is not silently swept into the exclusion, but the list

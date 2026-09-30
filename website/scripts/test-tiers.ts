@@ -225,15 +225,22 @@ export const AREAS: Area[] = [
   {
     name: 'cms',
     note:
-      'Selects no website test, on purpose. ci.yml runs `@cms` specs nowhere (no CMS in the ' +
-      'job; `--grep-invert "@cms"`), so nothing in the website suite can observe cms/**. The ' +
-      'separate `cms` job builds it on every event, tiered or not.',
+      'Selects no website test, on purpose — and that is not because something else covers ' +
+      'cms/**. Nothing does. cms/package.json has no test script at all, and ci.yml runs `@cms` ' +
+      'specs nowhere, so the `cms` job\'s `npm ci` + `strapi build` (every event, tiered or ' +
+      'not) is the ENTIRE signal that exists for cms/**. The CORS whitelist and the rate-limit ' +
+      'values (cms/config/middlewares.ts, cms/src/middlewares/rate-limit.ts) are asserted ' +
+      'nowhere; both are security-relevant. Documented here, not closed here.',
     paths: ['cms/**'],
     specs: [],
   },
 ];
 
-/** Areas allowed to resolve to no test at all. */
+/**
+ * Areas allowed to resolve to no test at all. Adding to this needs a reviewer:
+ * it is the list of places where "the diff touched only this" runs nothing, and
+ * a test pins it exactly so that widening it cannot pass unnoticed.
+ */
 export const AREAS_WITHOUT_TESTS = ['cms'];
 
 export interface TierConfig {
@@ -302,7 +309,13 @@ export function matchesAny(path: string, globs: string[]): string | undefined {
   return globs.find((g) => globToRegExp(g).test(path));
 }
 
-/** Mirrors vitest.config.ts `include`: test and spec files under website/src. */
+/**
+ * Unit test and spec files under website/src. This is NOT all of vitest.config.ts's
+ * `include`: that also takes `scripts/**\/*.test.ts`, which this deliberately
+ * leaves out — `website/scripts/**` is in RUN_EVERYTHING, so a change there never
+ * reaches a per-file selection, and those files are never handed to `vitest run`
+ * as a subset.
+ */
 export function isUnitTestFile(path: string): boolean {
   return path.startsWith(`${S}/`) && /\.(test|spec)\.tsx?$/.test(path);
 }

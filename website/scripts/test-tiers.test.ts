@@ -15,8 +15,10 @@
  *     fail when the map rots (a renamed directory, a new spec no area names).
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   AREAS,
@@ -381,6 +383,38 @@ describe('the real map: each area selects its own unit tests and its own specs',
   });
 });
 
+// The api-edge area exists so that a change to a guard every handler calls
+// re-runs every handler's test. That property is asserted nowhere else: each
+// route file is also claimed by `auth`, `grading` or `guest-funnel`, so deleting
+// api-edge's `app/api/**` glob leaves "a module selects its own co-located test"
+// green while a guard change silently stops running eight route suites (measured:
+// same-origin.ts went from 13 unit files to 5). Literal, not derived from AREAS,
+// or the expectation would shrink with the mutation.
+describe('the real map: a change to a shared request guard runs every route handler suite', () => {
+  const routeSuites = [
+    'src/app/api/auth/login/route.test.ts',
+    'src/app/api/auth/logout/route.test.ts',
+    'src/app/api/auth/register/route.test.ts',
+    'src/app/api/auth/methods.test.ts',
+    'src/app/api/essays/[id]/grading/route.test.ts',
+    'src/app/api/essays/route.test.ts',
+    'src/app/api/guest-session/route.test.ts',
+    'src/app/api/internal/grading-jobs/process/route.test.ts',
+  ];
+  const guards = ['same-origin.ts', 'client-ip.ts', 'request-body.ts', 'rejection-response.ts'];
+
+  it('the eight route suites it names exist', () => {
+    expect(routeSuites.filter((t) => !tracked.includes(`website/${t}`))).toEqual([]);
+  });
+
+  it.each(guards)('%s selects all eight route test files', (guard) => {
+    const s = select([`${S}/lib/${guard}`]);
+    expect(s.mode).toBe('subset');
+    expect(s.areas).toContain('api-edge');
+    for (const t of routeSuites) expect(s.unitTests, t).toContain(t);
+  });
+});
+
 describe('the real map: nothing is orphaned (this is what fails when the map rots)', () => {
   it('every spec under website/tests is named by at least one area', () => {
     const named = new Set(AREAS.flatMap((a) => a.specs));
@@ -406,6 +440,12 @@ describe('the real map: nothing is orphaned (this is what fails when the map rot
       ...AREAS.flatMap((a) => a.paths.map((g) => [a.name, g] as const)),
     ].filter(([, g]) => !tracked.some((f) => globToRegExp(g).test(f)));
     expect(dead).toEqual([]);
+  });
+
+  // Literal: widening this list is how an area quietly becomes one that selects
+  // nothing. A reviewer should have to read the line that changes.
+  it('the areas allowed to select no test are exactly the cms', () => {
+    expect(AREAS_WITHOUT_TESTS).toEqual(['cms']);
   });
 
   it('every area except the named exceptions selects at least one test', () => {
@@ -696,9 +736,12 @@ describe('real diffs, walked through the real map', () => {
 
 describe('select-tests CLI', () => {
   const cli = path.join(websiteDir, 'scripts', 'select-tests.ts');
-  const run = (args: string[], input?: string) =>
+  // `--import tsx` resolves from the cwd, so name it by absolute URL: the rename
+  // test below runs the CLI inside a throwaway repo that has no node_modules.
+  const tsx = pathToFileURL(require.resolve('tsx')).href;
+  const run = (args: string[], input?: string, cwd: string = websiteDir) =>
     JSON.parse(
-      execFileSync(process.execPath, ['--import', 'tsx', cli, ...args], { cwd: websiteDir, input, encoding: 'utf8' })
+      execFileSync(process.execPath, ['--import', tsx, cli, ...args], { cwd, input, encoding: 'utf8' })
         .split('\n\n')
         .pop()!,
     ) as Record<string, string>;
@@ -715,5 +758,49 @@ describe('select-tests CLI', () => {
 
   it('a base ref that does not exist selects everything instead of failing or selecting nothing', () => {
     expect(run(['--base', 'definitely-not-a-ref-0000000'])).toMatchObject({ mode: 'all', run_e2e: 'true' });
+  });
+
+  // `--no-renames` is load-bearing and nothing else pins it. Git's default
+  // rename detection reports only the NEW path, so moving a file out of an area
+  // would look like a change to the destination alone and the source area's
+  // specs would stop running (measured: a page-components/About.tsx move lost
+  // six marketing specs). Driven through a real two-commit rename rather than by
+  // reading the argv, so it fails on the behaviour and not on the spelling.
+  it('a rename out of one area selects the area it left as well as the one it entered', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'select-tests-rename-'));
+    try {
+      const git = (...args: string[]) =>
+        execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
+          cwd: repo,
+          encoding: 'utf8',
+        }).trim();
+      const from = `${S}/page-components/About.tsx`;
+      const to = `${S}/components/layout/About.tsx`;
+      git('init', '-q', '-b', 'main');
+      mkdirSync(path.join(repo, path.dirname(from)), { recursive: true });
+      mkdirSync(path.join(repo, path.dirname(to)), { recursive: true });
+      // Identical content, so git's similarity check detects it as a rename.
+      const body = 'export const About = () => null;\n'.repeat(20);
+      writeFileSync(path.join(repo, from), body);
+      // Specs are resolved against tracked files, so the one we assert on must exist.
+      mkdirSync(path.join(repo, 'website/tests'), { recursive: true });
+      writeFileSync(path.join(repo, 'website/tests/blog.spec.ts'), '');
+      git('add', '.');
+      git('commit', '-q', '-m', 'base');
+      const base = git('rev-parse', 'HEAD');
+      git('mv', from, to);
+      git('commit', '-q', '-m', 'move');
+      // Precondition: git really does collapse this into a rename by default,
+      // so the assertion below is about the flag and not about a lucky diff.
+      expect(git('diff', '--name-only', `${base}...HEAD`).split('\n')).toEqual([to]);
+
+      const out = run(['--base', base], undefined, repo);
+      expect(out.mode).toBe('subset');
+      expect(out.areas.split(',').sort()).toEqual(['marketing', 'shell']);
+      // A spec only the area that was LEFT runs.
+      expect(out.e2e_files).toContain('tests/blog.spec.ts');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

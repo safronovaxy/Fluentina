@@ -65,9 +65,15 @@ jobs:
   #     exact SHA (by job name, see FULL_JOB there), so a smoke run can never
   #     satisfy the deploy gate;
   #   - on PRs it is the required check that gates merge.
-  # The `name:` is that contract. Renaming it breaks the required status
-  # check and verify-ci together; scripts/ci-workflows.test.ts fails if the
-  # three places disagree.
+  # The `name:` is that contract, and it lives in FOUR places, only two of
+  # which a test can see: this file and the FULL_JOB constant in both deploy
+  # workflows' verify-ci (scripts/ci-workflows.test.ts fails if those
+  # disagree), plus the branch-protection required check, which is repo
+  # settings and invisible to any test. The test does latch it: it asserts this
+  # name equals the one recorded in .github/required-checks.json, so renaming
+  # the job forces a touch of the file that says "change branch protection in
+  # lockstep" (an Administration-scoped manual change). The latch cannot verify
+  # that the change was made.
   website:
     name: Website — lint, typecheck, test, build, e2e
     runs-on: ubuntu-latest
@@ -288,7 +294,9 @@ jobs:
       # project now requires editing playwright.config.ts, same file, so both
       # guards sit together. Verified this changes nothing about what runs:
       # config's `projects` array is exactly these four and no more, and
-      # `--list --grep-invert "@cms"` reports the identical 470 tests with
+      # `--list --grep-invert "@cms"` reports the identical 470 tests (as measured
+      # for KAN-33; 526 at aa58e70 — 202 chromium-desktop, 108 in each other
+      # project) with
       # and without the flags (KAN-33: down from 561 across three projects —
       # playwright.config.ts's own `REQUEST_ONLY_SPECS` now excludes
       # seo/redirects/routing/sitemap.spec.ts from every project but
@@ -422,10 +430,16 @@ jobs:
             exit 1
           fi
 
+      # Gating is `!= 'false'`, not `== 'true'`, on purpose: select-tests.ts fails
+      # OPEN everywhere, and an `== 'true'` guard would skip the step on an absent
+      # or malformed output, so the job could go green having run only lint and
+      # typecheck. Only the literal string `false` (which toOutputs emits only for
+      # a subset with nothing of that kind to run) skips a step.
+      #
       # `mode=all` runs the ordinary `npm run test`. A subset names files, read
       # into an array so that route paths like [id] are never glob-expanded.
       - name: Unit & integration tests (selected)
-        if: steps.select.outputs.run_unit == 'true'
+        if: steps.select.outputs.run_unit != 'false'
         working-directory: website
         env:
           MODE: ${{ steps.select.outputs.mode }}
@@ -441,7 +455,7 @@ jobs:
       # Everything from here to the e2e run is skipped when the selection has
       # no spec, because building and serving the app is the expensive part.
       - name: Build
-        if: steps.select.outputs.run_e2e == 'true'
+        if: steps.select.outputs.run_e2e != 'false'
         working-directory: website
         env:
           NEXT_PUBLIC_STRAPI_URL: http://localhost:1337
@@ -452,7 +466,7 @@ jobs:
         run: npm run build
 
       - name: Install Playwright browser
-        if: steps.select.outputs.run_e2e == 'true'
+        if: steps.select.outputs.run_e2e != 'false'
         working-directory: website
         run: npx playwright install --with-deps chromium
 
@@ -460,12 +474,12 @@ jobs:
       # throws in CI on a plain-HTTP BASE_URL, and this keeps the served
       # app identical to the full job's.
       - name: Generate self-signed TLS certificate
-        if: steps.select.outputs.run_e2e == 'true'
+        if: steps.select.outputs.run_e2e != 'false'
         working-directory: website
         run: npm run tls:generate-cert -- .tls
 
       - name: Start built app
-        if: steps.select.outputs.run_e2e == 'true'
+        if: steps.select.outputs.run_e2e != 'false'
         working-directory: website
         env:
           MOCK_GRADING_PROVIDER: '1'
@@ -483,7 +497,7 @@ jobs:
           exit 1
 
       - name: Start TLS proxy in front of the built app
-        if: steps.select.outputs.run_e2e == 'true'
+        if: steps.select.outputs.run_e2e != 'false'
         working-directory: website
         env:
           TLS_PROXY_PORT: '8443'
@@ -508,7 +522,7 @@ jobs:
       # specs are excluded for the same reason as in the full job. A subset
       # passes the selected spec files as filters; `all` passes none.
       - name: E2E (Playwright, selected, chromium-desktop)
-        if: steps.select.outputs.run_e2e == 'true'
+        if: steps.select.outputs.run_e2e != 'false'
         working-directory: website
         env:
           BASE_URL: https://localhost:8443
@@ -524,11 +538,11 @@ jobs:
           npx playwright test --project=chromium-desktop --grep-invert "@cms" "${files[@]}"
 
       - name: Stop TLS proxy
-        if: always() && steps.select.outputs.run_e2e == 'true'
+        if: always() && steps.select.outputs.run_e2e != 'false'
         run: kill "$(cat /tmp/tls-proxy.pid)" 2>/dev/null || true
 
       - name: Stop built app
-        if: always() && steps.select.outputs.run_e2e == 'true'
+        if: always() && steps.select.outputs.run_e2e != 'false'
         run: kill "$(cat /tmp/next-server.pid)" 2>/dev/null || true
 
       - name: Upload Playwright report on failure
@@ -564,6 +578,12 @@ jobs:
     # regression" going green reads as "grading was validated"; nothing is
     # called. Say so where it shows.
     name: AI grading golden-set regression (PLACEHOLDER — validates nothing yet)
+    # Not on the daily schedule. The trigger scope is Irina's to decide once
+    # KAN-39 makes this real (see grading-regression.yml): it starts spending
+    # live API money then, and a nightly run would be "and daily" appended to a
+    # set she has not chosen. The `schedule` trigger above is a full run of
+    # main's own tests, not a decision to exercise the live providers.
+    if: github.event_name != 'schedule'
     needs: [website]
     uses: ./.github/workflows/grading-regression.yml
     # Explicit, not `secrets: inherit`. Inherit exposed GCP_SA_KEY_BASE64,

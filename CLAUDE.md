@@ -39,8 +39,8 @@ Sizes, measured at `aa58e70`: Playwright 526 tests (`--list --grep-invert "@cms"
 202 in `chromium-desktop`, 108 in each of the other three projects); Vitest 1,111
 literal `it()`/`test()` calls across 77 files under `website/src/` (a static count —
 the suite needs Postgres, so it was not run-counted — plus 42 `.each` tables that
-expand to more). `ci.yml` and `CONTRIBUTING.md` still say 470 Playwright tests; that
-is their KAN-33-era snapshot, before the later specs. A `website` run measured
+expand to more). Where `ci.yml` and `CONTRIBUTING.md` mention 470 Playwright tests, that
+is the KAN-33-era figure and both now say so next to the current one. A `website` run measured
 **8m13s**, of which ~160s is prologue any tier pays (setup, containers, `npm ci`,
 lint, typecheck, migrate, drift check, build, Playwright install, TLS, app start).
 
@@ -48,7 +48,7 @@ lint, typecheck, migrate, drift check, build, Playwright install, TLS, app start
 
 | Tier | `ci.yml` job | Runs | What | Gates merge? |
 |------|--------------|------|------|--------------|
-| **Full** | `Website — lint, typecheck, test, build, e2e` | every PR push, every push to `main`, daily schedule, manual dispatch | everything: all unit tests, all four Playwright projects, both locales | **Yes** — the required check |
+| **Full** | `Website — lint, typecheck, test, build, e2e` | every PR push, every push to `main`, daily schedule, manual dispatch | everything: all unit tests, all four Playwright projects, both locales | **Intended to be the required check** (see below: the setting is out of repo, owner Irina, unconfirmed) |
 | **Smoke** | `Website smoke — selected tests, chromium-desktop only` | PR pushes only | lint, typecheck, migrations always; plus the unit tests and e2e specs the diff selects, `chromium-desktop` only | **No** |
 
 Smoke is an *additional*, faster signal. It does not replace the full job on
@@ -70,9 +70,28 @@ Until that change is made and a follow-up PR lands, the full job runs on every P
 in `deploy-website.yml` and `deploy-cms.yml` no longer accepts "some successful
 `ci.yml` run": it requires the full job, by name, to have succeeded in a `push` or
 `workflow_dispatch` run on `main` for that SHA. A smoke run cannot satisfy it, and
-neither can the daily scheduled run (its event is neither). The job name is a
-three-way contract — branch protection, `verify-ci`, `ci.yml` — and
-`website/scripts/ci-workflows.test.ts` fails if they disagree.
+neither can the daily scheduled run (its event is neither).
+
+The full job's name is written in **four** places, and a test can see two of them.
+`website/scripts/ci-workflows.test.ts` pins `ci.yml` against the `FULL_JOB` constant
+in both `verify-ci` scripts, and fails if those disagree. **Branch protection is the
+fourth copy, lives in repo settings, and no test in this repo can read it.** Renaming
+the job therefore needs a manual, Administration-scoped change to the required check
+in the same change; nothing will tell you if it is missed, and the failure mode is a
+gate that requires a check name nothing reports any more, so it is either gone or
+permanently stuck. As a latch, `.github/required-checks.json` records the names we
+intend to require and the test asserts `ci.yml` agrees with it, so a rename has to
+touch the file that says so. That proves someone was told, not that the setting was
+changed.
+
+What is actually known about that setting: it was **not** configured from any
+session here (the automation token has no Administration scope, see
+`deploy-website.yml`'s header), so "the full job is the required check" is the
+*intended* configuration, not a recorded fact. The one piece of first-hand evidence
+is that a merge of PR #33 was refused with *"2 of 2 required status checks are
+expected"*, so two required checks exist — almost certainly the website and CMS job
+names, but that is inference. Irina has been asked for the exact configured names
+(KAN-58); until she answers, treat it as unconfirmed.
 
 **How smoke chooses tests.** The selection is a script, not inline shell:
 `website/scripts/test-tiers.ts` (the map and the rules, pure),
@@ -121,9 +140,14 @@ source); its e2e specs are listed by name, because Playwright's `testDir` is
 | `shell` | layout, providers, global CSS, shared `lib` helpers | navigation, no-console-errors, guest-flow |
 | `cms` | `cms/**` | none — on purpose |
 
-`cms/**` selects no website test because no `@cms` spec runs in CI (there is no
-CMS in the job), so nothing in the website suite can observe a change there; the
-separate `cms` job builds it on every event, tiered or not.
+`cms/**` selects no website test, and that does **not** mean something else covers
+it. Nothing does: `cms/package.json` has no test script at all and no `@cms` spec
+runs in CI (there is no CMS in the job), so the `cms` job's `npm ci` + `strapi build`
+(every event, tiered or not) is the entire signal that exists for `cms/**`
+anywhere. The CORS whitelist and the rate-limit values in `cms/config/middlewares.ts`
+and `cms/src/middlewares/rate-limit.ts` are asserted by no test; both are
+security-relevant (BR-1.8's per-IP backstop lives CMS-side). This PR documents the
+gap; closing it is separate work.
 
 **What the map does not know:** the import graph. `lib/db/**` is used by most of
 the domain layer and the map does not follow that; nor does it see a change whose

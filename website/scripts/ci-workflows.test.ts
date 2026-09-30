@@ -5,7 +5,13 @@
  * pin the contracts between the files, which are the ones that break silently:
  * the full job's name is simultaneously a branch-protection required check and
  * the string verify-ci looks for, and a rename of either side leaves the other
- * green while the gate it implements has gone. It also executes verify-ci's
+ * green while the gate it implements has gone.
+ *
+ * What it cannot do is see branch protection. That is repo settings, not a file.
+ * Two of the three copies of the name are pinned here (ci.yml and both verify-ci
+ * scripts); the third is latched only indirectly, through
+ * .github/required-checks.json, which a rename is forced to touch. Nothing
+ * proves the settings were changed. It also executes verify-ci's
  * real script text against a fake GitHub API, since that script is the one
  * piece of tier logic that decides whether a commit may ship.
  */
@@ -20,6 +26,10 @@ const load = (name: string) => parse(readFileSync(path.join(workflowsDir, name),
 const ci = load('ci.yml');
 const deployWebsite = load('deploy-website.yml');
 const deployCms = load('deploy-cms.yml');
+
+const requiredChecks = JSON.parse(
+  readFileSync(path.resolve(__dirname, '../../.github/required-checks.json'), 'utf8'),
+) as { jobs: Record<string, string> };
 
 const FULL_JOB_NAME = 'Website — lint, typecheck, test, build, e2e';
 const full = ci.jobs.website;
@@ -52,6 +62,17 @@ describe('ci.yml: selection never hides a run', () => {
 describe('ci.yml: the full tier is what gates, and it always runs', () => {
   it('keeps the job name that branch protection and verify-ci both depend on', () => {
     expect(full.name).toBe(FULL_JOB_NAME);
+  });
+
+  // The latch. This cannot see branch protection (it is repo settings), and it
+  // does not claim to: it makes a rename of either required job fail here, so
+  // whoever renames it has to open the file that says "change branch protection
+  // in lockstep" — and, for the full job, must also have updated FULL_JOB in
+  // both deploy workflows for the test above to pass.
+  it('records the same names as required-checks.json, so a rename must touch the file that says to change branch protection', () => {
+    expect(requiredChecks.jobs.website).toBe(ci.jobs.website.name);
+    expect(requiredChecks.jobs.cms).toBe(ci.jobs.cms.name);
+    expect(Object.keys(requiredChecks.jobs).sort()).toEqual(['cms', 'website']);
   });
 
   it('has no `if:` and no `needs:`: every event, including every push to main, runs it in full', () => {
@@ -100,8 +121,31 @@ describe('ci.yml: the smoke tier is additional and gates nothing', () => {
     const e2e = stepNamed(smoke, 'E2E (Playwright, selected, chromium-desktop)');
     expect(e2e.run).toContain('--project=chromium-desktop');
     expect(e2e.run).toContain('--grep-invert "@cms"');
-    expect(e2e.if).toBe("steps.select.outputs.run_e2e == 'true'");
-    expect(stepNamed(smoke, 'Unit & integration tests (selected)').if).toBe("steps.select.outputs.run_unit == 'true'");
+    expect(e2e.if).toBe("steps.select.outputs.run_e2e != 'false'");
+    expect(stepNamed(smoke, 'Unit & integration tests (selected)').if).toBe("steps.select.outputs.run_unit != 'false'");
+  });
+
+  // Every rule in test-tiers.ts fails open; the `if:` lines must too. `== 'true'`
+  // skips on any other value, including an absent output, so a select step that
+  // wrote nothing would leave a job that ran only lint and typecheck and went
+  // green. `!= 'false'` skips only on the one string toOutputs emits to mean it.
+  it('gates every selection-dependent step so that only the literal "false" skips it', () => {
+    const gated = smoke.steps.filter((s: any) => String(s.if ?? '').includes('steps.select.outputs'));
+    expect(gated.map((s: any) => s.name)).toEqual([
+      'Unit & integration tests (selected)',
+      'Build',
+      'Install Playwright browser',
+      'Generate self-signed TLS certificate',
+      'Start built app',
+      'Start TLS proxy in front of the built app',
+      'E2E (Playwright, selected, chromium-desktop)',
+      'Stop TLS proxy',
+      'Stop built app',
+    ]);
+    for (const step of gated) {
+      expect(step.if, step.name).toMatch(/steps\.select\.outputs\.run_(unit|e2e) != 'false'$/);
+      expect(step.if, step.name).not.toContain("== 'true'");
+    }
   });
 
   it('expands selected files from an array, never unquoted (route paths contain [id])', () => {
@@ -135,6 +179,54 @@ describe('ci.yml: the smoke tier is additional and gates nothing', () => {
     }
     expect(smoke.services).toEqual(full.services);
     expect(smoke.env).toEqual(full.env);
+  });
+
+  // The list above catches a step whose body drifted; it cannot see a step that
+  // only one job has. Literal on purpose, not derived: a step added to one job
+  // only shows up as a change to these two arrays, which a reviewer must read.
+  it('differs from the full job by exactly these steps, in both directions', () => {
+    const names = (job: any) => job.steps.map((s: any) => s.name).filter(Boolean) as string[];
+    const minus = (a: string[], b: string[]) => a.filter((n) => !b.includes(n));
+    expect(minus(names(full), names(smoke))).toEqual([
+      'Unit & integration tests',
+      'Install Playwright browsers',
+      'E2E (Playwright, no CMS)',
+    ]);
+    expect(minus(names(smoke), names(full))).toEqual([
+      'Select tests from the diff',
+      'Unit & integration tests (selected)',
+      'Install Playwright browser',
+      'E2E (Playwright, selected, chromium-desktop)',
+    ]);
+  });
+
+  // `uses:` steps carry no name, so the list above never reached them: a bumped
+  // node-version or cache-dependency-path on one job would drift silently.
+  it('uses the same actions with the same inputs as the full job, but for smoke\'s fetch-depth', () => {
+    const uses = (job: any) => job.steps.filter((s: any) => s.uses && !s.name);
+    expect(uses(smoke).map((s: any) => s.uses)).toEqual(uses(full).map((s: any) => s.uses));
+    expect(uses(full).map((s: any) => s.uses)).toEqual(['actions/checkout@v4', 'actions/setup-node@v4']);
+    uses(full).forEach((a: any, i: number) => {
+      const { ['fetch-depth']: depth, ...rest } = uses(smoke)[i].with ?? {};
+      expect(rest, a.uses).toEqual(a.with ?? {});
+      // The one deliberate difference: smoke needs both ends of the PR's diff.
+      if (a.uses.startsWith('actions/checkout')) expect(depth).toBe(0);
+      else expect(depth).toBeUndefined();
+    });
+    const artifact = (job: any) => stepNamed(job, 'Upload Playwright report on failure');
+    expect(artifact(smoke).uses).toBe(artifact(full).uses);
+    expect(artifact(smoke).if).toBe(artifact(full).if);
+    expect(artifact(smoke).with.path).toBe(artifact(full).with.path);
+    expect(artifact(smoke).with['retention-days']).toBe(artifact(full).with['retention-days']);
+  });
+});
+
+describe('ci.yml: grading-regression stays off the schedule', () => {
+  // Irina deferred the trigger scope for this job until KAN-39 makes it spend
+  // live API money (grading-regression.yml's own header). A daily trigger would
+  // decide it for her.
+  it('does not run on the daily schedule', () => {
+    expect(ci.jobs['grading-regression'].if).toBe("github.event_name != 'schedule'");
   });
 });
 
