@@ -1,0 +1,9 @@
+{
+  "status": "INTENDED, NOT CONFIRMED. This records the branch-protection required checks we mean to have. The real list lives in repo Settings -> Branches, which no test and no automation token in this repo can read or change (Administration scope). What is known: a merge of PR #33 was refused with '2 of 2 required status checks are expected', so two exist; that they are these two names is unconfirmed. Irina has been asked for the exact configured names (KAN-58).",
+  "owner": "Irina (repo Administration)",
+  "rule": "Renaming either job in ci.yml means changing branch protection by hand in the same change, and FULL_JOB in deploy-website.yml and deploy-cms.yml for the first. website/scripts/ci-workflows.test.ts fails when a job name and this file disagree, to force you to read this. It cannot check that the settings change was made.",
+  "jobs": {
+    "website": "Website — lint, typecheck, test, build, e2e",
+    "cms": "CMS — install & build smoke check"
+  }
+}
