@@ -123,7 +123,7 @@ export const AREAS: Area[] = [
     ],
     // The e2e job serves the built app with MOCK_GRADING_PROVIDER=1, so the
     // funnel specs exercise the orchestration end to end.
-    specs: [`${T}/grading-preview.spec.ts`, `${T}/essay-entry.spec.ts`],
+    specs: [`${T}/grading-preview.spec.ts`, `${T}/essay-entry.spec.ts`, `${T}/registration.spec.ts`],
   },
   {
     name: 'auth',
@@ -159,7 +159,7 @@ export const AREAS: Area[] = [
     note: 'The data layer (schema.ts and the migrations are in RUN_EVERYTHING).',
     paths: [`${S}/lib/db/**`],
     // The only specs that reach the real database through the built app.
-    specs: [`${T}/essay-entry.spec.ts`, `${T}/guest-session.spec.ts`],
+    specs: [`${T}/essay-entry.spec.ts`, `${T}/guest-session.spec.ts`, `${T}/registration.spec.ts`],
   },
   {
     name: 'i18n',
