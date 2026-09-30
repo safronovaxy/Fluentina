@@ -185,11 +185,12 @@ async function createAccountElsewhere(browser: Browser, fx: LocaleFixture): Prom
  * the next one should be caught without anyone knowing which element did it.
  */
 async function expectNoHorizontalOverflow(page: Page, what: string) {
-  const { scrollWidth, innerWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    innerWidth: window.innerWidth,
-  }));
-  expect(scrollWidth, `${what} scrolls sideways: content is ${scrollWidth}px wide in a ${innerWidth}px viewport`).toBeLessThanOrEqual(page.viewportSize()!.width);
+  const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+  // The project's viewport, not `window.innerWidth`: a mobile browser widens the
+  // layout viewport to fit overflowing content, so innerWidth would report the
+  // very overflow being tested for as if it were the viewport.
+  const viewportWidth = page.viewportSize()!.width;
+  expect(scrollWidth, `${what} scrolls sideways: its content is ${scrollWidth}px wide in a ${viewportWidth}px viewport`).toBeLessThanOrEqual(viewportWidth);
 }
 
 for (const fx of FIXTURES) {
