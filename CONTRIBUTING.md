@@ -106,7 +106,7 @@ always releasable but does not itself deploy to production.
   excludes them by tag and they run against a live site via
   `npm run test:e2e:live`. Without that exclusion the suite is red on every PR
   for reasons unrelated to the change under review.
-- **WebKit gates every PR as of KAN-30, both desktop (`webkit-desktop`) and,
+- **WebKit runs on every PR as of KAN-30, both desktop (`webkit-desktop`) and,
   as of KAN-33, mobile (`webkit-mobile`, iPhone 13) — alongside
   `chromium-desktop`/`chromium-mobile`, not only via `npm run test:e2e:live`
   as before.** KAN-30 shipped desktop-only deliberately (round-1 review): the
@@ -299,9 +299,11 @@ details that are easy to get wrong:
   suite writes sessions, essays and users.
 - `BASE_URL` should be the `https://localhost` proxy address. This is the
   recommended default because it serves the app through the same TLS proxy
-  (`scripts/tls-proxy.mjs`) CI does, so what the browser sees is byte-identical
-  to CI's, and it is the only configuration this recipe was measured under. It
-  is not needed for the cookie tests to run on Chromium: Chromium treats
+  (`scripts/tls-proxy.mjs`) CI does, so the transport and origin the browser
+  sees match CI's, and it is the configuration the counts below were taken
+  under. (Not byte-identical to CI's: CI's runners reach the third-party
+  scripts this environment cannot — see "Expected noise" below.) It is not
+  needed for the cookie tests to run on Chromium: Chromium treats
   `localhost` as a secure context and stores the `__Host-` session cookie over
   plain HTTP too, and the skip predicate (`isWebKitOverPlainHttp` in
   `tests/helpers/webkit.ts`) is `browserName === 'webkit' && isPlainHttp`, so on
@@ -342,7 +344,8 @@ above then fails with `role "fluentina" does not exist`. Create the cluster so
 that it does:
 ```bash
 initdb -D <datadir> -U fluentina --auth=trust
-pg_ctl -D <datadir> -o '-p 55432 -c listen_addresses=127.0.0.1' -l <datadir>/server.log start
+pg_ctl -D <datadir> -l <datadir>/server.log \
+  -o '-p 55432 -c listen_addresses=127.0.0.1 -c unix_socket_directories=<datadir>' start
 ```
 (`--auth=trust` means the password in the URL is accepted and ignored, which
 is fine for a throwaway local cluster.) Do not assume something is already
@@ -490,9 +493,14 @@ The WebKit projects are still not optional extras. WebKit refuses the
 `__Host-` session cookie over plain HTTP, and a number of tests are
 conditioned on that: every test that needs the cookie stored, which you can
 list by reading the predicate in `tests/helpers/webkit.ts` and grepping its
-call sites (`grep -rn isWebKitOverPlainHttp website/tests`). Do not restate a
-count here; it has already gone stale once. A local Chromium pass cannot stand
-in for WebKit, and it cannot stand in for CI as a whole.
+call sites (`git grep -n isWebKitOverPlainHttp -- :/website/tests`). The
+leading `:/` is load-bearing: `git grep`'s pathspec is relative to the
+directory you are in, not the repo root, so without it the command finds
+nothing from the `website/` the recipe above leaves you in — and finding
+nothing here reads exactly like "no tests depend on WebKit", the belief this
+section exists to correct. Do not restate a count here; it has already gone
+stale once. A local Chromium pass cannot stand in for WebKit, and it cannot
+stand in for CI as a whole.
 
 On what CI gates: the full job (`Website — lint, typecheck, test, build, e2e`)
 runs all four projects in one invocation, so a failing WebKit project fails the
